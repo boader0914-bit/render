@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis, sourceForKeywordMonthlyRequest } = require("./lib/keyword_monthly_analysis.cjs");
+const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, sourceForKeywordMonthlyRequest } = require("./lib/keyword_monthly_analysis.cjs");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./lib/monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./lib/saved_product_recovery.cjs");
@@ -97,6 +97,40 @@ test("options show actual stay/rank month and exact-keyword collection-month cou
   assert.equal(result.activity.rows.reduce((n, row) => n + row.runCount, 0), 9);
   assert.equal(result.provenance.originalFreshnessVerified, false);
   assert.equal(result.snapshot.context, null);
+});
+
+test("verified options index cache is bounded by entry count and source bytes and never exposes cached mutable metadata", async t => {
+  const { outputDir } = await setup(t), original = await fs.readFile(path.join(outputDir, "index.json")), indexValue = JSON.parse(original);
+  const cache = createKeywordMonthlyOptionsIndexReader({ now: () => NOW, cacheMaxEntries: 2, cacheMaxBytes: original.length * 3 });
+  const project = bytes => cache.project(bytes, hash(bytes));
+  const first = await project(original), before = JSON.parse(JSON.stringify(first));
+  first.keywords[0].stayMonths.push("2099-01"); first.provenance.selectionCutoffs["2026-09"] = "2099-01-01";
+  assert.deepEqual(await project(original), before); assert.equal(cache.stats().parses, 1); assert.equal(cache.stats().hits, 1);
+  for (let i = 0; i < 5; i++) {
+    const value = { ...indexValue, provenance: { ...indexValue.provenance, copiedAt: `2026-10-30T00:00:0${i}.000Z` } };
+    await project(Buffer.from(JSON.stringify(value)));
+    assert.ok(cache.stats().entries <= 2); assert.ok(cache.stats().retainedBytes <= original.length * 3);
+  }
+  const byteBound = createKeywordMonthlyOptionsIndexReader({ now: () => NOW, cacheMaxBytes: original.length - 1 });
+  await byteBound.project(original, hash(original)); await byteBound.project(original, hash(original));
+  assert.equal(byteBound.stats().entries, 0); assert.equal(byteBound.stats().retainedBytes, 0); assert.equal(byteBound.stats().parses, 2);
+  const concurrent = createKeywordMonthlyOptionsIndexReader({ now: () => NOW, cacheMaxBytes: original.length, cacheMaxEntries: 1 });
+  await Promise.all(Array.from({ length: 8 }, () => concurrent.project(original, hash(original))));
+  assert.equal(concurrent.stats().entries, 1); assert.equal(concurrent.stats().retainedBytes, original.length);
+  await assert.rejects(cache.project(Buffer.from(original.toString().replace('"schemaVersion":1', '"schemaVersion":9')), hash(original)), /INVALID_INDEX/);
+  assert.throws(() => createKeywordMonthlyOptionsIndexReader({ cacheMaxBytes: 8 * 1024 * 1024 + 1 }), /Invalid/);
+  assert.throws(() => createKeywordMonthlyOptionsIndexReader({ cacheMaxEntries: 65 }), /Invalid/);
+});
+
+test("legacy options re-read and hash warm indexes while eliminating repeat parsing and preserving read-only failures", async t => {
+  const { outputDir } = await setup(t); let reads = 0, parses = 0;
+  const service = createKeywordMonthlyAnalysis({ projectionDir: outputDir, now: () => NOW,
+    measure: (phase, _metadata, operation) => { if (phase === "keyword_index_read") reads++; if (phase === "keyword_index_parse") parses++; return operation(); } });
+  const first = await service.options(); assert.deepEqual(await service.options(), first);
+  assert.equal(reads, 2); assert.equal(parses, 1);
+  await rewriteIndex(outputDir, value => { value.keywords[0].activity.rows[0].runCount++; });
+  const invalid = await service.options(); assert.equal(invalid.status, "needs_verification");
+  assert.deepEqual(invalid.keywords, []); assert.ok(invalid.diagnostics.includes("KEYWORD_MONTHLY_INVALID_INDEX"));
 });
 
 test("unobserved keyword/month and missing projection remain missing with null snapshot and no fabricated zero", async t => {

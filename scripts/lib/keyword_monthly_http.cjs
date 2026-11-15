@@ -1,5 +1,7 @@
 "use strict";
 
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
+
 function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefreshStatus = null } = {}) {
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   return async function handleKeywordMonthly(req, res, url, session) {
@@ -12,7 +14,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       if (req.method !== "GET") { send(res, 405, { code: "KEYWORD_MONTHLY_METHOD_NOT_ALLOWED", error: "저장된 월별 키워드 자료 조회만 지원합니다.", readOnly: true, networkAttempted: false }); return true; }
       if (url.pathname === `${base}/refresh-status` && typeof readRefreshStatus === "function") {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
-        send(res, 200, { ...(await readRefreshStatus()), readOnly: true, networkAttempted: false }); return true;
+        send(res, 200, { ...(await readRefreshStatus()), phaseDiagnostics: getAnalyticalPhaseDiagnostics().status(), readOnly: true, networkAttempted: false }); return true;
       }
       if (url.pathname === `${base}/options`) {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });

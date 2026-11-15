@@ -10,6 +10,8 @@ const { gzipSync, gunzipSync } = require("node:zlib");
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
+const measureDefault = (phase, metadata, operation) => getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
 
 const VERSION = "keyword-monthly-v1";
 const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, decodedProjectionBytes: 64 * 1024 * 1024,
@@ -159,7 +161,7 @@ async function checkPath(absolute, directory) {
   if (!samePath(await fs.realpath(resolved), resolved)) throw fault("KEYWORD_MONTHLY_UNSAFE_PATH");
   return stat;
 }
-async function readJson(file, maximum, encoding = null, decodedSize = null) {
+async function readJson(file, maximum, encoding = null, decodedSize = null, raw = false) {
   const before = await checkPath(file, false);
   if (before.size <= 0 || before.size > maximum) throw fault("KEYWORD_MONTHLY_SIZE_LIMIT");
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
@@ -176,7 +178,7 @@ async function readJson(file, maximum, encoding = null, decodedSize = null) {
       catch { throw fault("KEYWORD_MONTHLY_INVALID_COMPRESSED_PROJECTION"); }
       if (decoded.length !== decodedSize) throw fault("KEYWORD_MONTHLY_DECODED_SIZE_MISMATCH");
     }
-    let value; try { value = JSON.parse(decoded.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_INVALID_JSON"); }
+    let value; try { value = raw ? decoded : JSON.parse(decoded.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_INVALID_JSON"); }
     return { value, sha256: digest(bytes), bytes: bytes.length, stamp: opened };
   } finally { await handle.close(); }
 }
@@ -416,9 +418,60 @@ function defaultCutoff(value, valueMonth, today) {
   return value.provenance.normalizationCutoffs?.[valueMonth] || value.provenance.observationScope === "selected_only" && value.provenance.selectionCutoffs[valueMonth]
     || [today, lastDay(valueMonth), kstDay(value.provenance.dataThrough)].sort()[0];
 }
-function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs = DAY } = {}) {
+// Cache only small, verified index metadata; never decoded observation graphs.
+// Every caller still reads and hashes the file bytes before consulting this cache.
+function createKeywordMonthlyOptionsIndexReader({ now = () => Date.now(), staleAfterMs = DAY,
+  measure = measureDefault, cacheMaxBytes = 8 * 1024 * 1024, cacheMaxEntries = 64 } = {}) {
+  if (typeof measure !== "function" || !Number.isFinite(staleAfterMs) || staleAfterMs < 0
+    || !Number.isSafeInteger(cacheMaxBytes) || cacheMaxBytes < 0 || cacheMaxBytes > 8 * 1024 * 1024
+    || !Number.isSafeInteger(cacheMaxEntries) || cacheMaxEntries < 0 || cacheMaxEntries > 64) throw new TypeError("Invalid keyword options index cache");
+  const cache = new Map(); let retainedBytes = 0, parses = 0, hits = 0;
+  async function project(bytes, sha256) {
+    if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > LIMITS.indexBytes || !SHA.test(sha256 || "") || digest(bytes) !== sha256)
+      throw fault("KEYWORD_MONTHLY_INVALID_INDEX");
+    const cached = cache.get(sha256);
+    const value = await measure("keyword_options_cache", { inputBytes: bytes.length, cacheHits: cached ? 1 : 0 }, async () => {
+      if (cached) { hits++; cache.delete(sha256); cache.set(sha256, cached); return cached.value; }
+      const parsed = await measure("keyword_index_parse", { inputBytes: bytes.length }, () => {
+        let result; try { result = JSON.parse(bytes.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_INVALID_JSON"); }
+        validateIndex(result); parses++;
+        // Discard projection descriptors and activity ledgers after validating
+        // them. Only the options contract survives in this bounded cache.
+        return { provenance: result.provenance, keywords: result.keywords.map(item => ({ keyword: item.keyword,
+          stayMonths: item.stayMonths, collectionMonths: item.collectionMonths,
+          inventoryStayMonths: item.inventoryStayMonths, rankMonths: item.rankMonths })) };
+      });
+      if (cacheMaxEntries && bytes.length <= cacheMaxBytes) {
+        // An async measurement callback may let another reader validate the
+        // same SHA first. Do not charge or retain the same entry twice.
+        const admitted = cache.get(sha256);
+        if (admitted) { cache.delete(sha256); cache.set(sha256, admitted); return admitted.value; }
+        while (cache.size && (cache.size >= cacheMaxEntries || retainedBytes + bytes.length > cacheMaxBytes)) {
+          const first = cache.keys().next().value; retainedBytes -= cache.get(first).bytes; cache.delete(first);
+        }
+        cache.set(sha256, { value: parsed, bytes: bytes.length }); retainedBytes += bytes.length;
+      }
+      return parsed;
+    });
+    // Recompute clock-dependent freshness and supported defaults on every use,
+    // retaining the original materializedAt/dataThrough and provenance.
+    const at = nowIso(now), today = kstDay(at), elapsed = Date.parse(at) - Date.parse(value.provenance.materializedAt);
+    if (elapsed < -60000) throw fault("KEYWORD_MONTHLY_FUTURE_PROJECTION");
+    const diagnostics = elapsed > staleAfterMs ? ["PROJECTION_EXPIRED"] : [];
+    return { schemaVersion: 1, readOnly: true, networkAttempted: false, currentDay: today, currentMonth: today.slice(0, 7),
+      status: diagnostics.length ? "stale" : "available", keywords: value.keywords.map(item => ({ keyword: item.keyword,
+        stayMonths: [...item.stayMonths], collectionMonths: [...item.collectionMonths], inventoryStayMonths: [...item.inventoryStayMonths], rankMonths: [...item.rankMonths],
+        defaultCutoffs: Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, defaultCutoff(value, valueMonth, today)])),
+        supportedCutoffs: value.provenance.normalizationCutoffs ? { ...value.provenance.normalizationCutoffs }
+          : value.provenance.observationScope === "selected_only" ? Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, value.provenance.selectionCutoffs[valueMonth]])) : null })),
+      provenance: { ...clone(value.provenance), indexSha256: sha256 }, diagnostics };
+  }
+  return Object.freeze({ project, stats: () => ({ entries: cache.size, retainedBytes, parses, hits, cacheMaxBytes, cacheMaxEntries }) });
+}
+function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs = DAY, measure = measureDefault } = {}) {
   if (!text(projectionDir, 4000) || !Number.isFinite(staleAfterMs) || staleAfterMs < 0) throw new TypeError("A projection directory and finite freshness interval are required");
   const directory = path.resolve(projectionDir), indexFile = path.join(directory, "index.json");
+  const optionsReader = createKeywordMonthlyOptionsIndexReader({ now, staleAfterMs, measure });
   const basic = () => ({ schemaVersion: 1, readOnly: true, networkAttempted: false, currentDay: kstDay(nowIso(now)), currentMonth: kstDay(nowIso(now)).slice(0, 7) });
   async function index() { const read = await readJson(indexFile, LIMITS.indexBytes); validateIndex(read.value); return read; }
   function freshness(value) {
@@ -434,12 +487,8 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
   }
   async function options() {
     try {
-      const read = await index(), value = read.value, diagnostics = freshness(value);
-      return { ...basic(), status: diagnostics.length ? "stale" : "available", keywords: value.keywords.map(item => ({ keyword: item.keyword,
-        stayMonths: item.stayMonths, collectionMonths: item.collectionMonths, inventoryStayMonths: item.inventoryStayMonths, rankMonths: item.rankMonths,
-        defaultCutoffs: Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, defaultCutoff(value, valueMonth, kstDay(nowIso(now)))])),
-        supportedCutoffs: value.provenance.normalizationCutoffs || (value.provenance.observationScope === "selected_only" ? Object.fromEntries(item.stayMonths.map(valueMonth => [valueMonth, value.provenance.selectionCutoffs[valueMonth]])) : null) })),
-        provenance: { ...value.provenance, indexSha256: read.sha256 }, diagnostics };
+      const read = await measure("keyword_index_read", { readCount: 1 }, () => readJson(indexFile, LIMITS.indexBytes, null, null, true));
+      return await optionsReader.project(read.value, read.sha256);
     } catch (error) { return absent(error); }
   }
   async function analyze(input) {
@@ -460,25 +509,28 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
       }
       let projection;
       const projectionFile = path.join(directory, "projections", `${scope.scopeKey}.json${scope.encoding === "gzip" ? ".gz" : ""}`);
-      try { projection = await readJson(projectionFile, LIMITS.projectionBytes, scope.encoding, scope.uncompressedBytes); }
+      try { projection = await measure("keyword_projection_read", { inputBytes: scope.bytes, ...(scope.uncompressedBytes ? { uncompressedBytes: scope.uncompressedBytes } : {}), readCount: 1 },
+        () => readJson(projectionFile, LIMITS.projectionBytes, scope.encoding, scope.uncompressedBytes)); }
       catch (error) { if (error.code === "ENOENT") throw fault("KEYWORD_MONTHLY_DECLARED_PROJECTION_MISSING"); throw error; }
       const envelope = projection.value;
       if (projection.sha256 !== scope.sha256 || projection.bytes !== scope.bytes || !plain(envelope) || envelope.schemaVersion !== 1
         || envelope.calculationVersion !== VERSION || envelope.scopeKey !== scope.scopeKey || envelope.keyword !== request.keyword || envelope.month !== request.month
         || envelope.sourceFingerprint !== value.sourceFingerprint || JSON.stringify(envelope.provenance) !== JSON.stringify(value.provenance)
         || jsonDigest(envelope.source) !== envelope.sourceDigest) throw fault("KEYWORD_MONTHLY_PROJECTION_MISMATCH");
-      const source = normalizeSource(envelope.source, true);
+      const source = await measure("keyword_source_validate", { rowCount: envelope.source?.observations?.length || 0 }, () => normalizeSource(envelope.source, true));
       // The stored source digest was verified above. Compare the normalized
       // digest instead of retaining two complete JSON strings at once.
       if (jsonDigest(source) !== envelope.sourceDigest) throw fault("KEYWORD_MONTHLY_UNEXPECTED_PROJECTION_FIELDS");
       const at = nowIso(now), engineRequest = { type: "keyword", targetId: request.keyword, month: request.month, cutoffDate: request.cutoffDate };
-      const snapshot = buildMonthlyReportSnapshot(engineRequest, sourceForKeywordMonthlyRequest(source, engineRequest), at);
+      const snapshot = await measure("keyword_snapshot_current", { rowCount: source.observations.length },
+        () => buildMonthlyReportSnapshot(engineRequest, sourceForKeywordMonthlyRequest(source, engineRequest), at));
       const previousRequest = previousMonthlyReportRequest(engineRequest);
       const previousCutoffSupported = !supportedCutoffs || previousRequest.cutoffDate === supportedCutoffs[previousRequest.month];
-      const previous = previousCutoffSupported ? buildMonthlyReportSnapshot(previousRequest, sourceForKeywordMonthlyRequest(source, previousRequest), at) : null;
-      snapshot.comparisonByProduct = Object.fromEntries(["lodging", "dayuse"].map(productType => [productType,
+      const previous = previousCutoffSupported ? await measure("keyword_snapshot_previous", { rowCount: source.observations.length },
+        () => buildMonthlyReportSnapshot(previousRequest, sourceForKeywordMonthlyRequest(source, previousRequest), at)) : null;
+      snapshot.comparisonByProduct = await measure("keyword_compare", { rowCount: snapshot.sources.observations.length }, () => Object.fromEntries(["lodging", "dayuse"].map(productType => [productType,
         previous && snapshot.sources.observations.some(row => row.productType === productType) && previous.sources.observations.some(row => row.productType === productType)
-          ? buildMonthlyComparison(snapshot, previous, { productType }) : null]));
+          ? buildMonthlyComparison(snapshot, previous, { productType }) : null])));
       snapshot.comparison = snapshot.comparisonByProduct.lodging;
       const latestValid = [...snapshot.sources.observations].sort((a, b) => Date.parse(a.collectedAt) - Date.parse(b.collectedAt) || a.runId.localeCompare(b.runId)).at(-1);
       const lastSuccessfulAttempt = latestValid ? { status: latestValid.runQuality, observedAt: latestValid.collectedAt, errorCode: null } : null;
@@ -501,4 +553,4 @@ function createKeywordMonthlyAnalysis({ projectionDir, now = () => Date.now(), s
   return Object.freeze({ options, analyze });
 }
 
-module.exports = { createKeywordMonthlyAnalysis, buildKeywordMonthlyProjection, sourceForKeywordMonthlyRequest, KEYWORD_MONTHLY_LIMITS: LIMITS };
+module.exports = { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, buildKeywordMonthlyProjection, sourceForKeywordMonthlyRequest, KEYWORD_MONTHLY_LIMITS: LIMITS };

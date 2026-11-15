@@ -109,7 +109,11 @@
     const initialView = { selection: { keyword: "", month: "", cutoffDate: "" }, draft: { keyword: "", month: "", cutoffDate: "" }, applied: null,
       cutoffMode: "auto", draftCutoffMode: "auto", product: "lodging", companyId: "", listQuery: "", listPage: 1, mobileView: "list", expanded: {}, scopes: [] };
     const viewState = stateHelper.create(initialView);
-    let sequence = 0, active = null, destroyed = false, paused = false, loading = false, phase = "", error = "", catalog = null, payload = null, keyword = "", month = "", cutoffDate = "", product = "lodging", benchmarkCompanyId = "", pendingContext = null, companyChoices = [], chartRevision = 0;
+    let sequence = 0, active = null, pendingLoad = null, resumeRequest = null, destroyed = false, paused = false, loading = false, resumeNeeded = false, phase = "", error = "", errorCode = "", catalog = null, payload = null, lastGoodPayload = null, keyword = "", month = "", cutoffDate = "", product = "lodging", benchmarkCompanyId = "", pendingContext = null, companyChoices = [], chartRevision = 0;
+    const timeoutMs = Number.isSafeInteger(options.requestTimeoutMs) && options.requestTimeoutMs > 0 ? options.requestTimeoutMs : 20000;
+    const schedule = options.setTimeout || win.setTimeout?.bind(win) || (typeof setTimeout === "function" ? setTimeout : null);
+    const unschedule = options.clearTimeout || win.clearTimeout?.bind(win) || (typeof clearTimeout === "function" ? clearTimeout : null);
+    const Abort = options.AbortController || win.AbortController || (typeof AbortController === "function" ? AbortController : null);
     let draft = { ...initialView.draft }, appliedSelection = null, draftRevision = 0, cutoffMode = "auto", draftCutoffMode = "auto", listQuery = "", listPage = 1, mobileView = "list", expanded = {}, scopes = [], resultTarget = null, workspace = null, listPanel = null, detailPanel = null;
     const PAGE_SIZE = 20;
     const chartRoots = new Set();
@@ -124,7 +128,7 @@
     const keywordInput = field("검색어 · 정확한 키워드", "select", "keyword"), companyInput = field("비교할 업체", "select", "benchmarkCompany"), monthInput = field("숙박월 · 관측 자료가 있는 월", "select", "month"), cutoffInput = field("관측 마감일 · 한국시간", "input", "cutoffDate"); cutoffInput.type = "date";
     companyInput.setAttribute("aria-label", "비교할 업체");
     const cutoffNote = el("small", "kma-cutoff-note"); cutoffInput.parentNode.append(cutoffNote);
-    const readButton = button("저장 자료 조회", () => { void applyDraft(true); }, "primary-button"); filters.append(readButton); panel.append(filters);
+    const readButton = button("저장 자료 조회", () => { void (catalog ? applyDraft(true) : open(pendingContext)); }, "primary-button"); filters.append(readButton); panel.append(filters);
     const conditionSummary = el("p", "kma-condition-summary"); conditionSummary.setAttribute("role", "status"); panel.append(conditionSummary);
     const productTabs = el("div", "kma-product-tabs"); productTabs.setAttribute("role", "group"); productTabs.setAttribute("aria-label", "상품 유형");
     const productButtons = {};
@@ -171,7 +175,7 @@
       cutoffNote.textContent = supported ? `선택 관측 사본 · ${supported} 마감만 지원` : catalog?.provenance?.dataThrough ? `저장 근거 마감 ${dataThroughDay(catalog)}` : "저장된 관측 근거 범위에서 조회";
       keywordInput.disabled = paused || !catalog?.keywords.length || !allowed() || phase === "options";
       monthInput.disabled = paused || !months.length || !allowed() || phase === "options"; cutoffInput.disabled = paused || !month || !allowed() || phase === "options";
-      readButton.disabled = paused || !allowed() || !draft.keyword || !draft.month || phase === "options";
+      readButton.disabled = paused || !allowed() || phase === "options" || (catalog ? !draft.keyword || !draft.month : !error);
       companyInput.disabled = paused || !allowed() || loading || !dashboard || dashboard.status === "needs_verification" || !companyChoices.length;
       for (const key of Object.keys(PRODUCTS)) productButtons[key].setAttribute("aria-pressed", String(product === key));
     }
@@ -351,7 +355,8 @@
     }
     function render() {
       clearCharts(); resultTarget = results; workspace = listPanel = detailPanel = null;
-      const candidate = allowed() && !loading && !error && payload ? buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)) : null;
+      const candidate = allowed() && !paused && payload ? buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)) : null;
+      const retained = candidate?.usable && (loading || Boolean(error) || resumeNeeded);
       const calculateDashboard = (root.KeywordMonthlyDashboardModel || dashboardModule)?.buildKeywordMonthlyDashboardModel;
       const dashboard = displayedDashboard(candidate?.usable && typeof calculateDashboard === "function" ? calculateDashboard(candidate.snapshot, { productType: product, companyId: benchmarkCompanyId }) : null);
       const chosenName = dashboard?.monthly?.selected?.name || companyChoices.find(company => company.companyId === benchmarkCompanyId)?.name;
@@ -359,7 +364,8 @@
       conditionSummary.textContent = keyword ? `현재 조회 기준 · ${keyword} / 숙박월 ${month} / 관측 마감 ${cutoffDate} (${cutoffMode === "explicit" ? "사용자 선택" : "최신 근거 자동"}) / ${PRODUCTS[product].label}${draftHasChanges() ? " · 입력 초안이 다릅니다. 현재 자료는 위 조회 기준입니다." : ""}` : "저장된 키워드와 실제 숙박월을 선택하세요.";
       renderControls(dashboard); panel.setAttribute("aria-busy", String(loading)); results.replaceChildren();
       persistView();
-      notice.textContent = loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
+      notice.textContent = retained ? loading ? "같은 조회 조건의 마지막 정상 저장 자료를 표시하며 최신 상태를 확인하고 있습니다." : resumeNeeded ? "같은 조회 조건의 마지막 정상 저장 자료입니다. 화면 복귀 시 중단된 최신 상태 확인을 다시 진행합니다." : "최신 조회를 완료하지 못했습니다. 아래는 같은 조회 조건의 마지막 정상 저장 자료이며 최신 반영 완료를 뜻하지 않습니다."
+        : loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
       const automatic = catalog?.refreshStatus;
       refreshNotice.hidden = !allowed() || !automatic;
       const historicalOnly = automatic?.status === "needs_verification" && !automatic.hasRuntimeError && !automatic.cleanupNeedsVerification
@@ -370,8 +376,8 @@
         ? "자동 반영 확인 필요 · 기존 검증 자료를 유지합니다. 수집 재실행이나 보호 해제를 시작하지 않습니다."
         : automatic.started ? `수집·DB 반영 완료 후 자동 갱신 · 처리 ${number(automatic.counts.running)} / 대기 ${number(automatic.counts.queued)} / 이월 ${number(automatic.counts.deferred)}. 새 자료는 화면 재진입 또는 저장 자료 조회로 확인합니다.`
           : "자동 반영 실행 상태 미확인 · 아래 자료 마감 시각을 확인하세요." : "";
-      errors.hidden = !error; errors.textContent = error;
-      if (!allowed() || loading || error || !payload) { if (!loading && !error && catalog && !catalog.keywords.length) section("조회할 저장 자료가 없습니다.", "검색어와 숙박월을 확인할 수 있는 근거가 없습니다. 누락을 정상 0건으로 표시하지 않습니다."); return; }
+      errors.hidden = !error; errors.textContent = error; errors.dataset.errorCode = errorCode;
+      if (!allowed() || paused || !payload || (loading || error) && !candidate?.usable) { if (!loading && !error && catalog && !catalog.keywords.length) section("조회할 저장 자료가 없습니다.", "검색어와 숙박월을 확인할 수 있는 근거가 없습니다. 누락을 정상 0건으로 표시하지 않습니다."); return; }
       const view = candidate || buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7));
       if (catalog?.diagnostics.length) { const evidence = section("저장 자료 목록 확인사항", "일부 키워드·월의 준비 상태와 현재 선택한 집계 상태는 따로 확인합니다."); warnings(evidence, catalog.diagnostics); }
       if (!view.usable) { const labels = { missing: "조회용 저장 집계가 준비되지 않았습니다.", stale: "저장 집계의 갱신 확인이 필요합니다.", needs_verification: "자료 검수가 필요합니다." }; const label = hasDiagnostic(view.diagnostics, "CUTOFF_NOT_RECONSTRUCTIBLE") ? "선택한 마감일의 과거 상태를 재구성할 수 없습니다." : hasDiagnostic(view.diagnostics, "CUTOFF_AFTER_DATA_THROUGH") ? "관측 마감일이 사본의 자료 마감보다 늦습니다." : labels[view.status] || "집계 상태를 확인해야 합니다."; const block = section(label, "이전 저장값을 현재 정상 수치나 0으로 대신 표시하지 않습니다."); warnings(block, view.diagnostics); if (view.supportedCutoffDate) { block.append(el("p", "kma-note", `이 선택 관측 사본은 ${view.supportedCutoffDate} 마감만 확인할 수 있습니다.`)); if (view.supportedCutoffDate !== cutoffDate) block.append(button(`${view.supportedCutoffDate} 근거로 조회`, () => { cutoffDate = view.supportedCutoffDate; cutoffMode = draftCutoffMode = "explicit"; draft = selected(); draftRevision++; rememberScope(); void load(); })); } if (view.provenance) block.append(el("p", "kma-note", `집계 생성 ${timeLabel(view.provenance.materializedAt)} · 자료 마감 ${timeLabel(view.provenance.dataThrough)}`)); return; }
@@ -421,7 +427,7 @@
       const quality = section("자료 충족도와 최근 수집 상태", "자료 충족률은 유효 관측 범위이며 최종 예약·실제 결제 매출의 확정 여부와 다릅니다.");
       const qualityStatus = { complete: "자료 충족", partial: "일부 자료", insufficient: "자료 부족" }[snapshot.quality?.status] || "상태 미확인";
       const attemptLabel = { complete: "완료", completed: "완료", reused: "재사용", partial: "일부 자료", failed: "실패", blocked: "차단", interrupted: "중단", running: "진행 중", unknown: "미확인", uncertain: "확인 필요" }[view.latestAttempt?.status] || "미확인";
-      if (["failed", "blocked", "interrupted"].includes(view.latestAttempt?.status)) notice.textContent = `${view.historicalSnapshot ? "과거 저장근거 · 갱신 확인 필요. " : ""}사본에서 확인한 최근 회차 ${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}. 선택월 수치는 마지막 유효 관측 근거를 표시합니다.`;
+      if (["failed", "blocked", "interrupted"].includes(view.latestAttempt?.status)) notice.textContent = `${retained ? `${notice.textContent} ` : ""}${view.historicalSnapshot ? "과거 저장근거 · 갱신 확인 필요. " : ""}사본에서 확인한 최근 회차 ${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}. 선택월 수치는 마지막 유효 관측 근거를 표시합니다.`;
       table(quality, ["항목", "저장 근거"], [["집계 품질", qualityStatus], ["같은 날 관측 업체·일", number(metric.sameDayObservedCompanyDays)], ["사전 관측 업체·일", number(metric.staleDays)], ["가격 근거 충족률", rate(metric.revenueCoverageRate)], ["사본에서 확인한 최근 회차", view.latestAttempt ? `${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}${view.latestAttempt.errorCode ? ` · ${view.latestAttempt.errorCode}` : ""}` : "미확인"], ["마지막 유효 관측", timeLabel(view.lastSuccessfulAttempt?.observedAt)]], "포함된 최근 회차와 선택월의 마지막 유효 관측을 구분");
       warnings(quality, [...(snapshot.quality?.warnings || []), ...view.diagnostics]);
       const activity = section("사본에 포함된 고유 관측 회차", "수집월 기준의 제공 run 집합입니다. 숙박월 예약·매출에 합산하지 않으며, 재사용은 새 수집과 구분합니다.", true);
@@ -442,29 +448,53 @@
       if (reasons.length) table(sources, ["제외 사유", "관측 수"], reasons.map(([reason, count]) => [reasonLabels[reason] || reason, number(count)]), "제외 관측을 정상 0건으로 바꾸지 않음");
       warnings(sources, (snapshot.sources?.excludedRuns || []).map(row => ({ message: `${row.id || "수집 기록"} · ${row.reason || row.status || "제외 사유 미확인"}` })));
     }
-    function cancel() { sequence++; active?.abort(); active = null; loading = false; phase = ""; }
+    function cancel() { sequence++; active?.abort(); active = null; pendingLoad = null; loading = false; phase = ""; }
     function clearPrivate(reason = "관리자 로그인이 필요합니다.") {
-      cancel(); paused = true; catalog = null; payload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null;
-      product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; viewState.clear(); error = reason; render();
+      cancel(); paused = true; resumeNeeded = false; resumeRequest = null; catalog = null; payload = lastGoodPayload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null;
+      product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
+    }
+    const failure = (code, status = 0, details = []) => Object.assign(new Error(code), { code, status, details });
+    const safeCodes = value => (Array.isArray(value?.diagnostics) ? value.diagnostics : []).map(row => typeof row === "string" ? row : row?.code)
+      .filter(code => typeof code === "string" && /^(?:KEYWORD_|ANALYTICAL_|MONTHLY_|COMPANY_)[A-Z0-9_]{1,75}$/.test(code)).slice(0, 4);
+    function failureLabel(value) {
+      const suffix = [value?.status ? `HTTP ${value.status}` : "", value?.code, ...(value?.details || [])].filter(Boolean).join(" · ");
+      const label = value?.code === "KEYWORD_MONTHLY_TIMEOUT" ? "저장 자료 조회 시간이 초과됐습니다. 잠시 후 저장 자료 조회를 다시 눌러 주세요."
+        : value?.code === "KEYWORD_MONTHLY_INVALID_JSON" || value?.code === "KEYWORD_MONTHLY_RESPONSE_NOT_JSON" ? "서버가 올바른 저장 자료 응답을 보내지 못했습니다. 잠시 후 다시 조회해 주세요."
+        : value?.code === "KEYWORD_MONTHLY_NETWORK_ERROR" ? "서버 연결을 확인하지 못했습니다. 잠시 후 다시 조회해 주세요."
+        : value?.details?.length ? "저장 자료의 최신 상태를 확인하지 못해 자료 검수가 필요합니다."
+        : "저장 자료를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.";
+      return `${label}${suffix ? ` (${suffix})` : ""}`;
     }
     async function get(url, token) {
-      const response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, ...(active ? { signal: active.signal } : {}) });
-      if (!current(token)) return null;
-      if ([401, 403].includes(response.status)) { clearPrivate(); return null; }
-      const value = await response.json(); if (!current(token)) return null;
-      if (!response.ok && !["missing", "stale", "needs_verification"].includes(value?.status)) throw new Error(`저장 자료를 확인하지 못했습니다 (${response.status}).`);
-      return value;
+      const controller = active;
+      let timer = null, timedOut = false;
+      const read = (async () => {
+        let response;
+        try { response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, ...(controller ? { signal: controller.signal } : {}) }); }
+        catch { if (!current(token) || timedOut) return null; throw failure("KEYWORD_MONTHLY_NETWORK_ERROR"); }
+        if (!current(token) || timedOut) return null;
+        const status = Number.isInteger(response?.status) ? response.status : 0;
+        if ([401, 403].includes(status) || response?.redirected === true && /\/login(?:[?#]|$)/.test(String(response.url || ""))) { clearPrivate(); return null; }
+        const contentType = typeof response?.headers?.get === "function" ? response.headers.get("content-type") || "" : null;
+        // Real fetch responses always have Headers. Omitted headers remain
+        // compatible with an injected, already-validated request adapter.
+        const jsonType = contentType === null || /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;|\s*$)/i.test(contentType);
+        if (!response?.ok && !jsonType) throw failure(`KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status);
+        if (!jsonType) throw failure("KEYWORD_MONTHLY_RESPONSE_NOT_JSON", status);
+        let value;
+        try { value = await response.json(); }
+        catch { if (!current(token) || timedOut) return null; throw failure(response?.ok ? "KEYWORD_MONTHLY_INVALID_JSON" : `KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status); }
+        if (!current(token) || timedOut) return null;
+        if (!response?.ok) throw failure(`KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status, safeCodes(value));
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw failure("KEYWORD_MONTHLY_INVALID_JSON", status);
+        return value;
+      })();
+      try {
+        if (!schedule || !unschedule) return await read;
+        return await Promise.race([read, new Promise((resolve, reject) => { timer = schedule(() => { timedOut = true; controller?.abort(); reject(failure("KEYWORD_MONTHLY_TIMEOUT")); }, timeoutMs); })]);
+      } finally { if (timer !== null) unschedule?.(timer); }
     }
-    function applyCatalog(value, context, editRevision, overwriteDraft) {
-      catalog = normalizeOptions(value, kstDay(now()));
-      if (catalog.status !== "available" && !(catalog.status === "stale" && (hasDiagnostic(catalog.diagnostics, "PROJECTION_EXPIRED") || hasDiagnostic(catalog.diagnostics, "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT")))) { error = [...catalog.diagnostics.map(message), "저장된 검색어·숙박월 목록을 확인하지 못했습니다."].join(" "); catalog = null; return false; }
-      const requested = context || {};
-      if (typeof requested.keyword === "string" && requested.keyword.length > 300 || typeof requested.month === "string" && requested.month.length > 7 || typeof requested.cutoffDate === "string" && requested.cutoffDate.length > 10) { error = "전달된 검색어·숙박월·관측 마감 조건을 확인해 주세요."; return false; }
-      const word = typeof requested.keyword === "string" ? requested.keyword : keyword || catalog.keywords[0]?.keyword || "";
-      const row = catalog.keywords.find(item => item.keyword === word);
-      if (!row) { if (catalog.keywords.length) error = "저장 목록에 있는 정확한 검색어를 선택하세요."; return false; }
-      const stayMonth = typeof requested.month === "string" ? requested.month : word === keyword && month ? month : row.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row.stayMonths[0] || "";
-      changeScope(word, stayMonth);
+    function applyViewContext(requested) {
       if (Object.hasOwn(PRODUCTS, requested.product)) product = requested.product;
       const companyId = typeof requested.benchmarkCompanyId === "string" ? requested.benchmarkCompanyId : requested.companyId;
       if (typeof companyId === "string" && companyId.length <= 300 && !/[\u0000-\u001f\u007f]/.test(companyId)) benchmarkCompanyId = companyId;
@@ -476,38 +506,77 @@
         for (const key of Object.keys(requested.expanded).slice(0, 32)) { const prop = Object.getOwnPropertyDescriptor(requested.expanded, key); if (key.length <= 200 && /^(chart|support):/.test(key) && typeof prop?.value === "boolean") values[key] = prop.value; }
         expanded = values;
       }
-      if (["auto", "explicit"].includes(requested.cutoffMode)) cutoffMode = requested.cutoffMode;
-      if (typeof requested.cutoffDate === "string" && requested.cutoffMode !== "auto") { cutoffMode = "explicit"; cutoffDate = requested.cutoffDate; }
+    }
+    function requestedCutoffMode(requested = {}, fallback = cutoffMode) {
+      if (typeof requested.cutoffDate === "string" && requested.cutoffMode !== "auto") return "explicit";
+      return ["auto", "explicit"].includes(requested.cutoffMode) ? requested.cutoffMode : fallback;
+    }
+    function applyCatalog(value, context, editRevision, overwriteDraft) {
+      const next = normalizeOptions(value, kstDay(now()));
+      if (next.status !== "available" && !(next.status === "stale" && (hasDiagnostic(next.diagnostics, "PROJECTION_EXPIRED") || hasDiagnostic(next.diagnostics, "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT")))) throw failure("KEYWORD_MONTHLY_OPTIONS_UNAVAILABLE", 0, safeCodes(value));
+      catalog = next;
+      const requested = context || {};
+      if (typeof requested.keyword === "string" && requested.keyword.length > 300 || typeof requested.month === "string" && requested.month.length > 7 || typeof requested.cutoffDate === "string" && requested.cutoffDate.length > 10) { error = "전달된 검색어·숙박월·관측 마감 조건을 확인해 주세요."; return false; }
+      const word = typeof requested.keyword === "string" ? requested.keyword : keyword || catalog.keywords[0]?.keyword || "";
+      const row = catalog.keywords.find(item => item.keyword === word);
+      if (!row) { if (catalog.keywords.length) error = "저장 목록에 있는 정확한 검색어를 선택하세요."; return false; }
+      const stayMonth = typeof requested.month === "string" ? requested.month : word === keyword && month ? month : row.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row.stayMonths[0] || "";
+      changeScope(word, stayMonth);
+      applyViewContext(requested);
+      cutoffMode = requestedCutoffMode(requested);
+      if (typeof requested.cutoffDate === "string" && cutoffMode !== "auto") cutoffDate = requested.cutoffDate;
       if (!row.stayMonths.includes(month)) { error = "선택한 검색어에 실제 숙박 관측이 있는 월을 선택하세요."; return false; }
       if (cutoffMode === "auto" || !cutoffDate) cutoffDate = cutoffFor(catalog, keyword, month);
       if (editRevision === draftRevision && overwriteDraft) { draft = selected(); draftCutoffMode = cutoffMode; }
       persistView(); return true;
     }
-    async function load(context, { applyInput = false } = {}) {
-      if (destroyed || !visible()) return;
+    const sameScope = (value, selection) => value?.request?.keyword === selection.keyword && value?.request?.month === selection.month && value?.request?.cutoffDate === selection.cutoffDate;
+    function loadKey(context) {
+      const mode = requestedCutoffMode(context || {});
+      return JSON.stringify([context?.keyword ?? keyword, context?.month ?? month, mode === "auto" ? "auto" : context?.cutoffDate ?? cutoffDate]);
+    }
+    function load(context, { applyInput = false, renewCatalog = false } = {}) {
+      if (destroyed || !visible()) return Promise.resolve();
+      const key = loadKey(context);
+      if (pendingLoad?.key === key) {
+        // Product/company/list controls are local to this shared data scope.
+        // Apply the latest context now and keep it for an options response
+        // that has not resolved yet; sharing a GET must not discard UI intent.
+        if (context) { pendingLoad.context = { ...(pendingLoad.context || {}), ...context }; applyViewContext(context); pendingContext = null; rememberScope(); render(); }
+        return pendingLoad.promise;
+      }
       const editRevision = draftRevision, changesSelection = context && ["keyword", "month", "cutoffDate"].some(key => Object.hasOwn(context, key) && context[key] !== selected()[key]);
       const overwriteDraft = applyInput || !draftHasChanges() || changesSelection;
-      cancel(); payload = null; error = ""; loading = true; phase = "data"; active = typeof AbortController === "function" ? new AbortController() : null; const token = sequence;
-      try {
-        if (!catalog) { phase = "options"; render(); const value = await get("/api/keyword-monthly/options", token); if (!value || !current(token)) return; if (!applyCatalog(value, context || pendingContext, editRevision, overwriteDraft)) return; }
-        else if (!applyCatalog(catalog, context, editRevision, overwriteDraft)) return;
-        pendingContext = null;
-        if (!keyword || !month) return;
-        if (!catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month))) throw new Error("저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요.");
-        if (!dateValid(cutoffDate) || cutoffDate > catalog.currentDay) throw new Error("관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요.");
-        appliedSelection = selected(); phase = "data"; rememberScope(); render();
-        const params = new URLSearchParams(appliedSelection); const value = await get(`/api/keyword-monthly?${params}`, token);
-        if (value && current(token)) payload = value;
-      } catch (failure) { if (current(token)) error = failure.name === "AbortError" ? "조회가 취소됐습니다." : failure.message || "저장 자료를 확인하지 못했습니다."; }
-      finally { if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; render(); } }
+      cancel(); resumeNeeded = false; resumeRequest = null; payload = !changesSelection && sameScope(lastGoodPayload, selected()) ? lastGoodPayload : null; error = errorCode = ""; loading = true; phase = "data"; active = Abort ? new Abort() : null; const token = sequence;
+      const task = { key, context, applyInput, promise: null }; pendingLoad = task;
+      task.promise = (async () => {
+        try {
+          if (!catalog || renewCatalog) { phase = "options"; render(); const value = await get("/api/keyword-monthly/options", token); if (!value || !current(token)) return; if (!applyCatalog(value, task.context || pendingContext, editRevision, overwriteDraft)) return; }
+          else if (!applyCatalog(catalog, task.context, editRevision, overwriteDraft)) return;
+          pendingContext = null;
+          if (!keyword || !month) return;
+          if (!catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month))) { error = "저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요."; errorCode = "KEYWORD_MONTHLY_SELECTION_INVALID"; return; }
+          if (!dateValid(cutoffDate) || cutoffDate > catalog.currentDay) { error = "관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요."; errorCode = "KEYWORD_MONTHLY_SELECTION_INVALID"; return; }
+          payload = sameScope(lastGoodPayload, selected()) ? lastGoodPayload : null;
+          appliedSelection = selected(); task.key = loadKey(); phase = "data"; rememberScope(); render();
+          const params = new URLSearchParams(appliedSelection); const value = await get(`/api/keyword-monthly?${params}`, token);
+          if (value && current(token)) {
+            payload = value;
+            if (buildViewModel(value, selected(), catalog.currentMonth).usable) lastGoodPayload = value;
+            else if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null;
+          }
+        } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); } }
+        finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; render(); } }
+      })();
+      return task.promise;
     }
-    async function open(context = null) { paused = false; pendingContext = context; catalog = null; return load(context); }
+    async function open(context = null) { paused = false; pendingContext = context; return load(context, { renewCatalog: true }); }
     function editDraft(name, value) { draft = { ...draft, [name]: String(value).slice(0, name === "keyword" ? 300 : name === "month" ? 7 : 10) }; if (name === "cutoffDate") draftCutoffMode = "explicit"; draftRevision++; persistView(); }
     async function applyDraft(renewCatalog = false) {
       if (catalog && !catalog.keywords.some(row => row.keyword === draft.keyword && row.stayMonths.includes(draft.month))) { cancel(); payload = null; error = "저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요."; render(); return; }
       if (!dateValid(draft.cutoffDate) || draft.cutoffDate > (catalog?.currentDay || kstDay(now()))) { cancel(); payload = null; error = "관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요."; render(); return; }
-      const context = { ...draft, cutoffMode: draftCutoffMode }; if (renewCatalog) catalog = null; pendingContext = null;
-      return load(context, { applyInput: true });
+      const context = { ...draft, cutoffMode: draftCutoffMode }; pendingContext = null;
+      return load(context, { applyInput: true, renewCatalog });
     }
     for (const [name, input] of [["keyword", keywordInput], ["month", monthInput], ["cutoffDate", cutoffInput]]) input.addEventListener("input", () => editDraft(name, input.value));
     keywordInput.addEventListener("change", () => {
@@ -522,11 +591,22 @@
     companyInput.addEventListener("change", () => chooseCompany(companyInput.value));
     cutoffInput.addEventListener("change", () => { editDraft("cutoffDate", cutoffInput.value); render(); });
     filters.addEventListener("submit", event => { event.preventDefault(); void applyDraft(true); });
-    const onVisibility = () => { if (!visible()) { if (loading) { cancel(); render(); } } else if (!loading && (!catalog || !payload)) { if (catalog) void load(); else void open(pendingContext); } };
-    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (visible() && !catalog && !loading) void open(pendingContext); }) : null;
+    const onVisibility = () => {
+      if (!visible()) {
+        if (loading) {
+          resumeRequest = { context: phase === "options" ? pendingLoad?.context || pendingContext : externalSelection(), renewCatalog: phase === "options", applyInput: pendingLoad?.applyInput === true };
+          resumeNeeded = true; cancel(); render();
+        }
+      } else if (!loading && !error && (resumeNeeded || !catalog || !payload)) {
+        const resume = resumeRequest; resumeNeeded = false; resumeRequest = null;
+        if (resume) void load(resume.context, { renewCatalog: resume.renewCatalog, applyInput: resume.applyInput });
+        else if (catalog) void load(); else void open(pendingContext);
+      }
+    };
+    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (visible() && !catalog && !loading && !error) void open(pendingContext); }) : null;
     observer?.observe(doc.body, { attributes: true, attributeFilter: ["class"] }); doc.addEventListener("visibilitychange", onVisibility);
-    const controller = { open, refresh: () => load(), pause() { rememberScope(); cancel(); paused = true; payload = null; render(); }, clear: clearPrivate,
-      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null }),
+    const controller = { open, refresh: () => load(), pause() { rememberScope(); cancel(); paused = true; resumeNeeded = false; resumeRequest = null; payload = null; render(); }, clear: clearPrivate,
+      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded)) }),
       destroy() { if (destroyed) return; clearPrivate(""); destroyed = true; observer?.disconnect(); doc.removeEventListener("visibilitychange", onVisibility); panel.replaceChildren(); controllers.delete(controller); instances.delete(parent); } };
     controllers.add(controller); instances.set(parent, controller);
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;

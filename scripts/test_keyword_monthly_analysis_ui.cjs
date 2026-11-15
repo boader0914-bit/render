@@ -51,17 +51,17 @@ const descendants = node => [node, ...node.children.flatMap(descendants)];
 const text = node => descendants(node).map(item => item.textContent).join(" ");
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
-function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false } = {}) {
+function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs } = {}) {
   const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
-  const window = { fetch: request, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
+  const window = { fetch: request, setTimeout, clearTimeout, AbortController, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
   vm.runInNewContext(dashboardScript, { window });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
-  const api = window.KeywordMonthlyAnalysis, controller = api.mount(parent, { autoStart: false, fetch: request, now: () => Date.parse(NOW) });
+  const api = window.KeywordMonthlyAnalysis, controller = api.mount(parent, { autoStart: false, fetch: request, requestTimeoutMs, now: () => Date.parse(NOW) });
   return { api, controller, parent, doc, observers, listeners, calls, chartCalls,
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); },
@@ -504,4 +504,203 @@ test("permission loss clears the common helper selection scopes drafts and discl
   const state = clone(ui.controller.state()); assert.equal(state.paused, true); assert.equal(state.product, "lodging"); assert.equal(state.listQuery, ""); assert.equal(state.listPage, 1);
   assert.deepEqual(state.expanded, {}); assert.deepEqual(state.viewState.scopes, []); assert.deepEqual(state.draft, { keyword: "", month: "", cutoffDate: "" });
   assert.doesNotMatch(JSON.stringify(state.viewState), /경남|company-|비교/); assert.equal(ui.find("kma-workspace").length, 0);
+});
+
+const jsonResponse = (value, status = 200) => ({ ok: status >= 200 && status < 300, status,
+  headers: { get: name => name.toLowerCase() === "content-type" ? "application/json; charset=utf-8" : null }, json: async () => clone(value) });
+const htmlFailure = (status = 502) => ({ ok: status >= 200 && status < 300, status,
+  headers: { get: () => "text/html; charset=utf-8" }, json: async () => { throw new Error("HTML_FAILURE_BODY_MUST_NOT_BE_PARSED"); } });
+
+test("HTML 502 on the first data read shows a controlled failure and manual retry reuses preserved choices", async () => {
+  let failed = true;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : failed ? htmlFailure() : jsonResponse(payloadFixture()) });
+  await ui.controller.open();
+  assert.match(ui.text(), /HTTP 502/); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_502");
+  assert.doesNotMatch(ui.text(), /Unexpected token|SyntaxError|HTML_FAILURE_BODY|<!doctype/i);
+  assert.equal(ui.field("keyword").value, KEYWORD); assert.equal(ui.field("month").value, "2026-10"); assert.equal(ui.find("kma-metric").length, 0);
+  const before = ui.calls.length; ui.observers[0].callback(); ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, before, "failure never starts an observer/visibility retry loop");
+  failed = false; await ui.apply();
+  assert.match(ui.text(), /400원/); assert.equal(ui.controller.state().errorCode, ""); assert.equal(ui.calls.length, before + 2);
+  assert.ok(ui.calls.every(row => row.settings.method === "GET"));
+});
+
+test("a failed initial catalog leaves an enabled manual read action and does not require unavailable selections", async () => {
+  let failed = true;
+  const ui = mockUi({ request: async url => failed ? htmlFailure() : jsonResponse(url.endsWith("/options") ? optionsFixture() : payloadFixture()) });
+  await ui.controller.open(); assert.equal(ui.calls.length, 1); assert.match(ui.text(), /HTTP 502/);
+  assert.equal(ui.field("keyword").value, ""); assert.equal(ui.button("저장 자료 조회").disabled, false);
+  failed = false; await ui.apply(); assert.equal(ui.calls.length, 3); assert.match(ui.text(), /400원/); assert.equal(ui.controller.state().errorCode, "");
+});
+
+test("HTML 502 and JSON 503 preserve only the same-condition normal snapshot and safe reason codes", async () => {
+  let response = null;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : response || jsonResponse(payloadFixture()) });
+  await ui.controller.open(); response = htmlFailure(); await ui.controller.refresh();
+  assert.match(ui.text(), /400원/); assert.match(ui.text(), /같은 조회 조건의 마지막 정상 저장 자료/); assert.match(ui.text(), /최신 반영 완료를 뜻하지 않습니다/);
+  assert.equal(ui.controller.state().showingStored, true); assert.equal(ui.field("keyword").value, KEYWORD);
+  response = jsonResponse({ status: "needs_verification", diagnostics: [{ code: "ANALYTICAL_MEMORY_BUSY" }, { code: "<private-error>" }], message: "SECRET_INTERNAL_DETAIL" }, 503);
+  await ui.controller.refresh();
+  assert.match(ui.text(), /HTTP 503.*ANALYTICAL_MEMORY_BUSY/); assert.doesNotMatch(ui.text(), /SECRET_INTERNAL_DETAIL|private-error/);
+  assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.match(ui.text(), /400원/);
+  response = null; await ui.controller.refresh(); assert.equal(ui.controller.state().showingStored, false); assert.equal(ui.controller.state().errorCode, "");
+});
+
+test("invalid JSON, unexpected content type and network exceptions never expose parser or transport messages", async () => {
+  let response = null;
+  const ui = mockUi({ request: async url => {
+    if (url.endsWith("/options")) return jsonResponse(optionsFixture());
+    if (response === "network") throw new Error("SECRET_NETWORK_MESSAGE");
+    return response || jsonResponse(payloadFixture());
+  } });
+  await ui.controller.open();
+  response = { ...jsonResponse(null), json: async () => { throw new SyntaxError("Unexpected token < SECRET_PARSE_MESSAGE"); } };
+  await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_INVALID_JSON"); assert.match(ui.text(), /400원/);
+  response = htmlFailure(200); await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_RESPONSE_NOT_JSON");
+  response = "network"; await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_NETWORK_ERROR");
+  assert.doesNotMatch(ui.text(), /SECRET_|Unexpected token|SyntaxError/); assert.match(ui.text(), /400원/);
+});
+
+test("a failed new period never displays the former period and returning to its exact scope may show the saved result", async () => {
+  let failed = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : failed ? htmlFailure() : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); failed = true;
+  ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await ui.apply();
+  assert.equal(ui.controller.state().selection.month, "2026-11"); assert.equal(ui.controller.state().showingStored, false);
+  assert.equal(ui.find("kma-metric").length, 0); assert.doesNotMatch(ui.text(), /400원/);
+  ui.field("month").value = "2026-10"; await ui.field("month").fire("change"); await ui.apply();
+  assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().showingStored, true); assert.match(ui.text(), /400원/);
+});
+
+test("same-scope refresh and repeated submit share the running GET without aborting and restarting it", async () => {
+  const gate = deferred(); let pending = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : pending ? gate.promise : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); pending = true;
+  const first = ui.controller.refresh(); await settle(); const before = ui.calls.length, signal = ui.calls.at(-1).settings.signal;
+  const second = ui.controller.refresh(); await ui.button("저장 자료 조회").fire("click"); await settle();
+  assert.equal(ui.calls.length, before); assert.equal(signal.aborted, false); assert.match(ui.text(), /400원/); assert.equal(ui.controller.state().showingStored, true);
+  gate.resolve(jsonResponse(payloadFixture())); await Promise.all([first, second]); await settle();
+  assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().loading, false); assert.equal(ui.controller.state().showingStored, false);
+});
+
+test("menu reentry immediately restores its exact saved result while the fresh options request is pending or fails", async () => {
+  const gate = deferred(); let delayed = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? delayed ? gate.promise : jsonResponse(optionsFixture()) : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); const selection = clone(ui.controller.state().selection); ui.controller.pause(); assert.equal(ui.find("kma-metric").length, 0);
+  delayed = true; const reopening = ui.controller.open(selection); await settle();
+  assert.match(ui.text(), /400원/); assert.equal(ui.controller.state().loading, true); assert.equal(ui.controller.state().showingStored, true);
+  gate.resolve(htmlFailure()); await reopening;
+  assert.equal(ui.controller.state().loading, false); assert.match(ui.text(), /HTTP 502/); assert.match(ui.text(), /400원/);
+  assert.equal(ui.field("month").value, "2026-10");
+});
+
+test("timeout finishes the UI even if fetch ignores abort and its late response cannot replace a later manual retry", async () => {
+  const gate = deferred(); let delayed = false;
+  const ui = mockUi({ requestTimeoutMs: 20, request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : delayed ? gate.promise : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); delayed = true; await ui.controller.refresh();
+  assert.equal(ui.controller.state().loading, false); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_TIMEOUT");
+  assert.equal(ui.calls.at(-1).settings.signal.aborted, true); assert.match(ui.text(), /400원/);
+  const before = ui.calls.length; await settle(); assert.equal(ui.calls.length, before);
+  delayed = false; await ui.controller.refresh(); gate.resolve(htmlFailure()); await settle();
+  assert.equal(ui.controller.state().errorCode, ""); assert.equal(ui.controller.state().showingStored, false); assert.match(ui.text(), /400원/);
+});
+
+test("an expired authentication or redirected login clears retained data and choices before body parsing", async () => {
+  for (const auth of [{ ...htmlFailure(401), ok: false }, { ...htmlFailure(200), redirected: true, url: "https://local.test/login?expired=1" }]) {
+    let response = null;
+    const ui = mockUi({ request: async url => response || jsonResponse(url.endsWith("/options") ? optionsFixture() : payloadFixture()) });
+    await ui.controller.open(); response = auth; await ui.controller.refresh();
+    assert.equal(ui.controller.state().paused, true); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_AUTH_REQUIRED");
+    assert.equal(ui.field("keyword").value, ""); assert.equal(ui.field("month").value, ""); assert.equal(ui.find("kma-metric").length, 0); assert.doesNotMatch(ui.text(), /400원/);
+    response = htmlFailure(); await ui.controller.open(); assert.equal(ui.controller.state().showingStored, false); assert.equal(ui.find("kma-metric").length, 0);
+  }
+});
+
+test("an obsolete authentication response cannot clear a newer successful keyword selection", async () => {
+  const gate = deferred(); let reads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++reads === 2 ? gate.promise : jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) });
+  await ui.controller.open(); const old = ui.controller.refresh(); await settle();
+  ui.field("keyword").value = OTHER; await ui.field("keyword").fire("change"); await ui.apply();
+  gate.resolve(htmlFailure(401)); await old;
+  assert.equal(ui.controller.state().paused, false); assert.equal(ui.controller.state().selection.keyword, OTHER); assert.match(ui.text(), /경남 글램핑 업체/);
+});
+
+test("an authoritative missing response invalidates that scope's retained result rather than resurrecting it after a transport failure", async () => {
+  let response = null;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : response || jsonResponse(payloadFixture()) });
+  await ui.controller.open(); response = jsonResponse({ ...payloadFixture(), status: "missing", snapshot: null, diagnostics: ["MONTH_NOT_OBSERVED"] });
+  await ui.controller.refresh(); assert.equal(ui.find("kma-metric").length, 0);
+  response = htmlFailure(); await ui.controller.refresh(); assert.equal(ui.find("kma-metric").length, 0); assert.equal(ui.controller.state().showingStored, false);
+});
+
+test("an explicit cutoff without a mode does not join an in-flight automatic-cutoff read", async () => {
+  const gate = deferred(); let reads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++reads === 2 ? gate.promise : jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) });
+  await ui.controller.open(); const old = ui.controller.refresh(); await settle(); const before = ui.calls.length, oldSignal = ui.calls.at(-1).settings.signal;
+  await ui.controller.open({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-29" });
+  assert.ok(ui.calls.length > before); assert.equal(oldSignal.aborted, true);
+  assert.equal(ui.controller.state().cutoffMode, "explicit"); assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-29");
+  gate.resolve(jsonResponse(payloadFixture())); await old;
+  assert.equal(ui.controller.state().applied.cutoffDate, "2026-10-29"); assert.match(text(ui.find("kma-condition-summary")[0]), /2026-10-29.*사용자 선택/);
+});
+
+test("joining the same data read applies product company list and disclosure context without another request", async () => {
+  const gate = deferred(); let waiting = false;
+  const value = dashboardPayload(43), ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : waiting ? gate.promise : jsonResponse(value) });
+  await ui.controller.open(); waiting = true; const reading = ui.controller.refresh(); await settle(); const before = ui.calls.length;
+  const joined = ui.controller.open({ ...ui.controller.state().selection, product: "dayuse", benchmarkCompanyId: "company-25", listQuery: "비교", listPage: 2, mobileView: "detail", expanded: { "support:자료 충족도와 최근 수집 상태": true } });
+  assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().product, "dayuse"); assert.equal(ui.controller.state().benchmarkCompanyId, "company-25");
+  assert.equal(ui.controller.state().listQuery, "비교"); assert.equal(ui.controller.state().listPage, 2); assert.equal(ui.controller.state().mobileView, "detail");
+  gate.resolve(jsonResponse(value)); await Promise.all([reading, joined]);
+  assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().product, "dayuse"); assert.equal(ui.controller.state().benchmarkCompanyId, "company-25");
+  assert.equal(ui.controller.state().expanded["support:자료 충족도와 최근 수집 상태"], true);
+});
+
+test("a joined local view context survives the older pending options response", async () => {
+  const gate = deferred(); let waiting = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? waiting ? gate.promise : jsonResponse(optionsFixture()) : jsonResponse(dashboardPayload(3)) });
+  await ui.controller.open(); waiting = true;
+  const selection = clone(ui.controller.state().selection), first = ui.controller.open({ ...selection, product: "lodging", benchmarkCompanyId: "company-0" }); await settle();
+  const before = ui.calls.length, joined = ui.controller.open({ ...selection, product: "dayuse", benchmarkCompanyId: "company-1", listQuery: "비교" });
+  assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().product, "dayuse");
+  gate.resolve(jsonResponse(optionsFixture())); await Promise.all([first, joined]);
+  assert.equal(ui.calls.length, before + 1); assert.equal(ui.controller.state().product, "dayuse");
+  assert.equal(ui.controller.state().benchmarkCompanyId, "company-1"); assert.equal(ui.controller.state().listQuery, "비교");
+});
+
+test("returning from document hiding resumes one canceled revalidation even when a normal payload is retained", async () => {
+  const gate = deferred(); let reads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++reads === 2 ? gate.promise : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); const old = ui.controller.refresh(); await settle(); const before = ui.calls.length;
+  ui.doc.hidden = true; ui.listeners.visibilitychange(); assert.equal(ui.controller.state().loading, false); assert.equal(ui.controller.state().showingStored, true);
+  ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle();
+  assert.equal(ui.calls.length, before + 1); assert.equal(ui.controller.state().loading, false); assert.equal(ui.controller.state().showingStored, false);
+  ui.listeners.visibilitychange(); ui.observers[0].callback(); await settle(); assert.equal(ui.calls.length, before + 1);
+  gate.resolve(htmlFailure()); await old; assert.equal(ui.controller.state().errorCode, ""); assert.match(ui.text(), /400원/);
+});
+
+test("a resumed visibility read that fails does not become an automatic retry loop", async () => {
+  const gate = deferred(); let reads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++reads === 1 ? jsonResponse(payloadFixture()) : reads === 2 ? gate.promise : htmlFailure() });
+  await ui.controller.open(); const old = ui.controller.refresh(); await settle();
+  ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle();
+  assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_502"); const before = ui.calls.length;
+  for (let i = 0; i < 3; i++) { ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); ui.observers[0].callback(); }
+  await settle(); assert.equal(ui.calls.length, before); assert.match(ui.text(), /400원/);
+  gate.resolve(jsonResponse(payloadFixture())); await old;
+});
+
+test("visibility resume preserves an interrupted options refresh so automatic cutoff advances with the new catalog", async () => {
+  const gate = deferred(); let optionsReads = 0, day = "2026-10-30";
+  const ui = mockUi({ request: async url => {
+    if (url.endsWith("/options")) return ++optionsReads === 2 ? gate.promise : jsonResponse({ ...optionsFixture(), currentDay: day });
+    return jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams)));
+  } });
+  await ui.controller.open(); await ui.button("데이유즈").fire("click"); day = "2026-10-31";
+  const old = ui.controller.open(clone(ui.controller.state().selection)); await settle();
+  ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle();
+  assert.equal(optionsReads, 3); assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-31");
+  assert.equal(ui.controller.state().cutoffMode, "auto"); assert.equal(ui.controller.state().product, "dayuse");
+  assert.equal(new URL(ui.calls.at(-1).url, "https://local.test").searchParams.get("cutoffDate"), "2026-10-31");
+  const before = ui.calls.length; gate.resolve(jsonResponse({ ...optionsFixture(), currentDay: "2026-10-30" })); await old;
+  ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-31");
 });

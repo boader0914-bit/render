@@ -5,7 +5,9 @@ const fs = require("node:fs/promises");
 const C = require("node:fs").constants;
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { createKeywordMonthlyAnalysis, KEYWORD_MONTHLY_LIMITS: CHILD_LIMITS } = require("./keyword_monthly_analysis.cjs");
+const { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, KEYWORD_MONTHLY_LIMITS: CHILD_LIMITS } = require("./keyword_monthly_analysis.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
+const measureDefault = (phase, metadata, operation) => getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
 const LIMITS = Object.freeze({ pointerBytes: 16384, catalogBytes: 1024 * 1024, optionsBytes: 2 * 1024 * 1024, partitions: 512, scopes: 4096, defaultTotalBytes: 1024 * 1024 * 1024 });
 const SHA = /^[a-f0-9]{64}$/, GENERATION = /^[a-f0-9]{32}$/, MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -100,21 +102,29 @@ function composeOptions(catalog, parts, failures, base, identity) {
     bundle: { generation: identity.generation, partitionCount: catalog.partitions.length, scopeCount: catalog.scopes.length, unavailablePartitions: failures } };
   ensure(Buffer.byteLength(JSON.stringify(result)) <= LIMITS.optionsBytes, "KEYWORD_MONTHLY_BUNDLE_OPTIONS_RESPONSE_LIMIT"); return result;
 }
-async function partition(bundle, key, now, staleAfterMs) {
+async function partition(bundle, key, now, staleAfterMs, { optionsReader, measure = measureDefault, verifyAfter = true } = {}) {
   const descriptor = bundle.catalog.partitions.find(value => value.key === key); ensure(descriptor, "KEYWORD_MONTHLY_BUNDLE_PARTITION_MISSING");
-  const directory = path.join(bundle.generationDir, "partitions", key), index = await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes);
+  const directory = path.join(bundle.generationDir, "partitions", key);
+  const index = await measure("keyword_index_read", { readCount: 1, inputBytes: descriptor.indexBytes }, () => readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes));
   ensure(index.sha256 === descriptor.indexSha256 && index.size === descriptor.indexBytes, "KEYWORD_MONTHLY_BUNDLE_PARTITION_MISMATCH");
-  const service = createKeywordMonthlyAnalysis({ projectionDir: directory, now, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) }), options = await service.options();
+  const service = createKeywordMonthlyAnalysis({ projectionDir: directory, now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
+  const reader = optionsReader || createKeywordMonthlyOptionsIndexReader({ now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
+  const options = await reader.project(index.bytes, index.sha256);
   ensure(["available", "stale"].includes(options.status), "KEYWORD_MONTHLY_BUNDLE_PARTITION_UNAVAILABLE");
   const declared = bundle.catalog.scopes.filter(value => value.partition === key);
   ensure(declared.every(value => options.keywords.some(row => row.keyword === value.keyword && row.stayMonths.includes(value.month))), "KEYWORD_MONTHLY_BUNDLE_SCOPE_MISMATCH");
-  ensure((await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes)).sha256 === index.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  if (verifyAfter) {
+    const after = await measure("keyword_index_read", { readCount: 1, inputBytes: descriptor.indexBytes }, () => readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes));
+    ensure(after.sha256 === index.sha256 && after.size === index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  }
   return { descriptor, directory, index: { file: index.file, sha256: index.sha256, size: index.size }, service, options: narrowOptions(options, declared) };
 }
 const safeError = error => /^KEYWORD_MONTHLY_[A-Z0-9_]+$/.test(error?.code || "") ? error.code : "KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE";
-function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs } = {}) {
+function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs, measure = measureDefault } = {}) {
   ensure(typeof projectionDir === "string" && path.isAbsolute(projectionDir), "KEYWORD_MONTHLY_BUNDLE_ABSOLUTE_DIRECTORY_REQUIRED");
-  const directory = path.resolve(projectionDir), legacy = createKeywordMonthlyAnalysis({ projectionDir: directory, now, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
+  const directory = path.resolve(projectionDir), legacy = createKeywordMonthlyAnalysis({ projectionDir: directory, now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
+  const optionsReader = createKeywordMonthlyOptionsIndexReader({ now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
+  const optionsFlights = new Map();
   const basic = () => { const currentDay = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10); return { schemaVersion: 1, readOnly: true, networkAttempted: false, currentDay, currentMonth: currentDay.slice(0, 7) }; };
   const absent = (error, request) => ({ ...basic(), status: "needs_verification", ...(request ? { request, snapshot: null } : { keywords: [] }), diagnostics: [safeError(error)], provenance: null, activity: null, latestAttempt: null, lastSuccessfulAttempt: null });
   async function open() { try { return await loadBundle(directory); } catch (error) { if (error.code === "ENOENT") {
@@ -128,15 +138,35 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
   }
   async function unchanged(bundle, part) {
     const after = await loadBundle(directory); ensure(after.pointerRead.sha256 === bundle.pointerRead.sha256 && after.catalogRead.sha256 === bundle.catalogRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-    for (const item of part ? Array.isArray(part) ? part : [part] : []) { const index = await readFile(path.join(item.directory, "index.json"), CHILD_LIMITS.indexBytes); ensure(index.sha256 === item.index.sha256 && index.size === item.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); }
+    for (const item of part ? Array.isArray(part) ? part : [part] : []) {
+      const index = await measure("keyword_index_read", { readCount: 1, inputBytes: item.index.size }, () => readFile(path.join(item.directory, "index.json"), CHILD_LIMITS.indexBytes));
+      ensure(index.sha256 === item.index.sha256 && index.size === item.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    }
+    // A publication during the final index pass cannot return the old generation.
+    const final = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes);
+    ensure(final.sha256 === bundle.pointerRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  }
+  async function loadOptions(bundle) {
+    const parts = new Map(), failures = [];
+    for (const descriptor of bundle.catalog.partitions) {
+      try { parts.set(descriptor.key, await partition(bundle, descriptor.key, now, staleAfterMs, { optionsReader, measure, verifyAfter: false })); }
+      catch (error) { failures.push({ partition: descriptor.key, code: safeError(error) }); }
+    }
+    // The final pass retains all index and pointer race checks, instead of
+    // reparsing each index through a second child service before this pass.
+    await unchanged(bundle, [...parts.values()]);
+    return composeOptions(bundle.catalog, parts, failures, basic(), { catalogSha256: bundle.catalogRead.sha256, pointerSha256: bundle.pointerRead.sha256, generation: bundle.pointer.generation });
   }
   async function options() {
     let bundle; try {
       bundle = await open(); if (!bundle) return await legacyRead(() => legacy.options());
-      const parts = new Map(), failures = [];
-      for (const descriptor of bundle.catalog.partitions) { try { parts.set(descriptor.key, await partition(bundle, descriptor.key, now, staleAfterMs)); } catch (error) { failures.push({ partition: descriptor.key, code: safeError(error) }); } }
-      await unchanged(bundle, [...parts.values()]);
-      return composeOptions(bundle.catalog, parts, failures, basic(), { catalogSha256: bundle.catalogRead.sha256, pointerSha256: bundle.pointerRead.sha256, generation: bundle.pointer.generation });
+      const key = bundle.pointerRead.sha256, existing = optionsFlights.get(key);
+      if (existing) return await measure("keyword_options_join", { cacheHits: 1 }, () => existing);
+      // Bound in-flight metadata roots even if generations change rapidly.
+      ensure(optionsFlights.size < 4, "KEYWORD_MONTHLY_BUNDLE_OPTIONS_BUSY");
+      const pending = loadOptions(bundle); optionsFlights.set(key, pending);
+      try { return await pending; }
+      finally { if (optionsFlights.get(key) === pending) optionsFlights.delete(key); }
     } catch (error) { return absent(error); }
   }
   async function analyze(input) {
@@ -148,7 +178,7 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
       bundle = await open(); if (!bundle) return await legacyRead(() => legacy.analyze(input));
       const scope = bundle.catalog.scopes.find(value => value.keyword === input.keyword && value.month === input.month);
       if (!scope) { await unchanged(bundle); return { ...basic(), status: "missing", request: input, snapshot: null, diagnostics: ["KEYWORD_MONTHLY_SCOPE_NOT_PREPARED"], activity: null, latestAttempt: null, lastSuccessfulAttempt: null, provenance: { bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256 } }; }
-      const part = await partition(bundle, scope.partition, now, staleAfterMs), result = await part.service.analyze(input); await unchanged(bundle, part);
+      const part = await partition(bundle, scope.partition, now, staleAfterMs, { optionsReader, measure }), result = await part.service.analyze(input); await unchanged(bundle, part);
       const resultId = hash(JSON.stringify([bundle.pointerRead.sha256, bundle.catalogRead.sha256, part.index.sha256, result.request || input]));
       return { ...result, resultId, provenance: result.provenance ? { ...result.provenance, bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256, partitionIndexSha256: part.index.sha256 } : null,
         bundle: { generation: bundle.pointer.generation, partition: scope.partition, catalogSha256: bundle.catalogRead.sha256 } };

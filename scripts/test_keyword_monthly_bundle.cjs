@@ -142,3 +142,62 @@ test("a post-promotion receipt failure explicitly reports committed state for re
   assert.equal((await loadBundle(output)).pointer.generation, caught.generation);
   assert.equal((await createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => NOW }).analyze(query(A))).status, "available");
 });
+
+test("same-generation options coalesce and read each index twice while warm reads avoid reparsing", { timeout: 5000 }, async t => {
+  const { prepare, output } = await setup(t), a = await prepare("a", A, 2), b = await prepare("b", B, 4);
+  await publishKeywordMonthlyBundle({ inputs: [{ directory: a }, { directory: b }], outputDir: output, now: NOW });
+  let release, joins = 0, reads = 0, parses = 0, hits = 0, hold = true;
+  const gate = new Promise(resolve => { release = resolve; });
+  const measure = async (phase, metadata, operation) => {
+    if (phase === "keyword_options_join") { joins++; if (joins === 8) release(); }
+    if (phase === "keyword_index_read") { reads++; if (hold) await gate; }
+    if (phase === "keyword_index_parse") parses++;
+    if (phase === "keyword_options_cache") hits += metadata.cacheHits || 0;
+    return operation();
+  };
+  const service = createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => NOW, measure });
+  const results = await Promise.all(Array.from({ length: 9 }, () => service.options())); hold = false;
+  assert.equal(joins, 8); assert.equal(reads, 4); assert.equal(parses, 2);
+  for (const result of results) assert.deepEqual(result, results[0]);
+  const warm = await service.options();
+  assert.deepEqual(warm, results[0]); assert.equal(reads, 8); assert.equal(parses, 2); assert.equal(hits, 2);
+  t.diagnostic("Two-partition fixture: former 8 index reads per query -> 4; nine overlapping queries share one 4-read pass; warm index parses 0.");
+});
+
+test("warm options still reject index tampering, unsafe links and generation changes during final verification", async t => {
+  const { prepare, output, root } = await setup(t), a = await prepare("a", A, 2), b = await prepare("b", A, 4);
+  const first = await publishKeywordMonthlyBundle({ inputs: [{ directory: a }], outputDir: output, now: NOW });
+  const bundle = await loadBundle(output), indexFile = path.join(bundle.generationDir, "partitions", bundle.catalog.partitions[0].key, "index.json");
+  const indexBytes = await fs.readFile(indexFile), pointerFile = path.join(output, "current.json"), oldPointer = await fs.readFile(pointerFile);
+  const service = createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => NOW });
+  assert.equal((await service.options()).status, "available");
+  const changedIndex = JSON.parse(indexBytes); changedIndex.provenance.inputSha256 = "f".repeat(64);
+  await fs.writeFile(indexFile, JSON.stringify(changedIndex));
+  assert.equal((await service.options()).status, "needs_verification"); await fs.writeFile(indexFile, indexBytes);
+  const linked = path.join(root, "warm-linked-index.json"); await fs.link(indexFile, linked);
+  assert.equal((await service.options()).status, "needs_verification"); await fs.unlink(linked);
+  assert.equal((await service.options()).status, "available");
+  await publishKeywordMonthlyBundle({ inputs: [{ directory: b }], outputDir: output, now: NOW, expectedCurrentSha256: first.pointerSha256 });
+  const newPointer = await fs.readFile(pointerFile); await fs.writeFile(pointerFile, oldPointer); let reads = 0;
+  const racing = createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => NOW,
+    measure: async (phase, _metadata, operation) => { if (phase === "keyword_index_read" && ++reads === 2) await fs.writeFile(pointerFile, newPointer); return operation(); } });
+  const result = await racing.options();
+  assert.equal(result.status, "needs_verification"); assert.deepEqual(result.keywords, []);
+  assert.ok(result.diagnostics.includes("KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"));
+});
+
+test("warm metadata cache recomputes freshness without refreshing source provenance or retaining caller mutations", async t => {
+  const { prepare, output } = await setup(t), a = await prepare("a", A, 2);
+  await publishKeywordMonthlyBundle({ inputs: [{ directory: a }], outputDir: output, now: NOW });
+  let clock = NOW, parses = 0;
+  const service = createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => clock,
+    measure: (phase, _metadata, operation) => { if (phase === "keyword_index_parse") parses++; return operation(); } });
+  const first = await service.options(), expected = JSON.parse(JSON.stringify(first));
+  first.keywords[0].collectionMonths.push("2099-01"); first.keywords[0].provenanceByMonth["2026-10"].materializedAt = "2099-01-01T00:00:00Z";
+  assert.deepEqual(await service.options(), expected);
+  clock = "2026-11-01T00:00:00.000Z"; const stale = await service.options();
+  assert.equal(stale.status, "stale"); assert.equal(parses, 1);
+  assert.equal(stale.keywords[0].availabilityByMonth["2026-10"], "stale");
+  assert.equal(stale.keywords[0].provenanceByMonth["2026-10"].materializedAt, NOW);
+  assert.equal(stale.provenance.originalFreshnessVerified, false);
+});

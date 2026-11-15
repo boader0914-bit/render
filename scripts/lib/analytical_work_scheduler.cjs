@@ -2,6 +2,7 @@
 
 const { AsyncLocalStorage, AsyncResource } = require("node:async_hooks");
 const { runWithCooperativeWork, YIELD_CODE } = require("./cooperative_work_checkpoint.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 
 function fault(code, name = "Error") { return Object.assign(new Error(code), { code, name }); }
 const aborted = () => fault("ANALYTICAL_WORK_ABORTED", "AbortError");
@@ -340,6 +341,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (context.getStore()?.checkpointRead && context.getStore().active) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_NESTED_WORK"));
     if (closed) return Promise.reject(fault("ANALYTICAL_WORK_CLOSED"));
     if (signal?.aborted) return Promise.reject(aborted());
+    const observedOperation = info => getAnalyticalPhaseDiagnostics().run(kind, () => operation(info));
     const owner = context.getStore();
     // Durable queue dispatch inherits its creator's async context but owns a
     // NEW lifetime. Enqueue detached work without awaiting it inside the owner;
@@ -350,7 +352,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       timing.reentrantStarted++;
       const info = { signal: owner.controller.signal, priority: owner.priority, kind,
         timing: Object.freeze({ id: task.id, parentId: owner.id, reentrant: true, queuedAt: at, startedAt: at, queueWaitMs: 0, ...emptyWait() }) };
-      return Promise.resolve().then(() => operation(info)).then(value => {
+      return Promise.resolve().then(() => observedOperation(info)).then(value => {
         if (owner.cooperative?.yieldRequested) { const error = fault(YIELD_CODE); task.cooperativeYielded = true; recordTask(task, error, timestamp(), true); throw error; }
         recordTask(task, null); return value; },
         error => { const failure = owner.cooperative?.yieldRequested ? fault(YIELD_CODE) : error;
@@ -362,7 +364,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       // A queued task may be pumped by another collection lane. Restore the
       // enqueuing caller's other async stores before assigning our new owner.
       const invoke = AsyncResource.bind((token, info) => context.run(token,
-        () => runWithCooperativeWork(token.checkpointScope, () => operation(info))));
+        () => runWithCooperativeWork(token.checkpointScope, () => observedOperation(info))));
       const queuedAt = accountWaiting();
       const task = { id: ++taskSequence, invoke, priority, kind, signal, resolve, reject, queuedAt,
         waitStart: { ...waitClocks[priority] }, onTaskTiming: taskCallback, cleanup: () => signal?.removeEventListener("abort", onAbort),
