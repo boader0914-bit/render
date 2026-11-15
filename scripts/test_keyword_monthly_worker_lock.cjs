@@ -78,6 +78,22 @@ function reusedOwner(f, asServer = false) {
     getconfSha256: "7".repeat(64), getconfIdentity: { dev: "1", ino: "2", mode: "33261", uid: "0", gid: "0", size: "100", nlink: "1", mtimeNs: "3", ctimeNs: "4" }, coherenceVerified: true };
   f.processReader.clockBasis = async () => ({ ...basis }); return basis;
 }
+async function retiredFixture(t) {
+  const f = await fixture(t, 2), nextContext = { bootId: "77777777-1111-4222-8333-444444444444", pidNamespace: "pid:[9999]", hostId: "8".repeat(64) };
+  const priorInstanceHostname = "srv-da9q6don74is738t7id0-77b475ff68-qmrs5";
+  f.lock.owner.hostId = H(J([priorInstanceHostname, context.bootId])); await save(f.lockFile, f.lock);
+  f.processReader.context = async () => ({ ...nextContext });
+  const contextHash = value => H(J([value.bootId, value.pidNamespace, value.hostId]));
+  const proof = { schemaVersion: 1, action: "reviewed_retired_instance_worker_lock", serviceId: "srv-da9q6don74is738t7id0", persistentDiskMount: "/var/data",
+    priorDeploymentId: "dep-111111111111111111111111", priorDeploymentStartedAt: "2026-11-15T11:00:00.000Z", retirementNoLaterThan: "2026-11-15T11:46:00.000Z", retirementBoundBasis: "exclusive_persistent_disk_handover",
+    currentDeploymentId: "dep-222222222222222222222222", currentInstanceStartedAt: "2026-11-15T11:46:00.000Z", reviewedAt: NOW,
+    lockSha256: H(await fs.readFile(f.lockFile)), ownerContextSha256: contextHash(f.lock.owner), currentContextSha256: contextHash(nextContext), priorInstanceHostname, priorHostnameEvidenceSha256: "5".repeat(64),
+    providerEvidenceSha256: "9".repeat(64), diskExclusivityEvidenceSha256: "7".repeat(64), priorInstanceTerminationBoundVerified: true, exclusiveDiskHandoverVerified: true };
+  f.options.retiredInstanceProof = proof; f.options.now = () => Date.parse(NOW);
+  const originalApproval = f.approval;
+  f.approval = async () => ({ ...await originalApproval(), incident: { kind: "retired_instance", retirementProofSha256: H(J(proof)), evidenceSha256: proof.providerEvidenceSha256 } });
+  return { ...f, retiredProof: proof, nextContext };
+}
 
 test("schema2 acquisition keeps its secret distinct from the public job id and releases only its exact own lock", async t => {
   const f = await fixture(t); await fs.unlink(f.lockFile);
@@ -103,6 +119,35 @@ test("a replaced live lease is never removed by release", async t => {
   const f = await fixture(t); await fs.unlink(f.lockFile); const lease = await L.acquireWorkerLock({ directory: f.directory, sourceKey: f.sourceKey, version: V, fixture: true, processReader: f.processReader });
   await fs.unlink(f.lockFile); await save(f.lockFile, { foreign: true }); const bytes = await fs.readFile(f.lockFile);
   await assert.rejects(lease.release(), { code: "KEYWORD_INCREMENTAL_LOCK_CHANGED" }); assert.deepEqual(await fs.readFile(f.lockFile), bytes);
+});
+test("prepared conversion excludes a new incremental worker before wx without changing its marker", async t => {
+  const f = await fixture(t), M = require("./lib/keyword_monthly_maintenance.cjs"); await fs.unlink(f.lockFile);
+  const lease = await M.acquirePreparedConversionLease({ dataDir: f.dataDir, mode: "stage", operationId: crypto.randomUUID(), contextSha256: "a".repeat(64) });
+  const marker = path.join(f.directory, M.MAINTENANCE_FILE), before = await fs.readFile(marker);
+  await assert.rejects(L.acquireWorkerLock({ directory: f.directory, sourceKey: f.sourceKey, version: V, fixture: true, processReader: f.processReader }),
+    e => e.code === "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_ACTIVE" && e.deferred === true);
+  await absent(f.lockFile); assert.deepEqual(await fs.readFile(marker), before); await lease.release();
+});
+for (const invalid of [false, true]) test(`prepared conversion appearing after worker wx ${invalid ? "invalid" : "active"} defers and removes only the empty own inode`, async t => {
+  const f = await fixture(t), M = require("./lib/keyword_monthly_maintenance.cjs"); await fs.unlink(f.lockFile); const marker = path.join(f.directory, M.MAINTENANCE_FILE), originalOpen = fs.open; let maintenance;
+  t.mock.method(fs, "open", async (file, ...args) => {
+    const h = await originalOpen(file, ...args);
+    if (file === f.lockFile && args[0] === "wx") {
+      if (invalid) await fs.writeFile(marker, "unknown marker", { flag: "wx", mode: 0o600 });
+      else maintenance = await M.acquirePreparedConversionLease({ dataDir: f.dataDir, mode: "publish", operationId: crypto.randomUUID(), contextSha256: "b".repeat(64) });
+    }
+    return h;
+  });
+  await assert.rejects(L.acquireWorkerLock({ directory: f.directory, sourceKey: f.sourceKey, version: V, fixture: true, processReader: f.processReader }),
+    e => e.code === (invalid ? "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_UNVERIFIED" : "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_ACTIVE") && e.deferred === true);
+  await absent(f.lockFile); assert.ok(await fs.stat(marker)); if (maintenance) await maintenance.release(); else assert.equal(await fs.readFile(marker, "utf8"), "unknown marker");
+});
+test("prepared conversion admission read errors remain controlled and deferred before own wx", async t => {
+  const f = await fixture(t), M = require("./lib/keyword_monthly_maintenance.cjs"); await fs.unlink(f.lockFile);
+  t.mock.method(M, "readPreparedConversionAdmission", async () => { throw Error("private admission error"); });
+  await assert.rejects(L.acquireWorkerLock({ directory: f.directory, sourceKey: f.sourceKey, version: V, fixture: true, processReader: f.processReader }),
+    e => e.code === "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_UNVERIFIED" && e.deferred === true && !e.message.includes("private"));
+  await absent(f.lockFile);
 });
 test("legacy inspection is redacted and reviewed dry-run makes no recovery filesystem changes", async t => {
   const f = await fixture(t), before = await fs.readFile(f.lockFile), entries = await fs.readdir(f.directory), inspected = await L.inspectWorkerLockRecovery(f.options);
@@ -133,6 +178,83 @@ test("schema2 distinguishes PID reuse and refuses boot or namespace changes", as
   const f = await fixture(t, 2); f.rows.set(84, { pid: 84, startTicks: "999" }); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_PID_REUSED" });
   f.rows.delete(84); f.processReader.context = async () => ({ ...context, pidNamespace: "pid:[9999]" }); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN" });
   f.processReader.context = async () => ({ ...context, bootId: "55555555-1111-4222-8333-444444444444" }); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN" });
+});
+test("cross-instance context inspection is redacted and cannot authorize recovery", async t => {
+  const f = await retiredFixture(t), before = await fs.readFile(f.lockFile), entries = await fs.readdir(f.directory);
+  const result = await L.inspectWorkerLockInstanceContext(f.options);
+  assert.equal(result.status, "retirement_evidence_required"); assert.equal(result.changed, false); assert.equal(result.providerRetirementVerified, false);
+  assert.equal(result.lockSha256, f.retiredProof.lockSha256); assert.equal(result.ownerContextSha256, f.retiredProof.ownerContextSha256); assert.equal(result.currentContextSha256, f.retiredProof.currentContextSha256);
+  const serialized = JSON.stringify(result); for (const secret of [SECRET, context.bootId, context.pidNamespace, context.hostId, f.nextContext.bootId, f.jobRoot, f.retiredProof.priorInstanceHostname]) assert.equal(serialized.includes(secret), false);
+  assert.deepEqual(await fs.readFile(f.lockFile), before); assert.deepEqual(await fs.readdir(f.directory), entries);
+  delete f.options.retiredInstanceProof; await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN" });
+});
+test("retired-instance review accepts the existing ISO-string clock contract", async t => {
+  const f = await retiredFixture(t); f.options.now = () => NOW;
+  assert.equal((await L.inspectWorkerLockRecovery(f.options)).status, "retired_instance_review_required");
+});
+test("reviewed retired instance recovery preserves lock bytes and never uses a local colliding owner PID as death evidence", async t => {
+  const f = await retiredFixture(t); f.lock.pid = f.options.serverPid; await save(f.lockFile, f.lock); f.retiredProof.lockSha256 = H(await fs.readFile(f.lockFile));
+  const original = await fs.readFile(f.lockFile), files = [f.queueFile, f.pointerFile, f.sourcePointerFile, f.ownerFile, f.proofFile], saved = await Promise.all(files.map(file => fs.readFile(file)));
+  const inspected = await L.inspectWorkerLockRecovery(f.options); assert.equal(inspected.status, "retired_instance_review_required"); assert.equal(inspected.snapshot.retiredInstance.proofSha256, H(J(f.retiredProof)));
+  const approval = await f.approval(), dry = await L.recoverWorkerLock({ ...f.options, reviewedProof: approval }); assert.equal(dry.changed, false);
+  const result = await L.recoverWorkerLock({ ...f.options, reviewedProof: approval, dryRun: false }); assert.equal(result.status, "recovered");
+  await absent(f.lockFile); const directory = path.join(f.directory, "lock-recovery", result.recoveryId);
+  assert.deepEqual(await fs.readFile(path.join(directory, "original-lock.json")), original);
+  const receipt = JSON.parse(await fs.readFile(path.join(directory, "recovery-complete.json"))); assert.equal(receipt.retiredInstance.proofSha256, H(J(f.retiredProof)));
+  for (const [i, file] of files.entries()) assert.deepEqual(await fs.readFile(file), saved[i]);
+});
+for (const [name, mutate, code] of [
+  ["unconfirmed old termination", p => { p.priorInstanceTerminationBoundVerified = false; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["unconfirmed disk handover", p => { p.exclusiveDiskHandoverVerified = false; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["wrong service", p => { p.serviceId = "srv-other-service"; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["wrong disk mount", p => { p.persistentDiskMount = "/tmp"; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["same deployment", p => { p.priorDeploymentId = p.currentDeploymentId; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["missing provider evidence", p => { p.providerEvidenceSha256 = null; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["unknown extra field", p => { p.autoReclaim = true; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["wrong lock", p => { p.lockSha256 = "0".repeat(64); }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["wrong prior context", p => { p.ownerContextSha256 = "0".repeat(64); }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["wrong prior hostname", p => { p.priorInstanceHostname = p.priorInstanceHostname.replace("qmrs5", "other"); }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["missing prior hostname evidence", p => { p.priorHostnameEvidenceSha256 = null; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED"],
+  ["wrong current context", p => { p.currentContextSha256 = "0".repeat(64); }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["lock outside deployment lifetime", p => { p.priorDeploymentStartedAt = p.retirementNoLaterThan; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["replacement instance predating retirement bound", p => { p.currentInstanceStartedAt = "2026-11-15T11:44:00.000Z"; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"],
+  ["future review", p => { p.reviewedAt = "2027-01-01T00:00:00.000Z"; }, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"]
+]) test(`retired-instance ${name} fails closed without mutation`, async t => {
+  const f = await retiredFixture(t), before = await fs.readFile(f.lockFile); mutate(f.retiredProof);
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code }); assert.deepEqual(await fs.readFile(f.lockFile), before); await absent(path.join(f.directory, "lock-recovery"));
+});
+test("retirement proof cannot bypass a same-instance live owner or legacy unknown owner", async t => {
+  const f = await retiredFixture(t); f.processReader.context = async () => ({ bootId: f.lock.owner.bootId, pidNamespace: f.lock.owner.pidNamespace, hostId: f.lock.owner.hostId });
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_NOT_APPLICABLE" });
+  const legacy = await fixture(t); legacy.options.retiredInstanceProof = f.retiredProof;
+  await assert.rejects(L.inspectWorkerLockRecovery(legacy.options), { code: "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_NOT_APPLICABLE" });
+});
+test("retired-instance recovery still requires separate exact snapshot approval", async t => {
+  const f = await retiredFixture(t), approved = await f.approval(), before = await fs.readFile(f.lockFile);
+  for (const incident of [null, { pid: 84, exitCode: 134, exitedAt: NOW, evidenceSha256: "9".repeat(64) }, { ...approved.incident, retirementProofSha256: "0".repeat(64) }])
+    await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: { ...approved, incident }, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH" });
+  f.retiredProof.providerEvidenceSha256 = "6".repeat(64);
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_REVIEW_MISMATCH" });
+  assert.deepEqual(await fs.readFile(f.lockFile), before); await absent(path.join(f.directory, "lock-recovery"));
+});
+test("retired-instance proof does not bypass current peer work or unresolved publication", async t => {
+  const f = await retiredFixture(t); f.processReader.peers = async () => [{ pid: 999, kind: "node", startTicks: "500" }];
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_PEER_UNKNOWN" }); f.processReader.peers = async () => [];
+  await save(path.join(f.receiptDir, "intent-" + f.sourceKey + ".json"), { publishing: true });
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_PUBLICATION_INTENT_PRESENT" });
+});
+test("changed replacement context invalidates retired-instance review without clearing the old lock", async t => {
+  const f = await retiredFixture(t), approval = await f.approval(), before = await fs.readFile(f.lockFile);
+  f.processReader.context = async () => ({ ...f.nextContext, pidNamespace: "pid:[10000]" });
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approval, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH" });
+  assert.deepEqual(await fs.readFile(f.lockFile), before); await absent(path.join(f.directory, "lock-recovery"));
+});
+test("retired-instance final boundary preserves a replacement lock and leaves its recovery claim for review", async t => {
+  const f = await retiredFixture(t), approval = await f.approval(), replacement = J({ schemaVersion: 2, anotherOwner: true });
+  const archiveNoReplace = f.options.archiveNoReplace || (async (a, b) => fs.rename(a, b));
+  f.options.archiveNoReplace = async (a, b) => { await archiveNoReplace(a, b); await fs.writeFile(a, replacement, { flag: "wx", mode: 0o600 }); };
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approval, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_NEW_OWNER_PRESENT" });
+  assert.deepEqual(await fs.readFile(f.lockFile), replacement); assert.ok(await fs.stat(path.join(f.directory, "worker-lock-recovery-claim.json")));
 });
 test("review pins and reviewed exit evidence are mandatory and never inferred from age", async t => {
   const f = await fixture(t), approved = await f.approval();

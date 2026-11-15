@@ -1,7 +1,28 @@
 "use strict";
 const { test } = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
 const { readCompletedKeywordEvidence, readStoredCollectionAdmission, holdActive, createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const at = "2026-10-30T10:00:00.000Z", hash = b => crypto.createHash("sha256").update(b).digest("hex");
+test("shutdown aborts an unstarted refresh waiting behind another analytical owner", async () => {
+  const scheduler = createAnalyticalWorkScheduler(); let releaseOwner, callbacks, pending, refreshes = 0;
+  const occupied = scheduler.run(() => new Promise(resolve => { releaseOwner = resolve; }), { kind: "fixture-heavy", priority: "foreground" });
+  await new Promise(resolve => setImmediate(resolve));
+  const controller = new AbortController();
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: path.resolve(os.tmpdir(), "synthetic-unused-shutdown-data"), codeRoot: path.resolve(__dirname, ".."),
+    readPostprocess: async () => { throw Error("no original read is allowed before admission"); }, readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true,
+    runWork: (operation, options) => scheduler.run(operation, options),
+    createQueue: options => { callbacks = options; return { close: async () => { controller.abort(); await pending.catch(() => {}); }, status: async () => ({}) }; },
+    refresh: async () => { refreshes++; throw Error("queued work must not launch"); } });
+  try {
+    pending = callbacks.refresh({}, {}, { signal: controller.signal }); pending.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(scheduler.status().queuedBackground, 1);
+    let closed = false; const closing = integration.close().then(() => { closed = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(closed, true, "shutdown must not wait for the unrelated analytical owner");
+    await assert.rejects(pending, { code: "ANALYTICAL_WORK_ABORTED" }); await closing;
+    assert.equal(refreshes, 0); assert.equal(scheduler.status().queuedBackground, 0);
+  } finally { releaseOwner(); await occupied; await scheduler.close(); }
+});
 async function fixture(t, { checkpoint = false } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "monthly-refresh-integration-")));
   const temporaryParent = await fs.realpath(os.tmpdir());

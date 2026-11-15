@@ -120,7 +120,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
         return result;
       }
       finally { clearIntervalImpl(watch); work.signal?.removeEventListener("abort", aborted); }
-    }, { priority: "background", kind: "keyword_monthly_refresh" }), now
+    }, { priority: "background", kind: "keyword_monthly_refresh", signal: work.signal }), now
   });
   async function signalCompletedRun(runId, context) {
     try {

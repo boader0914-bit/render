@@ -35,7 +35,7 @@ BYPASS_SYSCALLS = (
     "ptrace", "process_vm_readv", "process_vm_writev", "bpf",
 )
 GUARD_NAME = "reconstruct_keyword_monthly_source_copy.cjs"
-GUARD_NAMES = frozenset((GUARD_NAME, "reconstruct_keyword_monthly_incremental.cjs"))
+GUARD_NAMES = frozenset((GUARD_NAME, "reconstruct_keyword_monthly_incremental.cjs", "reconstruct_keyword_monthly_prepared_conversion.cjs"))
 MAX_GUARD_BYTES = 1024 * 1024
 MAX_PROOF_BYTES = 64 * 1024
 

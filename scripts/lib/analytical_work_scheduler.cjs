@@ -15,7 +15,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   sampleIntervalMs = 1000, maxSampleAgeMs = 10000, now = Date.now,
   setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout,
   onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false, cooperativeCompanyMonthYield = false,
-  cooperativeMinRunMs = 250, cooperativeMinProgress = 1 } = {}) {
+  cooperativeMinRunMs = 250, cooperativeMinProgress = 1, externalAdmission = null,
+  externalAdmissionTimeoutMs = 1500 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
     || sampleMemory !== null && typeof sampleMemory !== "function"
     || !Number.isFinite(highWatermark) || highWatermark <= 0 || highWatermark > 1
@@ -28,12 +29,17 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || !Number.isSafeInteger(timingHistoryLimit) || timingHistoryLimit < 0 || timingHistoryLimit > 128
     || typeof cooperativeYield !== "boolean" || typeof cooperativeCompanyMonthYield !== "boolean"
     || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
-    || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1) {
+    || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1
+    || externalAdmission !== null && typeof externalAdmission !== "function"
+    || !Number.isSafeInteger(externalAdmissionTimeoutMs) || externalAdmissionTimeoutMs < 1 || externalAdmissionTimeoutMs > 10000) {
     throw new TypeError("Invalid analytical scheduler options");
   }
   const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
   let checkpointReader = null;
   let active = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
+  let externalChecking = false, externalCancel = null;
+  const maintenance = { enabled: externalAdmission !== null, checking: false, paused: false, reasonCode: null,
+    checks: 0, held: 0, failures: 0 };
   let lastAttemptAt = null, sampleSequence = 0, admittedSampleSequence = 0;
   const memory = { enabled: sampleMemory !== null, paused: false, pauseReason: null,
     errorCode: null, ratio: null, sampledAt: null, lowSamples: 0 };
@@ -122,7 +128,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function settleIdle() { if (!active) for (const resolve of idleWaiters.splice(0)) resolve(); }
   function clearPoll() { if (timer !== null) clearTimeoutImpl(timer); timer = null; }
   function poll() {
-    if (closed || !sampleMemory || !background.length || timer !== null) return;
+    if (closed || timer !== null || !(sampleMemory && background.length
+      || maintenance.paused && (foreground.length || background.length || checkpointReads.length))) return;
     timer = setTimeoutImpl(() => { timer = null; pump(); }, sampleIntervalMs);
     timer?.unref?.();
   }
@@ -314,7 +321,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (failed) task.reject(failure); else task.resolve(value);
     }
   }
-  function pump() {
+  function pumpOwned() {
     if (closed || active) return;
     if (checkpointReads.length) return dispatch(checkpointReads);
     const canBackground = background.length && !sampling && fresh() && !memory.paused;
@@ -330,6 +337,41 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (canBackground) return dispatch(background);
     if (foreground.length) return dispatch(foreground);
     poll();
+  }
+  function pump() {
+    if (closed || active) return;
+    if (!externalAdmission) return pumpOwned();
+    if (externalChecking || !(foreground.length || background.length || checkpointReads.length)) return;
+    externalChecking = true; maintenance.checking = true; maintenance.checks++;
+    let deadline = null, expired = false, finished = false;
+    const deny = () => { maintenance.paused = true; maintenance.reasonCode = "ANALYTICAL_MAINTENANCE_UNVERIFIED"; maintenance.failures++; };
+    const finish = (value, failed) => {
+      if (finished) return; finished = true;
+      try { if (deadline !== null) clearTimeoutImpl(deadline); } catch {}
+      externalChecking = false; maintenance.checking = false;
+      externalCancel = null;
+      if (closed || active) return;
+      if (expired) { poll(); return; }
+      if (failed) deny(); else {
+        maintenance.paused = value?.allowed !== true;
+        maintenance.reasonCode = maintenance.paused && /^[A-Z][A-Z0-9_]{1,119}$/.test(value?.reasonCode || "")
+          ? value.reasonCode : maintenance.paused ? "ANALYTICAL_MAINTENANCE_UNVERIFIED" : null;
+        if (maintenance.paused) maintenance.held++;
+      }
+      // No async boundary between clearing 'checking' and dispatch. An idle
+      // reader cannot observe a false idle while an old allow check can still
+      // launch work after a maintenance marker was acquired.
+      if (maintenance.paused) poll(); else pumpOwned();
+    };
+    externalCancel = () => finish(null, true);
+    try {
+      deadline = setTimeoutImpl(() => {
+        if (finished) return; expired = true; deny();
+        // Keep the unfinished check owned. A hung filesystem callback cannot
+        // spawn an unbounded sequence of replacement checks after timeouts.
+      }, externalAdmissionTimeoutMs); deadline?.unref?.();
+    } catch { finish(null, true); return; }
+    Promise.resolve().then(() => externalAdmission()).then(value => finish(value, false), () => finish(null, true));
   }
   function run(operation, { priority = "foreground", kind = "analysis", signal, detached = false, onTaskTiming: taskCallback = null } = {}) {
     if (typeof operation !== "function" || !["foreground", "background"].includes(priority)
@@ -422,7 +464,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     return { closed, active: Boolean(active), activePriority: active?.priority || null, activeKind: active?.kind || null,
       queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
       queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,
-      sampling: Boolean(sampling), memory: memoryStatus(),
+      sampling: Boolean(sampling), memory: memoryStatus(), maintenance: { ...maintenance },
       cooperative: { enabled: cooperativeYield || cooperativeCompanyMonthYield, industryEnabled: cooperativeYield,
         companyMonthEnabled: cooperativeCompanyMonthYield,
         minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
@@ -439,6 +481,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   async function close() {
     const at = accountWaiting(); closed = true; clearPoll();
+    externalCancel?.();
     for (const task of [...foreground.splice(0), ...background.splice(0), ...checkpointReads.splice(0)]) { task.cleanup(); const error = fault("ANALYTICAL_WORK_CLOSED");
       recordTask(task, error, at); task.reject(error); }
     active?.controller.abort(fault("ANALYTICAL_WORK_CLOSED"));

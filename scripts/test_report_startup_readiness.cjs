@@ -48,6 +48,8 @@ function fixture({ seedError = false, companyPending = false, companyError = fal
     server: { listen: (port, host, callback) => { assert.equal(port, 10000); assert.equal(host, "127.0.0.1"); calls.push("listen"); listener = callback; } },
     companyIntegratedDb: { bootstrap: async () => calls.push("companies") },
     industryAnalysisService: { bootstrap: async () => calls.push("industry") },
+    searchDemandScheduler: { start() {} }, insightIntegration: null,
+    regionalMarketMissingWeekly: { start() {} }, regionalMarketBootstrap: { start() {} },
     dailyKeywordCollectionScheduler: { start: async () => { calls.push("daily"); return { enabled: false }; } },
     keywordWorkerSchedulers: {},
     releaseCommittedCollectionPostprocess: async () => {},

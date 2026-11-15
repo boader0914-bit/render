@@ -33,6 +33,8 @@ class LauncherGuardContractTests(unittest.TestCase):
                          "reconstruct_keyword_monthly_source_copy.cjs")
         self.assertEqual(self.module.parse_args([*base, "--guard-name", "reconstruct_keyword_monthly_incremental.cjs"]).guard_name,
                          "reconstruct_keyword_monthly_incremental.cjs")
+        self.assertEqual(self.module.parse_args([*base, "--guard-name", "reconstruct_keyword_monthly_prepared_conversion.cjs"]).guard_name,
+                         "reconstruct_keyword_monthly_prepared_conversion.cjs")
         for name in ("arbitrary.cjs", "../reconstruct_keyword_monthly_incremental.cjs",
                      "/tmp/reconstruct_keyword_monthly_incremental.cjs", "reconstruct_keyword_monthly_incremental.cjs.extra"):
             with mock.patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
@@ -136,6 +138,21 @@ class IsolatedLauncherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         proof = json.loads((self.root / "control" / "incremental-exec.json").read_text())
         self.assertEqual(proof["guardName"], incremental_guard.name)
+        self.assertEqual(proof["guardSha256"], self.sha)
+        self.assertTrue(json.loads(target.read_text())["execInheritedKernelFilter"])
+
+    def test_prepared_conversion_guard_has_the_same_exact_path_hash_and_kernel_contract(self):
+        conversion_guard = self.guard.with_name("reconstruct_keyword_monthly_prepared_conversion.cjs")
+        self.guard.rename(conversion_guard)
+        target = self.root / "control" / "conversion-result.json"
+        result = self.invoke("--code-root", str(self.code), "--guard-name", conversion_guard.name,
+                             "--guard-sha256", self.sha, "--node-sha256", NODE_SHA,
+                             "--node-max-old-space-size", "512", proof="conversion-exec.json",
+                             command=[NODE, str(conversion_guard), str(self.root / "control" / "conversion-exec.json"), str(target)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        proof = json.loads((self.root / "control" / "conversion-exec.json").read_text())
+        self.assertEqual(proof["guardName"], conversion_guard.name)
+        self.assertEqual(proof["nodeMaxOldSpaceSizeMiB"], 512)
         self.assertEqual(proof["guardSha256"], self.sha)
         self.assertTrue(json.loads(target.read_text())["execInheritedKernelFilter"])
 

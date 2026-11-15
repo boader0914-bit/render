@@ -34,6 +34,8 @@ function fixture({ failure = null, absent = false } = {}) {
     server: { listen(port, host, callback) { assert.equal(owned, false); calls.push("listen"); listen = callback; } },
     companyIntegratedDb: { bootstrap: async () => calls.push("company-background") },
     industryAnalysisService: { bootstrap: async () => calls.push("industry-background") },
+    searchDemandScheduler: { start() {} }, insightIntegration: null,
+    regionalMarketMissingWeekly: { start() {} }, regionalMarketBootstrap: { start() {} },
     dailyKeywordCollectionScheduler: { start: async () => ({ enabled: false }) }, keywordWorkerSchedulers: {},
     releaseCommittedCollectionPostprocess: async () => {}, collectionPostprocessQueue: { start: async () => {} },
     tourismVisitorMonthlyScheduler: { start: () => ({ enabled: false }) }, tourismDemandStrengthBackfillScheduler: { start: () => ({ enabled: false }) },

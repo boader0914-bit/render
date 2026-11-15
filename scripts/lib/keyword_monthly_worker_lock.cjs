@@ -7,6 +7,7 @@ const { spawn } = require("node:child_process");
 const SHA = /^[a-f0-9]{64}$/, UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const VERSIONS = new Set(["keyword-monthly-incremental-v4", "keyword-monthly-incremental-v5"]);
 const LOCK = "worker-lock.json", CLAIM = "worker-lock-recovery-claim.json", MAX_STATE = 24 * 1024 ** 2;
+const CENTRAL_SERVICE = "srv-da9q6don74is738t7id0";
 const ATOMIC_ARCHIVE_PROGRAM = "import ctypes,os,sys\nlib=ctypes.CDLL(None,use_errno=True)\nf=getattr(lib,'renameat2',None)\nif f is None: sys.exit(120)\nf.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]\nf.restype=ctypes.c_int\nr=f(-100,os.fsencode(sys.argv[1]),-100,os.fsencode(sys.argv[2]),1)\nsys.exit(0 if r==0 else min(119,ctypes.get_errno() or 1))\n";
 const hash = b => crypto.createHash("sha256").update(b).digest("hex"), jsonBytes = v => Buffer.from(JSON.stringify(v));
 const fault = code => Object.assign(new Error(code), { code });
@@ -149,12 +150,20 @@ async function acquireWorkerLock(options) {
   const { directory, sourceKey, version, now = () => new Date() } = options; need(SHA.test(sourceKey || "") && VERSIONS.has(version)); const parent = await checked(directory, true);
   need(options.fixture === true && process.platform === "win32" || (parent.mode & 0o777n) === 0o700n && parent.uid === BigInt(process.getuid()));
   const claim = path.join(directory, CLAIM), file = path.join(directory, LOCK); need(await absent(claim), "KEYWORD_INCREMENTAL_LOCK_RECOVERY_IN_PROGRESS");
+  const maintenanceAdmission = async () => {
+    let state;
+    try { state = await require("./keyword_monthly_maintenance.cjs").readPreparedConversionAdmission({ dataDir: path.dirname(directory) }); }
+    catch { throw Object.assign(fault("KEYWORD_INCREMENTAL_PREPARED_CONVERSION_UNVERIFIED"), { deferred: true }); }
+    if (state?.allowed !== true) throw Object.assign(fault(state?.reasonCode === "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_ACTIVE"
+      ? state.reasonCode : "KEYWORD_INCREMENTAL_PREPARED_CONVERSION_UNVERIFIED"), { deferred: true });
+  };
+  await maintenanceAdmission();
   const processes = reader(options), context = await processes.context(), self = await processes.process(process.pid); need(self && /^\d+$/.test(self.startTicks), "KEYWORD_INCREMENTAL_PROCESS_UNKNOWN");
   const secret = crypto.randomUUID(), jobId = crypto.randomUUID(), value = { schemaVersion: 2, token: secret, pid: process.pid, sourceKey, jobId, version,
     createdAt: new Date(now()).toISOString(), owner: { ...context, startTicks: self.startTicks } };
   let h; try { h = await fs.open(file, "wx", 0o600); } catch (e) { if (e.code === "EEXIST") throw fault("KEYWORD_INCREMENTAL_WORKER_LOCKED"); throw e; }
   const own = await h.stat({ bigint: true }); let complete = false;
-  try { need(await absent(claim), "KEYWORD_INCREMENTAL_LOCK_RECOVERY_IN_PROGRESS"); await h.writeFile(jsonBytes(value)); await h.sync(); complete = true; }
+  try { need(await absent(claim), "KEYWORD_INCREMENTAL_LOCK_RECOVERY_IN_PROGRESS"); await maintenanceAdmission(); await h.writeFile(jsonBytes(value)); await h.sync(); complete = true; }
   finally { await h.close(); if (!complete) { const s = await fs.lstat(file, { bigint: true }).catch(() => null); if (s && s.dev === own.dev && s.ino === own.ino && s.nlink === 1n) await fs.unlink(file); } }
   const initial = await read(file, 16384); need(initial.value.token === secret && initial.value.jobId === jobId);
   let released = false;
@@ -208,6 +217,45 @@ async function serverChain(proc, pid) {
   throw fault("KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
 }
 function ownerIdentity(p) { return p && { pid: p.pid, ppid: p.ppid, startTicks: p.startTicks, kind: p.kind, executableIdentity: p.executableIdentity, cwdIdentity: p.cwdIdentity }; }
+function contextFingerprint(value) {
+  need(value && UUID.test(value.bootId || "") && /^pid:\[\d+\]$/.test(value.pidNamespace || "") && SHA.test(value.hostId || ""), "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
+  return hash(jsonBytes([value.bootId, value.pidNamespace, value.hostId]));
+}
+function retiredInstanceEvidence(proof, lock, lockSha256, currentContext, now = Date.now()) {
+  // This is an explicit operator-reviewed provider/disk handover proof. A local
+  // missing/reused PID or an old timestamp can never establish remote death.
+  const fields = ["schemaVersion", "action", "serviceId", "persistentDiskMount", "priorDeploymentId", "priorDeploymentStartedAt", "retirementNoLaterThan", "retirementBoundBasis", "currentDeploymentId", "currentInstanceStartedAt", "reviewedAt", "lockSha256", "ownerContextSha256", "currentContextSha256", "providerEvidenceSha256", "diskExclusivityEvidenceSha256", "priorInstanceTerminationBoundVerified", "exclusiveDiskHandoverVerified", "priorInstanceHostname", "priorHostnameEvidenceSha256"];
+  need(proof && Object.keys(proof).length === fields.length && fields.every(k => Object.hasOwn(proof, k)) && proof.schemaVersion === 1
+    && proof.action === "reviewed_retired_instance_worker_lock" && proof.serviceId === CENTRAL_SERVICE && proof.persistentDiskMount === "/var/data"
+    && /^dep-[a-z0-9]{10,80}$/.test(proof.priorDeploymentId || "") && /^dep-[a-z0-9]{10,80}$/.test(proof.currentDeploymentId || "")
+    && proof.priorDeploymentId !== proof.currentDeploymentId && proof.priorInstanceTerminationBoundVerified === true && proof.exclusiveDiskHandoverVerified === true
+    && /^srv-da9q6don74is738t7id0-[a-z0-9]{4,80}-[a-z0-9]{3,30}$/.test(proof.priorInstanceHostname || "")
+    && proof.retirementBoundBasis === "exclusive_persistent_disk_handover"
+    && ["priorDeploymentStartedAt", "retirementNoLaterThan", "currentInstanceStartedAt", "reviewedAt"].every(k => iso(proof[k]))
+    && ["lockSha256", "ownerContextSha256", "currentContextSha256", "providerEvidenceSha256", "diskExclusivityEvidenceSha256", "priorHostnameEvidenceSha256"].every(k => SHA.test(proof[k] || "")), "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_REQUIRED");
+  const nowMs = new Date(now).getTime();
+  need(lock.schemaVersion === 2 && proof.lockSha256 === lockSha256 && proof.ownerContextSha256 === contextFingerprint(lock.owner)
+    && proof.currentContextSha256 === contextFingerprint(currentContext) && proof.ownerContextSha256 !== proof.currentContextSha256
+    && hash(jsonBytes([proof.priorInstanceHostname, lock.owner.bootId])) === lock.owner.hostId
+    && Date.parse(proof.priorDeploymentStartedAt) <= Date.parse(lock.createdAt) && Date.parse(lock.createdAt) <= Date.parse(proof.retirementNoLaterThan)
+    && Date.parse(proof.retirementNoLaterThan) <= Date.parse(proof.currentInstanceStartedAt) && Date.parse(proof.currentInstanceStartedAt) <= Date.parse(proof.reviewedAt)
+    && Number.isFinite(nowMs) && Date.parse(proof.reviewedAt) <= nowMs + 5000, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH");
+  return { proofSha256: hash(jsonBytes(proof)), providerEvidenceSha256: proof.providerEvidenceSha256, diskExclusivityEvidenceSha256: proof.diskExclusivityEvidenceSha256,
+    priorHostnameBindingSha256: hash(jsonBytes([proof.priorHostnameEvidenceSha256, hash(Buffer.from(proof.priorInstanceHostname)), lock.owner.hostId])),
+    priorDeploymentId: proof.priorDeploymentId, currentDeploymentId: proof.currentDeploymentId, retirementNoLaterThan: proof.retirementNoLaterThan, retirementBoundBasis: proof.retirementBoundBasis,
+    currentInstanceStartedAt: proof.currentInstanceStartedAt, currentContextSha256: proof.currentContextSha256 };
+}
+async function inspectWorkerLockInstanceContext(options) {
+  need(path.isAbsolute(options.dataDir) && (options.fixture === true || options.dataDir === "/var/data"));
+  const directory = path.join(options.dataDir, "keyword_monthly_incremental"), r = await read(path.join(directory, LOCK), 16384), l = r.value;
+  need(l.schemaVersion === 2 && UUID.test(l.token || "") && UUID.test(l.jobId || "") && SHA.test(l.sourceKey || "") && VERSIONS.has(l.version)
+    && iso(l.createdAt) && /^\d+$/.test(l.owner?.startTicks || ""), "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
+  const ownerContextSha256 = contextFingerprint(l.owner), proc = reader(options), currentContext = await proc.context(), currentContextSha256 = contextFingerprint(currentContext);
+  const fresh = await read(r.file, 16384); need(fresh.sha256 === r.sha256 && same(fresh.stat, r.stat) && contextFingerprint(await proc.context()) === currentContextSha256, "KEYWORD_INCREMENTAL_LOCK_CHANGED");
+  return { schemaVersion: 1, status: ownerContextSha256 === currentContextSha256 ? "same_instance" : "retirement_evidence_required", lockSha256: r.sha256,
+    sourceKey: l.sourceKey, lockJobId: l.jobId, version: l.version, createdAt: l.createdAt, ownerContextSha256, currentContextSha256,
+    expectedServiceId: CENTRAL_SERVICE, expectedDiskMount: "/var/data", providerRetirementVerified: false, changed: false };
+}
 async function legacyReuseCandidate(proc, owner, chain) {
   const current = chain.find(p => p.pid === owner.pid);
   need(current && JSON.stringify(ownerIdentity(owner)) === JSON.stringify(current), "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
@@ -224,7 +272,8 @@ async function legacyReuseCandidate(proc, owner, chain) {
     ticksPerSecond: c.ticksPerSecond, timeNamespace: c.timeNamespace, getconfSha256: c.getconfSha256, getconfIdentity: c.getconfIdentity,
     currentBirthLowerEpochMs: Number(lower), currentBirthUpperEpochMs: Number(upper) };
 }
-async function ownerStillMatches(proc, pid, candidate) {
+async function ownerStillMatches(proc, pid, candidate, retiredInstance) {
+  if (retiredInstance) { try { return contextFingerprint(await proc.context()) === retiredInstance.currentContextSha256; } catch { return false; } }
   const p = await proc.process(pid); if (!candidate) return !p;
   if (!p || JSON.stringify(ownerIdentity(p)) !== JSON.stringify(ownerIdentity(candidate))) return false;
   try { return JSON.stringify(await legacyReuseCandidate(proc, p, [ownerIdentity(p)])) === JSON.stringify(candidate); } catch { return false; }
@@ -239,13 +288,23 @@ async function inspectInternal(options) {
   need(q.value.jobId === targetJobId && i && VERSIONS.has(i.refreshVersion) && q.value.status === "needs_verification");
   need(hash(jsonBytes([i.refreshVersion, i.runId, i.manifestSha256, i.keyword, i.scope, i.scheduleOccurrenceId])) === targetJobId);
   need(hash(jsonBytes([i.refreshVersion, i.runId, i.manifestSha256, i.keyword])) === l.sourceKey, "KEYWORD_INCREMENTAL_LOCK_SOURCE_MISMATCH");
-  const proc = reader(options), context = await proc.context();
-  if (l.schemaVersion === 2) need(l.version === i.refreshVersion && l.owner && /^\d+$/.test(l.owner.startTicks || "") && l.owner.bootId === context.bootId && l.owner.pidNamespace === context.pidNamespace && l.owner.hostId === context.hostId, "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
-  const owner = await proc.process(l.pid);
+  const proc = reader(options), context = await proc.context(); let retiredInstance = null;
+  if (l.schemaVersion === 2) {
+    need(l.version === i.refreshVersion && l.owner && /^\d+$/.test(l.owner.startTicks || ""), "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
+    const sameContext = contextFingerprint(l.owner) === contextFingerprint(context);
+    if (!sameContext) {
+      need(options.retiredInstanceProof, "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
+      need(options.fixture === true || dataDir === "/var/data", "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH");
+      retiredInstance = retiredInstanceEvidence(options.retiredInstanceProof, l, r.sha256, context, typeof options.now === "function" ? options.now() : Date.now());
+    } else need(!options.retiredInstanceProof, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_NOT_APPLICABLE");
+  } else need(!options.retiredInstanceProof, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_NOT_APPLICABLE");
+  // Old PID numbers belong to the retired namespace. Never interpret a new
+  // instance's colliding owner/child PID as evidence about that old instance.
+  const owner = retiredInstance ? null : await proc.process(l.pid);
   if (owner && l.schemaVersion === 2) throw fault(owner.startTicks !== l.owner.startTicks ? "KEYWORD_INCREMENTAL_LOCK_PID_REUSED" : "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
   const chain = await serverChain(proc, serverPid), excluded = [process.pid, ...chain.map(p => p.pid)];
   const ownerReuse = owner ? await legacyReuseCandidate(proc, owner, chain) : null;
-  if (!ownerReuse) need(!chain.some(p => p.pid === l.pid), "KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
+  if (!ownerReuse && !retiredInstance) need(!chain.some(p => p.pid === l.pid), "KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
   const jobId = l.schemaVersion === 1 ? l.token : l.jobId; need(UUID.test(jobId || "")); const jobRoot = path.join(directory, "jobs", "refresh-job-" + jobId);
   const ownerRecord = await read(path.join(jobRoot, "refresh-owner.json"), 16384); need(ownerRecord.value.token === jobId && ownerRecord.value.sourceKey === l.sourceKey && ownerRecord.value.root === jobRoot);
   const input = await read(path.join(jobRoot, "job-input.json"), 1024 * 1024); need(input.value.version === i.refreshVersion && input.value.dataDir === dataDir);
@@ -265,7 +324,7 @@ async function inspectInternal(options) {
     && p.nonStandardFdsClosedBeforeExec === true && p.nonStandardFdsRemainingBeforeExec === 0
     && ["tcpSocketDenied", "udpSocketDenied", "ipv6SocketDenied"].every(k => p.kernelProbe?.[k] === true)
     && ["socket", "socketpair", "connect", "sendto", "sendmsg"].every(k => p.kernelProbe?.syscallsDeniedWithEperm?.[k] === true), "KEYWORD_INCREMENTAL_LOCK_CHILD_PROOF_INVALID");
-  need(!chain.some(x => x.pid === p.pid) && !await proc.process(p.pid), "KEYWORD_INCREMENTAL_LOCK_CHILD_ACTIVE"); need((await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PEER_UNKNOWN");
+  need(retiredInstance || !chain.some(x => x.pid === p.pid) && !await proc.process(p.pid), "KEYWORD_INCREMENTAL_LOCK_CHILD_ACTIVE"); need((await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PEER_UNKNOWN");
   const receiptDir = path.join(dataDir, "keyword_monthly_analysis/refresh-receipts");
   need(await absent(path.join(receiptDir, "intent-" + l.sourceKey + ".json")), "KEYWORD_INCREMENTAL_LOCK_PUBLICATION_INTENT_PRESENT");
   need(await absent(path.join(receiptDir, "complete-" + l.sourceKey + ".json")), "KEYWORD_INCREMENTAL_LOCK_COMPLETION_REQUIRES_REVIEW");
@@ -294,23 +353,29 @@ async function inspectInternal(options) {
   need(retained.value.stateSha256 === c.stateSha256 && retained.value.version === c.refreshVersion && retained.value.status === "complete" && retained.value.providerCalls === 0 && retained.value.sourceWrites === 0);
   await gzipJson(path.join(directory, "states", c.stateSha256 + ".json.gz"), MAX_STATE, MAX_STATE, null, c.stateSha256, false);
   const queueSha256 = await queueSnapshot(dataDir), collectionSha256 = await collectionSnapshot(dataDir); need(JSON.stringify(await proc.context()) === JSON.stringify(context));
-  need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && await ownerStillMatches(proc, l.pid, ownerReuse) && !await proc.process(p.pid)
+  need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && await ownerStillMatches(proc, l.pid, ownerReuse, retiredInstance) && (retiredInstance || !await proc.process(p.pid))
     && (await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
   const fresh = await read(r.file, 16384); need(fresh.sha256 === r.sha256 && same(fresh.stat, r.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
   const snapshot = { schemaVersion: 1, targetJobId, lockSha256: r.sha256, lockStat: smallStat(r.stat), lockSchemaVersion: l.schemaVersion, ownerPid: l.pid, sourceKey: l.sourceKey, createdAt: l.createdAt,
-    processContext: context, serverChain: chain, ownerReuse, childPid: p.pid, childProofSha256: proof.sha256,
+    processContext: context, serverChain: chain, ownerReuse, ...(retiredInstance ? { retiredInstance } : {}), childPid: p.pid, childProofSha256: proof.sha256,
     jobInputSha256: input.sha256, jobOwnerRecordSha256: ownerRecord.sha256, sourceManifestSha256: manifest.sha256, dbReceiptSha256: db.sha256,
     preparationSha256: preparation?.sha256 || null, sourcePointerSha256: source.sha256, sourceStateSha256: s.stateSha256,
     publicPointerSha256: pub.sha256, catalogSha256: catalog.sha256, publicationReceiptSha256: published.sha256, lastCompleteSha256: completed.sha256, queueSha256, collectionSha256 };
   return { snapshot, snapshotSha256: hash(jsonBytes(snapshot)), lock: r, directory, processes: proc };
 }
-async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: r.snapshot.ownerReuse ? "reuse_review_required" : "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
+async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: r.snapshot.retiredInstance ? "retired_instance_review_required" : r.snapshot.ownerReuse ? "reuse_review_required" : "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
 function validateReview(proof, inspected) {
   need(proof && Object.keys(proof).every(k => ["schemaVersion", "action", "targetJobId", "snapshotSha256", "lockSha256", "sourcePointerSha256", "publicPointerSha256", "incident"].includes(k))
     && proof.schemaVersion === 1 && proof.action === "reviewed_dead_worker_lock_recovery" && proof.targetJobId === inspected.snapshot.targetJobId
     && proof.snapshotSha256 === inspected.snapshotSha256 && proof.lockSha256 === inspected.snapshot.lockSha256
     && proof.sourcePointerSha256 === inspected.snapshot.sourcePointerSha256 && proof.publicPointerSha256 === inspected.snapshot.publicPointerSha256, "KEYWORD_INCREMENTAL_LOCK_REVIEW_MISMATCH");
-  const e = proof.incident; need(e && Object.keys(e).every(k => ["pid", "exitCode", "exitedAt", "evidenceSha256"].includes(k)) && e.pid === inspected.snapshot.ownerPid
+  const e = proof.incident;
+  if (inspected.snapshot.retiredInstance) {
+    need(e && Object.keys(e).length === 3 && Object.keys(e).every(k => ["kind", "retirementProofSha256", "evidenceSha256"].includes(k))
+      && e.kind === "retired_instance" && e.retirementProofSha256 === inspected.snapshot.retiredInstance.proofSha256
+      && e.evidenceSha256 === inspected.snapshot.retiredInstance.providerEvidenceSha256, "KEYWORD_INCREMENTAL_LOCK_RETIREMENT_PROOF_MISMATCH"); return;
+  }
+  need(e && Object.keys(e).every(k => ["pid", "exitCode", "exitedAt", "evidenceSha256"].includes(k)) && e.pid === inspected.snapshot.ownerPid
     && Number.isSafeInteger(e.exitCode) && e.exitCode > 0 && e.exitCode <= 255 && iso(e.exitedAt) && SHA.test(e.evidenceSha256 || "")
     && Date.parse(e.exitedAt) >= Date.parse(inspected.snapshot.createdAt), "KEYWORD_INCREMENTAL_LOCK_EXIT_EVIDENCE_REQUIRED");
   if (inspected.snapshot.ownerReuse) need(inspected.snapshot.lockSchemaVersion === 1 && e.exitCode === 134
@@ -332,7 +397,7 @@ async function recoverWorkerLock(options) {
     archive = path.join(destination, "original-lock.json"); need(await absent(archive)); const before = await read(current.lock.file, 16384);
     need(before.sha256 === current.lock.sha256 && same(before.stat, current.lock.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
     need(JSON.stringify(await serverChain(current.processes, options.serverPid)) === JSON.stringify(current.snapshot.serverChain)
-      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse) && !await current.processes.process(current.snapshot.childPid)
+      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse, current.snapshot.retiredInstance) && (current.snapshot.retiredInstance || !await current.processes.process(current.snapshot.childPid))
       && (await current.processes.peers([process.pid, ...current.snapshot.serverChain.map(p => p.pid)])).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
     need((await read(path.join(current.directory, "source-current.json"), 16384)).sha256 === current.snapshot.sourcePointerSha256
       && (await read(path.join(options.dataDir, "keyword_monthly_analysis/current.json"), 16384)).sha256 === current.snapshot.publicPointerSha256
@@ -348,11 +413,11 @@ async function recoverWorkerLock(options) {
       && (await read(path.join(options.dataDir, "keyword_monthly_analysis/current.json"), 16384)).sha256 === current.snapshot.publicPointerSha256
       && await queueSnapshot(options.dataDir) === current.snapshot.queueSha256 && await collectionSnapshot(options.dataDir) === current.snapshot.collectionSha256
       && JSON.stringify(await serverChain(current.processes, options.serverPid)) === JSON.stringify(current.snapshot.serverChain)
-      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse) && !await current.processes.process(current.snapshot.childPid)
+      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse, current.snapshot.retiredInstance) && (current.snapshot.retiredInstance || !await current.processes.process(current.snapshot.childPid))
       && (await current.processes.peers([process.pid, ...current.snapshot.serverChain.map(p => p.pid)])).length === 0, "KEYWORD_INCREMENTAL_LOCK_POST_ARCHIVE_HOLD");
     const receipt = await writeNew(path.join(destination, "recovery-complete.json"), { schemaVersion: 1, recoveryId: id, action: "archived_verified_dead_worker_lock", lockSha256: preserved.sha256,
       snapshotSha256: current.snapshotSha256, preflightSha256: planned.sha256, sourcePointerSha256: current.snapshot.sourcePointerSha256, publicPointerSha256: current.snapshot.publicPointerSha256,
-      atomicArchive, originalBytesAndModePreserved: true, originalLedgersChanged: false, activeLockPathAbsent: true, completedAt: new Date().toISOString() });
+      atomicArchive, ...(current.snapshot.retiredInstance ? { retiredInstance: current.snapshot.retiredInstance } : {}), originalBytesAndModePreserved: true, originalLedgersChanged: false, activeLockPathAbsent: true, completedAt: new Date().toISOString() });
     completed = true; return { status: "recovered", recoveryId: id, receiptSha256: receipt.sha256, lockSha256: preserved.sha256, originalBytesAndModePreserved: true, activeLockPathAbsent: receipt.value.activeLockPathAbsent };
   } finally {
     // An incomplete/ambiguous recovery leaves its claim and immutable evidence.
@@ -361,12 +426,17 @@ async function recoverWorkerLock(options) {
   }
 }
 async function cli(argv) {
-  const flags = new Map(); for (let n = 0; n < argv.length; n++) { const k = argv[n]; need(["--inspect", "--dry-run", "--commit", "--job-id", "--server-pid", "--reviewed-proof", "--proof-sha"].includes(k) && !flags.has(k)); flags.set(k, ["--inspect", "--dry-run", "--commit"].includes(k) ? true : argv[++n]); }
-  need(["--inspect", "--dry-run", "--commit"].filter(k => flags.has(k)).length === 1); const dataDir = "/var/data", base = { dataDir, targetJobId: flags.get("--job-id"), serverPid: Number(flags.get("--server-pid")) };
+  const flags = new Map(); for (let n = 0; n < argv.length; n++) { const k = argv[n]; need(["--inspect-context", "--inspect", "--dry-run", "--commit", "--job-id", "--server-pid", "--reviewed-proof", "--proof-sha", "--retired-instance-proof", "--retired-instance-proof-sha"].includes(k) && !flags.has(k)); flags.set(k, ["--inspect-context", "--inspect", "--dry-run", "--commit"].includes(k) ? true : argv[++n]); }
+  need(["--inspect-context", "--inspect", "--dry-run", "--commit"].filter(k => flags.has(k)).length === 1); const dataDir = "/var/data", base = { dataDir, targetJobId: flags.get("--job-id"), serverPid: Number(flags.get("--server-pid")) };
+  if (flags.has("--inspect-context")) { need(flags.size === 1); return inspectWorkerLockInstanceContext(base); }
+  if (flags.has("--retired-instance-proof") || flags.has("--retired-instance-proof-sha")) {
+    const file = flags.get("--retired-instance-proof"); need(typeof file === "string" && path.isAbsolute(file) && inside(path.join(dataDir, "operations"), file) && SHA.test(flags.get("--retired-instance-proof-sha") || ""));
+    const proof = await read(file, 65536); need(proof.sha256 === flags.get("--retired-instance-proof-sha") && (proof.stat.mode & 0o777n) === 0o600n && proof.stat.uid === BigInt(process.getuid())); base.retiredInstanceProof = proof.value;
+  }
   if (flags.has("--inspect")) { need(!flags.has("--reviewed-proof") && !flags.has("--proof-sha")); return inspectWorkerLockRecovery(base); }
   const file = flags.get("--reviewed-proof"); need(typeof file === "string" && path.isAbsolute(file) && inside(path.join(dataDir, "operations"), file) && SHA.test(flags.get("--proof-sha") || ""));
   const p = await read(file, 65536); need(p.sha256 === flags.get("--proof-sha") && (p.stat.mode & 0o777n) === 0o600n);
   return recoverWorkerLock({ ...base, reviewedProof: p.value, dryRun: !flags.has("--commit") });
 }
 if (require.main === module) cli(process.argv.slice(2)).then(r => process.stdout.write(JSON.stringify(r) + "\n")).catch(e => { process.stdout.write(JSON.stringify({ status: "hold", code: /^KEYWORD_INCREMENTAL_[A-Z0-9_]{1,120}$/.test(e.code || "") ? e.code : "KEYWORD_INCREMENTAL_LOCK_RECOVERY_HOLD" }) + "\n"); process.exitCode = 1; });
-module.exports = { acquireWorkerLock, inspectWorkerLockRecovery, recoverWorkerLock, createLinuxProcessReader, ATOMIC_ARCHIVE_PROGRAM };
+module.exports = { acquireWorkerLock, inspectWorkerLockRecovery, inspectWorkerLockInstanceContext, recoverWorkerLock, createLinuxProcessReader, ATOMIC_ARCHIVE_PROGRAM };

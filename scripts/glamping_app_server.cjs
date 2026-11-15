@@ -32,6 +32,8 @@ const { createCompanyIntegratedDb } = require("./lib/company_integrated_read_db.
 const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
 const { createAnalyticalMemorySampler } = require("./lib/analytical_memory.cjs");
 const { createRuntimeResponsiveness } = require("./lib/runtime_responsiveness.cjs");
+const { installApplicationShutdown } = require("./lib/application_shutdown.cjs");
+const { readPreparedConversionAdmission } = require("./lib/keyword_monthly_maintenance.cjs");
 const { createPrivateStaticAssets } = require("./lib/private_static_assets.cjs");
 const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
@@ -688,7 +690,8 @@ const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: D
 const analyticalMemory = createAnalyticalMemorySampler();
 const runtimeResponsiveness = createRuntimeResponsiveness();
 const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55,
-  cooperativeYield: true, cooperativeCompanyMonthYield: true });
+  cooperativeYield: true, cooperativeCompanyMonthYield: true,
+  externalAdmission: () => readPreparedConversionAdmission({ dataDir: DATA_DIR }) });
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
 const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
@@ -20829,6 +20832,7 @@ const server = http.createServer((req, res) => {
 });
 server.once('close',()=>{if(insightIntegration?.recurringCollection)void insightIntegration.recurringCollection.stop().catch(()=>{});});
 server.once("close", () => searchDemandScheduler.stop());
+installApplicationShutdown({ server, closeDerivedWork: () => keywordMonthlyRefreshIntegration.close() });
 
 function localNetworkUrls() {
   const interfaces = os.networkInterfaces();

@@ -10,6 +10,7 @@ const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { setCooperativeWorkStage, cooperativeWorkCheckpoint, assertCooperativeWorkActive,
   runNonInterruptibleCooperativeWork } = require("./cooperative_work_checkpoint.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 
 const SCHEMA_VERSION = 1;
 const CALCULATION_VERSION = "company-integrated-v4-product-max-room-reuse";
@@ -104,9 +105,11 @@ function latestAttempts(source, snapshot, request) {
   return [...attempts.values()].sort((a, b) => a.date.localeCompare(b.date) || a.productType.localeCompare(b.productType));
 }
 
-function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCached, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true, runWork = operation => operation() } = {}) {
+function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCached, listTargets, readRevision, now = () => new Date(), calculationVersion = CALCULATION_VERSION, autoStart = true, runWork = operation => operation(),
+  bootstrapCheckpoint = () => new Promise(resolve => setImmediate(resolve)) } = {}) {
   if (!dataDir || typeof loadSources !== "function" || typeof catalog !== "function" || typeof listTargets !== "function") throw new TypeError("dataDir, loadSources, catalog and listTargets are required");
   if (readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("readRevision must be a function");
+  if (typeof bootstrapCheckpoint !== "function") throw new TypeError("Bootstrap checkpoint must be a function");
   const directory = path.resolve(dataDir, "company_integrated"), stateFile = path.join(directory, "queue.json");
   let state = { schemaVersion: SCHEMA_VERSION, jobs: {} }, initPromise, initialized = false, workerPromise = null, serial = Promise.resolve(), serialPending = 0, stopped = false, storeError = null, bootstrapPromise = null, bootstrapPlanning = false;
   let dispatchHolds = 0;
@@ -166,9 +169,10 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
   const metadataRevision = metadata => digest({ correction: metadata.raw?.manualCorrection || null,
     capacity: metadata.company.capacity, capacitySource: metadata.company.capacitySource,
     capacityMarker: metadata.raw?._integratedCapacity || metadata.company.capacityBasis || null });
-  async function readMetadataRevisions() {
+  async function readMetadataRevisions(checkpoint = null) {
     const data = await catalog(), revisions = new Map();
     for (const company of data.companies || []) {
+      if (checkpoint) await checkpoint();
       const id = identity(company), raw = data.rawCompanies instanceof Map ? data.rawCompanies.get(id) : data.rawCompanies?.[id];
       if (!id || company.deletedAt || company.mergedIntoCompanyId || raw?.deletedAt || raw?.mergedIntoCompanyId) continue;
       revisions.set(id, metadataRevision({ company, raw }));
@@ -367,9 +371,13 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
         // No loadSources calls are needed to prove an unchanged saved month.
         // Target discovery can prepare the fixed-capacity registry. Inspect
         // revisions after that preparation, never certify its previous state.
-        const targets = await listTargets({}), metadata = readRevision ? await readMetadataRevisions() : null,
-          prepared = await prepareRevision(), grouped = new Map();
+        const phases = getAnalyticalPhaseDiagnostics(), counts = { rowCount: 0 };
+        const { targets, metadata } = await phases.measure("bootstrap_targets_metadata", counts, async () => ({
+          targets: await listTargets({}), metadata: readRevision ? await readMetadataRevisions(bootstrapCheckpoint) : null
+        }));
+        const prepared = await phases.measure("bootstrap_revision_prepare", {}, () => prepareRevision()), grouped = new Map();
         for (const target of targets) {
+          await bootstrapCheckpoint();
           const id = validId(target.companyId);
           grouped.set(id, monthsOf([...(grouped.get(id) || []), ...(target.months || [])]));
         }
@@ -377,17 +385,24 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
         // Its existing months must still be inspected even if discovery now
         // returns no observations; never keep the old revenue silently ready.
         if (metadata) for (const id of metadata.keys()) if (!grouped.has(id)) {
+          await bootstrapCheckpoint();
           const index = await readJson(indexPath(id), null), job = state.jobs[id];
           if (index || job) grouped.set(id, monthsOf([...(index?.months || []), ...(job?.months || [])]));
         }
         let queued = 0, reused = 0, refreshedMonths = 0, recovered = 0;
+        await phases.measure("bootstrap_saved_months", counts, async () => {
         for (const [id, observedMonths] of grouped) {
+          await bootstrapCheckpoint();
           const index = await readJson(indexPath(id), null);
           const months = monthsOf([...observedMonths, ...(index?.months || [])]);
           const pending = state.jobs[id], recovering = ["queued", "processing"].includes(pending?.status);
           if (recovering) recovered++;
           const changed = [];
           for (const month of months) {
+            // Filesystem reads may complete from cache in consecutive promise
+            // turns. Always give health/status sockets a turn between complete
+            // company-month integrity checks; no partial proof is published.
+            await bootstrapCheckpoint(); counts.rowCount++;
             const cutoffDate = cutoffFor(month, current());
             const revision = await revisionFor(id, month, cutoffDate, prepared);
             const stored = await readJson(monthPath(id, month), null);
@@ -402,13 +417,15 @@ function createCompanyIntegratedDb({ dataDir, loadSources, catalog, catalogCache
             await queueCompany(id, { months: additional, reason: "bootstrap" }); queued++; refreshedMonths += additional.length;
           }
         }
+        });
         if (prepared) {
-          const checked = await prepareRevision();
+          await bootstrapCheckpoint();
+          const checked = await phases.measure("bootstrap_revision_recheck", {}, () => prepareRevision());
           if (!checked || checked.revision !== prepared.revision) throw fault("COMPANY_INTEGRATION_SOURCE_CHANGED");
         }
         const result = { queued, reused, refreshedMonths, recovered };
-        await locked(async () => { state.bootstrap = { ...result, status: "checked", checkedAt: current().toISOString(), errorCode: null,
-          failureGeneration: state.bootstrap?.failureGeneration || 0 }; await saveState(); });
+        await phases.measure("bootstrap_state_publish", {}, () => locked(async () => { state.bootstrap = { ...result, status: "checked", checkedAt: current().toISOString(), errorCode: null,
+          failureGeneration: state.bootstrap?.failureGeneration || 0 }; await saveState(); }));
         return result;
       } catch (error) {
         await locked(async () => { state.bootstrap = { status: "failed", checkedAt: current().toISOString(), errorCode: safeCode(error),
