@@ -6,14 +6,16 @@ const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, ".."), base = "d052b02e0b147ccd1cfc796c8638ed94bfdc8c3f";
 const digest = value => crypto.createHash("sha256").update(value.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
 
-test("first stability bundle preserves calculation fingerprints, source math, publication and recurring protections", () => {
+test("integrated stability bundle preserves calculation fingerprints, source math and recurring protections", () => {
   // The application file participates in cache versions. A metrics-only
   // server edit would otherwise invalidate existing company result caches.
   const files = ["scripts/glamping_app_server.cjs", "scripts/lib/monthly_reports.cjs",
     "scripts/lib/monthly_report_comparison.cjs", "scripts/lib/monthly_report_insights.cjs",
     "scripts/lib/company_integrated_db.cjs", "scripts/lib/company_capacity_registry.cjs",
     "scripts/inventory_estimation.cjs", "scripts/verified_room_inventory.json",
-    "scripts/lib/keyword_monthly_refresh_integration.cjs", "scripts/lib/keyword_monthly_incremental_state.cjs",
+    // The v5 reconciliation version and exact v4-completion reuse change the
+    // derived integration module; its behavior has separate integration tests.
+    "scripts/lib/keyword_monthly_incremental_state.cjs",
     "scripts/lib/insight_recurring_collection.cjs", "scripts/lib/insight_store.cjs",
     "scripts/collection_rotation_scheduler.cjs", "scripts/keyword_worker_scheduler.cjs",
     "scripts/daily_keyword_collection_scheduler.cjs", "scripts/naver_request_pacing.cjs",
