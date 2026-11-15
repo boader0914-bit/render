@@ -6,7 +6,7 @@ const constants = require("node:fs").constants;
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { buildKeywordMonthlyProjection } = require("./lib/keyword_monthly_analysis.cjs");
-const MAX_INPUT_BYTES = 64 * 1024 * 1024;
+const MAX_INPUT_BYTES = require("./lib/keyword_monthly_source_budget.cjs").KEYWORD_MONTHLY_SOURCE_BUDGET.normalizedJsonBytes;
 const MAX_PROVENANCE_BYTES = 64 * 1024;
 const SHA = /^[a-f0-9]{64}$/;
 const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");

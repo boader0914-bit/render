@@ -6,9 +6,11 @@ const { monthlyReportKeywordMembership, buildMonthlyReportSnapshot } = require("
 const { previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { publicSource, snapshotCore } = require("../reconstruct_keyword_monthly_source_copy.cjs");
 const H = require("./keyword_monthly_refresh_preparation.cjs");
+const { KEYWORD_MONTHLY_SOURCE_BUDGET: SOURCE_BUDGET } = require("./keyword_monthly_source_budget.cjs");
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => [k, canonical(v[k])])) : v;
 const fingerprint = v => crypto.createHash("sha256").update(JSON.stringify(canonical(v))).digest("hex");
-async function normalizePair({ wiring, keyword, month, cutoffDate, capturedAt, checkpoint = async () => {} }) {
+async function normalizePair({ wiring, keyword, month, cutoffDate, capturedAt, checkpoint = async () => {}, retainBytes = true }) {
+  H.need(typeof retainBytes === "boolean", "KEYWORD_INCREMENTAL_ARGUMENTS");
   const current = { type: "keyword", targetId: keyword, month, cutoffDate }, requests = [previousMonthlyReportRequest(current), current];
   const months = new Set(requests.map(r => r.month)), source = { companies: [], runs: [], observations: [], rankObservations: [], savedProductRecoveries: [], warnings: [], sourceDiagnostics: {}, monthlySourceMetadata: {} };
   const companies = new Map(), runs = new Map(), ranks = new Set(), records = [], removed = {};
@@ -25,8 +27,12 @@ async function normalizePair({ wiring, keyword, month, cutoffDate, capturedAt, c
     const membership = monthlyReportKeywordMembership(request, inScope); inScope.companies = full.companies.filter(c => membership.members.has(c.companyId));
     const ids = new Set([...inScope.observations, ...inScope.rankObservations, ...inScope.savedProductRecoveries.map(e => e.row)].map(r => String(r.runId || "")));
     inScope.runs = full.runs.filter(r => ids.has(String(r.id || r.runId)) || r.keyword === keyword);
-    const safe = publicSource(inScope, removed), expected = snapshotCore(buildMonthlyReportSnapshot(request, full, capturedAt)), actual = snapshotCore(buildMonthlyReportSnapshot(request, safe, capturedAt));
-    H.need(fingerprint(expected) === fingerprint(actual), "KEYWORD_INCREMENTAL_PUBLIC_SOURCE_PARITY_FAILED");
+    const safe = publicSource(inScope, removed);
+    // Return only the fingerprint from this helper scope before constructing
+    // the second snapshot, so two large snapshot cores need not stay live.
+    const expectedFingerprint = (() => fingerprint(snapshotCore(buildMonthlyReportSnapshot(request, full, capturedAt))))();
+    const actual = snapshotCore(buildMonthlyReportSnapshot(request, safe, capturedAt));
+    H.need(expectedFingerprint === fingerprint(actual), "KEYWORD_INCREMENTAL_PUBLIC_SOURCE_PARITY_FAILED");
     for (const row of safe.companies) companies.set(row.companyId, row); for (const row of safe.runs) runs.set(row.id || row.runId, row);
     source.observations.push(...safe.observations); source.savedProductRecoveries.push(...safe.savedProductRecoveries);
     for (const row of safe.rankObservations) { const id = fingerprint(row); if (!ranks.has(id)) { ranks.add(id); source.rankObservations.push(row); } }
@@ -37,8 +43,9 @@ async function normalizePair({ wiring, keyword, month, cutoffDate, capturedAt, c
   }
   source.companies = [...companies.values()]; source.runs = [...runs.values()];
   H.need(source.observations.length <= 50000 && source.rankObservations.length <= 50000 && source.savedProductRecoveries.length <= 50000, "KEYWORD_INCREMENTAL_ROWS_BOUND");
-  const bytes = Buffer.from(JSON.stringify(source)); H.need(bytes.length <= 64 * 1024 * 1024, "KEYWORD_INCREMENTAL_SOURCE_BOUND");
-  return { source, bytes, inputSha256: H.hash(bytes), inputBytes: bytes.length, records, removed,
-    provenance: { inputSha256: H.hash(bytes), inputBytes: bytes.length, copiedAt: capturedAt, observationScope: "normalized_multirun", normalizationCutoffs: Object.fromEntries(requests.map(r => [r.month, r.cutoffDate])) } };
+  const serialized = JSON.stringify(source), inputBytes = Buffer.byteLength(serialized); H.need(inputBytes <= SOURCE_BUDGET.normalizedJsonBytes, "KEYWORD_INCREMENTAL_SOURCE_BOUND");
+  const inputSha256 = H.hash(serialized), bytes = retainBytes ? Buffer.from(serialized) : null;
+  return { source, bytes, inputSha256, inputBytes, records, removed,
+    provenance: { inputSha256, inputBytes, copiedAt: capturedAt, observationScope: "normalized_multirun", normalizationCutoffs: Object.fromEntries(requests.map(r => [r.month, r.cutoffDate])) } };
 }
 module.exports = { normalizePair, fingerprint };

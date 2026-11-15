@@ -83,11 +83,19 @@ for (const target of ["original-job.json", "authorization.json", "reviewed-prefl
   const q = queue(f, async () => assert.fail("changed authorization")); t.after(() => q.close()); assert.equal((await q.runOnce()).status, "needs_verification"); assert.equal((await q.status()).items[0].attempts, 3);
   assert.equal(JSON.parse(await fs.readFile(f.jobFile)).status, "needs_verification"); assert.equal(await q.runOnce(), null);
 });
-test("current deployed code fingerprint change atomically holds queued retry without executing or polling it again", async t => {
+for (const changedFile of ["lib/keyword_monthly_incremental_failure.cjs", "lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs"])
+test(`current deployed ${changedFile} fingerprint change atomically holds queued retry without executing or polling it again`, async t => {
   const f = await fixture(t); await R.retryFailedCalculation(await f.approved(), f.dependencies); const originalRead = fs.readFile;
-  t.mock.method(fs, "readFile", async (file, ...args) => { const raw = await originalRead(file, ...args); return path.basename(file) === "keyword_monthly_incremental_failure.cjs" ? Buffer.concat([raw, Buffer.from("\n// synthetic changed code\n")]) : raw; });
+  const changedPath = path.join(__dirname, ...changedFile.split("/"));
+  t.mock.method(fs, "readFile", async (file, ...args) => { const raw = await originalRead(file, ...args); return path.resolve(file) === changedPath ? Buffer.concat([raw, Buffer.from("\n// synthetic changed code\n")]) : raw; });
   const q = queue(f, async () => assert.fail("changed calculation code")); t.after(() => q.close()); const r = await q.runOnce();
   assert.equal(r.status, "needs_verification"); assert.equal(r.reasonCode, "KEYWORD_FAILED_RETRY_CODE_CHANGED"); assert.equal(r.attempts, 3); assert.equal(r.nextAttemptAt, null); assert.equal(await q.runOnce(), null);
+});
+test("authorization code pins are a unique fixed repository whitelist including the normalized-source and response budgets", async () => {
+  assert.equal(new Set(A.CODE_FILES).size, A.CODE_FILES.length);
+  for (const file of ["lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs"]) assert.ok(A.CODE_FILES.includes(file));
+  const identity = await A.codeIdentity(); assert.deepEqual(identity.pins.map(pin => pin.file), A.CODE_FILES);
+  for (const pin of identity.pins) { assert.equal(path.isAbsolute(pin.file), false); assert.equal(pin.file.includes(".."), false); assert.match(pin.sha256, /^[a-f0-9]{64}$/); }
 });
 test("authorization changed while admission awaits is rechecked before consuming attempt", async t => {
   const f = await fixture(t), result = await R.retryFailedCalculation(await f.approved(), f.dependencies);

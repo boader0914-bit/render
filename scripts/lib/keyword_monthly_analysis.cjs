@@ -12,13 +12,14 @@ const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./mont
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 const { keywordMonthlyAllocationCheckpoint } = require("./keyword_monthly_memory_admission.cjs");
+const { KEYWORD_MONTHLY_SOURCE_BUDGET: SOURCE_BUDGET } = require("./keyword_monthly_source_budget.cjs");
 const measureDefault = async (phase, metadata, operation) => {
   await keywordMonthlyAllocationCheckpoint(phase);
   return getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
 };
 
 const VERSION = "keyword-monthly-v1";
-const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, decodedProjectionBytes: 64 * 1024 * 1024,
+const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, decodedProjectionBytes: SOURCE_BUDGET.decodedProjectionBytes,
   observations: 50000, rankObservations: 50000, companies: 1000, runs: 10000, scopes: 4096 });
 const DAY = 86400000;
 const SHA = /^[a-f0-9]{64}$/;

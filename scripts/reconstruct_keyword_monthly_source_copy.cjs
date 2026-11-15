@@ -6,7 +6,7 @@ const { safeJson, checkedPath } = require("./lib/keyword_monthly_source_copy.cjs
 const { installReadOnlyOutputs } = require("./lib/keyword_monthly_readonly_outputs.cjs");
 const { installScratchBudget } = require("./lib/keyword_monthly_scratch_budget.cjs");
 const { installCompressedHistory } = require("./lib/keyword_monthly_compressed_history.cjs");
-const MAX_SOURCE_BYTES = 64 * 1024 * 1024, MAX_ROWS = 50000, MAX_TIME_MS = 15 * 60 * 1000;
+const MAX_SOURCE_BYTES = require("./lib/keyword_monthly_source_budget.cjs").KEYWORD_MONTHLY_SOURCE_BUDGET.normalizedJsonBytes, MAX_ROWS = 50000, MAX_TIME_MS = 15 * 60 * 1000;
 const SHA = /^[a-f0-9]{64}$/, PRIVATE = /(?:token|secret|password|cookie|authorization|private|rawPayload|guest|customer|contact|address|account|kosis|context)/i;
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex"), clone = value => JSON.parse(JSON.stringify(value));
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, canonical(value[key])])) : value;
@@ -267,7 +267,7 @@ async function run(values) {
     }
     source.companies = [...companies.values()]; source.runs = [...runs.values()];
     need(source.observations.length <= MAX_ROWS && source.rankObservations.length <= MAX_ROWS && source.savedProductRecoveries.length <= MAX_ROWS, "KEYWORD_RECONSTRUCT_ROW_BOUND");
-    const bytes = Buffer.from(JSON.stringify(source)); need(bytes.length <= MAX_SOURCE_BYTES, "KEYWORD_RECONSTRUCT_SOURCE_64MIB_BOUND");
+    const bytes = Buffer.from(JSON.stringify(source)); need(bytes.length <= MAX_SOURCE_BYTES, "KEYWORD_RECONSTRUCT_SOURCE_BOUND");
     const after = await verifyCopyInputs(root, capture, { immutableOnly: true, started }), originalOutputVerification = await outputs.verify(), historyVerification = compressedHistory.verification(); wiring.assertCodeCurrent(); scratch.assertCurrent();
     need(!guards.metrics.networkAttempts && !guards.metrics.childProcessAttempts && !guards.metrics.outsideCopyWriteAttempts && !guards.metrics.outsideReadAttempts && !wiring.metrics.deniedRequires
       && !outputs.metrics.originalWriteAttempts && !outputs.metrics.uncapturedReadAttempts && !outputs.metrics.validationDenials && !scratch.status().deniedOperations, "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED");

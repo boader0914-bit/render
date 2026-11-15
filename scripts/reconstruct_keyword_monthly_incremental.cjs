@@ -123,7 +123,7 @@ async function compile(values, onBound) {
     for (const i of selectedScopeIndexes(plan, input["diagnostic-scope"])) {
       progress.phase = "scope_normalize"; progress.scopeIndex = i;
       await failure.writePhase({ binding, phase: "normalize_before", scopeIndex: i, startedAt: started });
-      await context.assertCurrent(); const scope = plan.scopes[i], normalized = await normalizePair({ wiring: context.wiring, ...scope, capturedAt: job.capturedAt, checkpoint: admission });
+      await context.assertCurrent(); const scope = plan.scopes[i], normalized = await normalizePair({ wiring: context.wiring, ...scope, capturedAt: job.capturedAt, checkpoint: admission, retainBytes: false });
       await failure.writePhase({ binding, phase: "normalize_after", scopeIndex: i, startedAt: started });
       const directory = path.join(jobRoot, "part-" + String(i).padStart(3, "0"));
       progress.phase = "scope_projection";

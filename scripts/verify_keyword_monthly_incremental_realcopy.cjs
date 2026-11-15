@@ -8,7 +8,7 @@ const native = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const SHA = /^[a-f0-9]{64}$/;
-const MAX = Object.freeze({ json: 64 * 1024 * 1024, manifest: 16 * 1024 * 1024,
+const MAX = Object.freeze({ json: require("./lib/keyword_monthly_source_budget.cjs").KEYWORD_MONTHLY_SOURCE_BUDGET.normalizedJsonBytes, manifest: 16 * 1024 * 1024,
   history: 512 * 1024 * 1024, line: 16 * 1024 * 1024, scratch: 1024 * 1024 * 1024 });
 const ARRAYS = ["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"];
 const PRODUCTS = ["lodging", "dayuse"];

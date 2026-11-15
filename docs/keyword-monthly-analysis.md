@@ -53,7 +53,7 @@ node scripts/build_keyword_monthly_projection.cjs `
 
 `--now`는 명시적 검증 기준 시각이며 생략하면 실행 시각이다. `--data-through`는 사본 자료의 확인된 마지막 시각이다. 입력의 관측·시도 시각보다 앞선 값은 거부한다. builder는 출력 경로가 source나 provenance를 포함하는 경우도 거부한다.
 
-CLI source 상한은 64MiB다. runtime index는 1MiB, keyword/month별 저장 projection은 32MiB로 제한한다. 완전 정규화 자료가 32MiB를 넘으면 값을 버리지 않고 gzip으로 저장한다. 해제 크기는 64MiB 상한과 index의 정확한 `uncompressedBytes`를 함께 검사한다. 알 수 없는 인코딩·손상·크기 불일치는 검증 오류이며 기존 JSON 형식도 유지한다. 파일·부모 경로의 symlink와 경로 이탈을 검사하고, 일반파일의 hardlink·읽기 전후 identity/크기/시각 변경을 거부한다. index가 발표한 scope와 SHA·크기·원본 fingerprint를 확인하며 변경·오류를 정상 0으로 바꾸지 않는다.
+정규화된 2개월 source와 CLI 입력 상한은 공유 예산 96MiB다. runtime index는 1MiB, keyword/month별 저장 projection은 압축 후 32MiB로 제한한다. 완전 정규화 자료가 32MiB를 넘으면 값을 버리지 않고 gzip으로 저장한다. 해제 크기는 공유 예산 96MiB 상한과 index의 정확한 `uncompressedBytes`를 함께 검사한다. 행 수·수량·해시 입력을 잘라서 한도에 맞추지 않으며 한도 초과는 실패로 남긴다. 증분 컴파일러는 사용하지 않는 source Buffer를 보유하지 않고 동일 JSON 바이트의 길이·SHA와 provenance를 유지한다. 알 수 없는 인코딩·손상·크기 불일치는 검증 오류이며 기존 JSON 형식도 유지한다. 파일·부모 경로의 symlink와 경로 이탈을 검사하고, 일반파일의 hardlink·읽기 전후 identity/크기/시각 변경을 거부한다. index가 발표한 scope와 SHA·크기·원본 fingerprint를 확인하며 변경·오류를 정상 0으로 바꾸지 않는다.
 
 ## 기준일과 사본 범위
 
@@ -92,7 +92,7 @@ API는 관리자 인증과 GET만 허용한다. POST·갱신·재구축 경로�
 
 운영 원본에 기존 source adapter를 직접 실행하면 파생 catalog·관측 index·객실 기준이 갱신될 수 있다. 준비 작업은 별도 `export_keyword_monthly_source_copy.cjs`로 명시된 저장 자료의 메타데이터·용량을 먼저 확인한다. 업체 원장·관측 이력·객실 기준 등 핵심 자료만 새 물리 사본에 두고, 큰 outputs는 동결 목록에 포함된 파일만 읽기 전용으로 참조한다. 원본 파일·부모 경로와 실제 읽은 본문의 SHA를 전후 대조한다. 이는 outputs 전체 물리 사본이나 원본 행 전수 감사를 뜻하지 않는다.
 
-정규화의 DATA_DIR와 파생 cache는 사본 경로만 사용한다. 원래 source adapter의 스트리밍 history 분기를 사용해 별도 SQLite/WAL을 만들지 않는다. 원본·개별 일정·broker·보호·KOSIS 자료는 수정하지 않는다. 사본·임시 작업의 별도 하드 상한을 1GiB로 제한하며 `statfs`의 호스트 여유 공간을 Render의 `/tmp` 서비스 한도로 해석하지 않는다. 실행기는 검증한 Node·guard 코드 지문과 seccomp 네트워크 차단을 확인한 뒤에만 정규화를 시작한다. 조회용 projection은 `--compression gzip`으로 손실 없이 압축할 수 있으며 기존 저장·해제 상한을 넓히지 않는다.
+정규화의 DATA_DIR와 파생 cache는 사본 경로만 사용한다. 원래 source adapter의 스트리밍 history 분기를 사용해 별도 SQLite/WAL을 만들지 않는다. 원본·개별 일정·broker·보호·KOSIS 자료는 수정하지 않는다. 사본·임시 작업의 별도 하드 상한을 1GiB로 제한하며 `statfs`의 호스트 여유 공간을 Render의 `/tmp` 서비스 한도로 해석하지 않는다. 실행기는 검증한 Node·guard 코드 지문과 seccomp 네트워크 차단을 확인한 뒤에만 정규화를 시작한다. 조회용 projection은 `--compression gzip`으로 손실 없이 압축하며 공유 96MiB 정규화·해제 예산과 별도 32MiB 압축 저장 한도를 지킨다.
 
 키워드별 source fingerprint와 월별 진단은 합쳐 쓰지 않는다. `build_keyword_monthly_bundle.cjs`는 각 준비 index와 projection의 바이트를 그대로 불변 generation에 보존하고 정확한 키워드·월을 해당 partition에 연결한다. 입력의 `exposeScopes`는 전월 자료를 포함한 partition에서 실제 공개할 월만 선택한다. 중복 scope·SHA/크기 불일치·경로 이탈은 거부한다. 마지막 `current.json` 발표는 기대 이전 SHA와 전용 lock을 대조해 원자 교체하며 이전 generation은 보존한다. 이후 단계에서 오류가 나면 미반영으로 단정하지 않고 실제 pointer를 다시 확인한다.
 

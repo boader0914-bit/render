@@ -3,7 +3,10 @@
 // it never imports the application or publishes a current pointer.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto"), child = require("node:child_process");
 const MIB = 1024 * 1024, GIB = 1024 * MIB, SHA = /^[a-f0-9]{64}$/;
-const LIMITS = Object.freeze({ persistent: GIB, scratch: GIB, source: 64 * MIB, metadata: 16 * MIB, output: 256 * 1024, scopeReserve: 82 * MIB, timeout: 17 * 60 * 1000, candidates: 4096 });
+// Persistent output and scratch are disjoint below. The per-scope persistent
+// reserve is two encoded32MiB projections +16MiB metadata +2MiB slack; normalized
+// source96MiB is independently reserved under scratch by LIMITS.source below.
+const LIMITS = Object.freeze({ persistent: GIB, scratch: GIB, source: require("./lib/keyword_monthly_source_budget.cjs").KEYWORD_MONTHLY_SOURCE_BUDGET.normalizedJsonBytes, metadata: 16 * MIB, output: 256 * 1024, scopeReserve: (2 * 32 + 16 + 2) * MIB, timeout: 17 * 60 * 1000, candidates: 4096 });
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => [k, canonical(v[k])])) : v;
 const fingerprint = v => sha(JSON.stringify(canonical(v)));
