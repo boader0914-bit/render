@@ -100,6 +100,26 @@ test("mounted view performs only authenticated no-store GET and renders no lifec
   assert.match(ui.text(), /마지막 유효 관측|PROVIDER_BLOCKED/); assert.doesNotMatch(ui.text(), /초안으로 저장|리포트 발행|수집 시작|자료 보완 실행/);
   assert.equal(ui.find("kma-workspace")[0].children.length, 2); assert.equal(ui.find("kma-detail-panel")[0].children.length >= 6, true);
 });
+test("HTML login or proxy responses are reported without parsing or displaying raw response contents", async () => {
+  for (const status of [200, 502, 503]) {
+    let jsonReads = 0;
+    const ui = mockUi({ request: async () => ({ status, ok: status === 200,
+      headers: { get: name => name === "content-type" ? "text/html; charset=utf-8" : null },
+      json: async () => { jsonReads++; throw new SyntaxError("Unexpected token '<' private server HTML"); } }) });
+    await ui.controller.open();
+    assert.equal(jsonReads, 0); assert.equal(ui.find("kma-metric").length, 0);
+    assert.match(ui.text(), /로그인 상태와 서버 연결을 확인/);
+    assert.doesNotMatch(ui.text(), /Unexpected token|private server HTML|정상 완료/);
+    assert.equal(ui.calls.length, 1); assert.equal(ui.calls[0].settings.method, "GET");
+  }
+});
+test("invalid JSON is reported without exposing response contents or showing successful metrics", async () => {
+  const ui = mockUi({ request: async () => ({ status: 200, ok: true,
+    headers: { get: () => "application/json; charset=utf-8" },
+    json: async () => { throw new SyntaxError("sensitive response text"); } }) });
+  await ui.controller.open(); assert.match(ui.text(), /저장 자료 응답을 확인하지 못했습니다/);
+  assert.doesNotMatch(ui.text(), /sensitive response text/); assert.equal(ui.find("kma-metric").length, 0);
+});
 test("only catalog months can be requested and real future stay observations are labeled separately", async () => {
   const ui = mockUi(); await ui.controller.open(); ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await settle();
   assert.equal(ui.calls.length, 2); assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().draft.month, "2026-11"); await ui.apply(); assert.match(ui.text(), /사전 관측/);

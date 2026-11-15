@@ -451,7 +451,18 @@
       const response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, ...(active ? { signal: active.signal } : {}) });
       if (!current(token)) return null;
       if ([401, 403].includes(response.status)) { clearPrivate(); return null; }
-      const value = await response.json(); if (!current(token)) return null;
+      const contentType = response.headers?.get?.("content-type");
+      if (contentType && !/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|\s*$)/i.test(contentType)) {
+        throw new Error("저장 자료 형식으로 응답하지 않았습니다. 로그인 상태와 서버 연결을 확인한 뒤 다시 조회해 주세요.");
+      }
+      let value;
+      try { value = await response.json(); }
+      catch (failure) {
+        if (!current(token)) return null;
+        if (failure?.name === "AbortError") throw failure;
+        throw new Error("저장 자료 응답을 확인하지 못했습니다. 로그인 상태와 서버 연결을 확인한 뒤 다시 조회해 주세요.");
+      }
+      if (!current(token)) return null;
       if (!response.ok && !["missing", "stale", "needs_verification"].includes(value?.status)) throw new Error(`저장 자료를 확인하지 못했습니다 (${response.status}).`);
       return value;
     }

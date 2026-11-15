@@ -12,6 +12,7 @@ const { normalizePair } = require("./lib/keyword_monthly_incremental_normalize.c
 const { planScopes, VERSION } = require("./lib/keyword_monthly_incremental_plan.cjs");
 const { buildKeywordMonthlyProjection } = require("./lib/keyword_monthly_analysis.cjs");
 const { saveBytes, createStore } = require("./lib/keyword_monthly_incremental_state.cjs");
+const bundle = require("./lib/keyword_monthly_bundle.cjs");
 function args(values) {
   const out = {}, allowed = new Set(["input", "input-sha", "job-root", "code-root", "isolation-proof", "fixture-root"]);
   for (let i = 0; i < values.length; i += 2) { const key = values[i]?.replace(/^--/, ""); H.need(values[i]?.startsWith("--") && allowed.has(key) && values[i + 1] && !Object.hasOwn(out, key), "KEYWORD_INCREMENTAL_ARGUMENTS"); out[key] = values[i + 1]; }
@@ -44,6 +45,10 @@ async function run(values) {
   H.need(job.version === VERSION && H.inside(path.join(namespace, "jobs"), jobRoot) && /^refresh-job-[a-f0-9-]{36}$/.test(path.basename(jobRoot))
     && H.validIso(job.capturedAt) && Array.isArray(job.catalog?.scopes) && Array.isArray(job.admittedRunIds) && Array.isArray(job.admittedEvidence), "KEYWORD_INCREMENTAL_JOB_INVALID");
   const evidence = H.validateEvidence(job.evidence), workDataDir = path.join(jobRoot, "data"); await fs.mkdir(workDataDir, { mode: 0o700 });
+  const liveDir = path.join(dataDir, "keyword_monthly_analysis"), initial = await bundle.loadBundle(liveDir);
+  H.need(job.initialBundle && Object.keys(job.initialBundle).length === 3 && job.initialBundle.generation === initial.pointer.generation
+    && job.initialBundle.pointerSha256 === initial.pointerRead.sha256 && job.initialBundle.catalogSha256 === initial.catalogRead.sha256
+    && JSON.stringify(job.catalog) === JSON.stringify(initial.catalog), "KEYWORD_INCREMENTAL_INITIAL_BUNDLE_CHANGED");
   const before = await metadataInventory({ dataDir }), seeded = await seedDependencies({ dataDir, workDataDir });
   H.need(job.admittedEvidence.length === job.admittedRunIds.length && new Set(job.admittedRunIds).size === job.admittedRunIds.length, "KEYWORD_INCREMENTAL_DELTA_EVIDENCE_INVALID");
   for (const supplied of job.admittedEvidence) {
@@ -55,16 +60,16 @@ async function run(values) {
   const bootstrap = !await fs.lstat(path.join(namespace, "source-current.json")).catch(e => { if (e.code === "ENOENT") return null; throw e; });
   const core = [path.join(dataDir, "company_master/companies.json"), path.join(dataDir, "history/observations.jsonl")];
   const guards = installGuards(namespace, { codeRoot, originalOutputs: before.outputs,
-    readOnlyRoots: [path.join(dataDir, "keyword_monthly_source_delta"), ...["company_integrated/capacity-bases.json", "history/special_days", "history/saved_product_recoveries"].map(p => path.join(dataDir, p)), ...(bootstrap ? core : [])], metadataOnlyFiles: bootstrap ? [] : core });
+    readOnlyRoots: [initial.generationDir, path.join(liveDir, "current.json"), path.join(dataDir, "keyword_monthly_source_delta"), ...["company_integrated/capacity-bases.json", "history/special_days", "history/saved_product_recoveries"].map(p => path.join(dataDir, p)), ...(bootstrap ? core : [])], metadataOnlyFiles: bootstrap ? [] : core });
   const outputView = installReadOnlyOutputs(before.outputs), scratch = installScratchBudget(jobRoot, undefined, { externalWriteRoots: [namespace] });
   const started = Date.now(), admission = async () => H.need(Date.now() - started < 55 * 60000, "KEYWORD_INCREMENTAL_TIME_BOUND");
   try {
     // readCatalog metadata is acquired from the application's inert run catalog.
     // It reads saved manifest metadata only, with original outputs readonly.
     const { buildSourceWiring } = require("./lib/keyword_monthly_source_wiring.cjs");
-    const initial = buildSourceWiring({ codeRoot, copyDataDir: workDataDir, now: job.capturedAt, readOnlyOriginalOutputs: before.outputs.root,
+    const metadataWiring = buildSourceWiring({ codeRoot, copyDataDir: workDataDir, now: job.capturedAt, readOnlyOriginalOutputs: before.outputs.root,
       incremental: { observationIndex: Object.fromEntries(["ensure", "readRows", "revisionPartitions"].map(name => [name, async () => { throw H.fault("KEYWORD_INCREMENTAL_INITIAL_INDEX_UNUSED"); }])), revision: "initial-metadata", catalog: null } });
-    const runs = await initial.listRuns(), regions = JSON.parse(await fs.readFile(path.join(codeRoot, "web/data/region_master.json"), "utf8")).units || [];
+    const runs = await metadataWiring.listRuns(), regions = JSON.parse(await fs.readFile(path.join(codeRoot, "web/data/region_master.json"), "utf8")).units || [];
     const context = await createContext({ dataDir, codeRoot, workDataDir, capturedAt: job.capturedAt, outputs: before.outputs, runs, regions, admission,
       expectedOutboxInventorySha256: job.outboxInventorySha256, admittedRunIds: job.admittedRunIds });
     const available = await fs.statfs(dataDir, { bigint: true });
@@ -86,12 +91,17 @@ async function run(values) {
         observationCount: normalized.source.observations.length, newRunObservationCount: normalized.source.observations.filter(r => r.runId === evidence.runId).length });
       await fs.writeFile(path.join(jobRoot, "part-" + String(i).padStart(3, "0") + "-normalization.json"), JSON.stringify({ ...scope, records: normalized.records, inputSha256: normalized.inputSha256 }), { flag: "wx", mode: 0o600 });
     }
+    // Financial semantic validation stays in this bounded, disposable child.
+    // The web parent later checks exact bytes and this attested descriptor only.
+    const publicationPreparation = await bundle.prepareKeywordMonthlyBundle({ inputs: H.mergeInputs(initial, inputs), now: job.capturedAt, maxTotalBytes: H.LIMITS.generationBytes });
+    H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_INCREMENTAL_INITIAL_BUNDLE_CHANGED");
     await context.assertCurrent(); await verifyInventory({ expected: before, dataDir }); await verifyDependencies({ seeded, dataDir });
     const verifiedOutputs = await outputView.verify(); context.wiring.assertCodeCurrent(); scratch.assertCurrent();
     H.need(!Object.values(guards.metrics).some(Boolean) && context.wiring.metrics.deniedRequires === 0 && outputView.metrics.originalWriteAttempts === 0 && outputView.metrics.uncapturedReadAttempts === 0 && outputView.metrics.validationDenials === 0, "KEYWORD_INCREMENTAL_SIDE_EFFECT_ATTEMPTED");
     const result = { schemaVersion: 1, version: VERSION, status: "complete", executionBasis: "verified_incremental_source_checkpoint_and_dirty_partition_rebuild", capturedAt: job.capturedAt,
       bootstrap: context.bootstrap, stateSha256: context.current.stateSha256, statePointerSha256: context.current.pointerSha256, sourceInventorySha256: before.inventorySha256,
       inputsFingerprint, outboxInventorySha256: context.outboxInventorySha256, inputs, parts, plan, metrics: context.metrics(), isolation,
+      initialBundle: job.initialBundle, publicationPreparation, publicationPreparationSha256: H.hash(JSON.stringify(publicationPreparation)),
       originalOutputVerification: verifiedOutputs, staticDependencies: seeded, providerCalls: 0, sourceWrites: 0, appEntryExecutions: 0, kosisReadOrChanged: false,
       guardMetrics: guards.metrics, sourceMetadata: before, scratch: scratch.status(), elapsedMs: Date.now() - started };
     await saveBytes(path.join(jobRoot, "preparation-complete.json"), Buffer.from(JSON.stringify(result)), 16 * 1024 * 1024);

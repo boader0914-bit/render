@@ -3,9 +3,10 @@
 // dirty projections use the unchanged pure monthly calculator and atomic bundle.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto"), zlib = require("node:zlib");
 const H = require("./lib/keyword_monthly_refresh_preparation.cjs"), prep = require("./prepare_keyword_monthly_release.cjs"), bundle = require("./lib/keyword_monthly_bundle.cjs");
-const { manifestEvidence, planCatalog, verifyPublished, removeOwnedTree } = require("./refresh_keyword_monthly_from_completed_run.cjs");
+const { manifestEvidence, planCatalog, removeOwnedTree } = require("./refresh_keyword_monthly_from_completed_run.cjs");
 const { VERSION } = require("./lib/keyword_monthly_incremental_plan.cjs");
 const { createStore, saveBytes } = require("./lib/keyword_monthly_incremental_state.cjs");
+const { acquireWorkerLock } = require("./lib/keyword_monthly_worker_lock.cjs");
 const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_source_delta.cjs"), { events } = require("./lib/keyword_monthly_incremental_context.cjs");
 const { verifyInventory, verifyDependencies } = require("./lib/keyword_monthly_incremental_inputs.cjs");
 const OWNER = "keyword_monthly_incremental_refresh", BASIS = "verified_incremental_source_checkpoint_and_dirty_partition_rebuild";
@@ -51,10 +52,8 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     return { ...complete.value, repeatedSource: true, operatingPointerChanged: false };
   }
   const store = createStore({ dataDir, now: clock, admission }); await store.initialize();
-  const lockFile = path.join(store.directory, "worker-lock.json"), token = crypto.randomUUID();
-  let handle;
-  try { handle = await fs.open(lockFile, "wx", 0o600); } catch (e) { if (e.code === "EEXIST") throw H.fault("KEYWORD_INCREMENTAL_WORKER_LOCKED"); throw e; }
-  await handle.writeFile(JSON.stringify({ schemaVersion: 1, token, pid: process.pid, sourceKey, createdAt: clock() })); await handle.sync(); await handle.close();
+  const workerLease = await acquireWorkerLock({ directory: store.directory, sourceKey, version: VERSION, now: clock, fixture: dependencies.fixture === true });
+  const token = workerLease.jobId;
   let promoted = false, jobRoot = null;
   try {
     const initial = await bundle.loadBundle(liveDir), prior = await maybeRead(intentFile);
@@ -65,9 +64,12 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
         && /^[a-f0-9-]{36}$/.test(intent.jobId || "") && intent.executionBasis === BASIS && intent.strictIsolationVerified === true && intent.fixtureOnly === (dependencies.fixture === true)
         && Array.isArray(intent.scopes) && intent.scopes.length > 0 && intent.scopes.length <= 128 && intent.incrementalValidated === true, "KEYWORD_INCREMENTAL_PRIOR_INTENT_INVALID");
       H.need(initial.catalogRead.sha256 === intent.expectedCatalogSha256, "KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK");
-      await retainedPreparation(intent, receiptDir); await store.readCheckpoint(intent.stateSha256);
-      const publication = await verifyPublished(liveDir, intent.expectedCatalogSha256, intent.scopes, clock());
-      const result = { ...intent, ...publication, status: "published", mode: "live", finishedAt: clock(), recoveredAfterPromotion: true, repeatedSource: false, operatingPointerChanged: false, providerCalls: 0, sourceWrites: 0 };
+      const retained = await retainedPreparation(intent, receiptDir); await store.readCheckpoint(intent.stateSha256);
+      H.need(retained.publicationPreparation && retained.publicationPreparationSha256 === H.hash(JSON.stringify(retained.publicationPreparation)), "KEYWORD_INCREMENTAL_PREVALIDATION_REQUIRED");
+      const publication = await bundle.verifyPrevalidatedKeywordMonthlyBundle({ projectionDir: liveDir, expectedCatalogSha256: intent.expectedCatalogSha256,
+        preparation: retained.publicationPreparation, wantedScopes: intent.scopes });
+      const result = { ...intent, ...publication, status: "published", mode: "live", finishedAt: clock(), recoveredAfterPromotion: true, repeatedSource: false, operatingPointerChanged: false, providerCalls: 0, sourceWrites: 0,
+        parentProjectionAnalyses: dependencies.fixture === true ? null : 0, semanticValidationExecution: dependencies.fixture === true ? "fixture_child_protocol" : "strict_isolated_child", semanticPrevalidationSha256: retained.publicationPreparationSha256 };
       delete result.expectedCatalogSha256; await H.writeNew(completeFile, result); return result;
     }
     const free = await fs.statfs(dataDir, { bigint: true }); H.need(free.bavail * free.bsize >= 512n * 1024n * 1024n + BigInt(H.LIMITS.scratchBytes) + 64n * 1024n * 1024n, "KEYWORD_INCREMENTAL_DISK_RESERVE");
@@ -87,11 +89,12 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     }
     const jobs = path.join(store.directory, "jobs"); await privateDir(jobs); jobRoot = path.join(jobs, "refresh-job-" + token); await privateDir(jobRoot); await privateDir(path.join(jobRoot, "control"));
     await H.writeNew(path.join(jobRoot, "refresh-owner.json"), { schemaVersion: 1, token, sourceKey, root: jobRoot });
-    const capturedAt = clock(), job = { schemaVersion: 1, version: VERSION, dataDir, evidence, range: manifest.range, catalog: initial.catalog, capturedAt,
+    const initialBundle = { generation: initial.pointer.generation, pointerSha256: initial.pointerRead.sha256, catalogSha256: initial.catalogRead.sha256 };
+    const capturedAt = clock(), job = { schemaVersion: 1, version: VERSION, dataDir, evidence, range: manifest.range, catalog: initial.catalog, initialBundle, capturedAt,
       outboxInventorySha256: inventory.inventory, admittedRunIds: [...admittedRunIds], admittedEvidence: [...admittedEvidence.values()], expectedSourceStateSha256: current?.stateSha256 || null };
     const jobInput = path.join(jobRoot, "job-input.json"); await saveBytes(jobInput, Buffer.from(JSON.stringify(job)), 1024 * 1024);
     const node = await fs.realpath(process.execPath), guard = path.join(codeRoot, "scripts/reconstruct_keyword_monthly_incremental.cjs"), launcher = path.join(codeRoot, "scripts/launch_keyword_monthly_isolated.py");
-    const pins = await Promise.all([node, guard, launcher].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
+    const pins = await Promise.all([node, guard, launcher, ...["keyword_monthly_bundle.cjs", "keyword_monthly_analysis.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs"].map(file => path.join(codeRoot, "scripts/lib", file))].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
     for (const file of [proofFile, preparationFile]) {
       try { await fs.lstat(file); throw H.fault("KEYWORD_INCREMENTAL_CHILD_RECEIPT_PREEXISTING"); }
       catch (e) { if (e.code !== "ENOENT") throw e; }
@@ -110,6 +113,10 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     H.need(prepared.version === VERSION && prepared.status === "complete" && prepared.executionBasis === BASIS && prepared.capturedAt === capturedAt
       && prepared.providerCalls === 0 && prepared.sourceWrites === 0 && prepared.appEntryExecutions === 0 && prepared.kosisReadOrChanged === false
       && prepared.isolation?.pid === child.pid && H.SHA.test(prepared.stateSha256 || "") && Array.isArray(prepared.inputs) && prepared.inputs.length > 0, "KEYWORD_INCREMENTAL_PREPARATION_INVALID");
+    H.need(JSON.stringify(prepared.initialBundle) === JSON.stringify(initialBundle) && prepared.publicationPreparation
+      && prepared.publicationPreparationSha256 === H.hash(JSON.stringify(prepared.publicationPreparation))
+      && prepared.publicationPreparation.fixedValidationClock === capturedAt && prepared.publicationPreparation.maxTotalBytes === H.LIMITS.generationBytes,
+    "KEYWORD_INCREMENTAL_PREVALIDATION_REQUIRED");
     const proof = await H.read(proofFile, 65536); prep.isolation(proof.value, jobRoot, { "node-sha": pins[0].sha256, "guard-sha": pins[1].sha256 });
     H.need(proof.value.pid === child.pid && prepared.isolation.proofSha256 === proof.sha256, "KEYWORD_INCREMENTAL_ISOLATION_BINDING_INVALID");
     const preparationEvidenceFile = path.join(receiptDir, "incremental-evidence-" + sourceKey + ".json.gz"), preparationEvidence = zlib.gzipSync(preparation.bytes);
@@ -129,14 +136,17 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       scheduleOccurrenceId: evidence.scheduleOccurrenceId, expectedCatalogSha256: planned.sha256, previousPointerSha256: initial.pointerRead.sha256, scopes: expectedScopes,
       stateSha256: prepared.stateSha256, preparationSha256: preparation.sha256, preparationEvidenceFile, preparationEvidenceSha256: H.hash(preparationEvidence), inputsFingerprint: prepared.inputsFingerprint, dataThrough: capturedAt,
       preparedParts: prepared.parts, bootstrap: prepared.bootstrap, metrics: prepared.metrics, jobRoot, createdAt: clock(), providerCalls: 0, sourceWrites: 0 };
-    const publisher = dependencies.fixture === true && dependencies.publish ? dependencies.publish : bundle.publishKeywordMonthlyBundle;
+    const publisher = dependencies.fixture === true && dependencies.publish ? dependencies.publish : bundle.publishPrevalidatedKeywordMonthlyBundle;
     const publication = await publisher({ inputs, outputDir: liveDir, now: capturedAt, expectedCurrentSha256: initial.pointerRead.sha256, maxTotalBytes: H.LIMITS.generationBytes,
+      preparation: prepared.publicationPreparation,
       beforePromote: async () => { await validate(); H.need((await planCatalog(inputs, capturedAt)).sha256 === planned.sha256, "KEYWORD_INCREMENTAL_PLAN_CHANGED"); await H.writeNew(intentFile, intent); } });
     promoted = true; H.need(publication.status === "published" && publication.catalogSha256 === planned.sha256 && publication.providerCalls === 0, "KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK");
-    const verified = await verifyPublished(liveDir, planned.sha256, expectedScopes, clock());
+    const verified = await bundle.verifyPrevalidatedKeywordMonthlyBundle({ projectionDir: liveDir, expectedCatalogSha256: planned.sha256,
+      preparation: prepared.publicationPreparation, wantedScopes: expectedScopes });
     const result = { ...intent, ...verified, status: "published", finishedAt: clock(), scopeCount: verified.scopeCount, refreshedScopeCount: expectedScopes.length,
       unchangedScopeCount: initial.catalog.scopes.filter(s => !expectedScopes.some(r => H.scopeId(r) === H.scopeId(s))).length, unchangedScopePartitionBindingsPreserved: true,
-      repeatedSource: false, operatingPointerChanged: true, networkAttempted: false, collectorStarted: false, kosisReadOrChanged: false };
+      repeatedSource: false, operatingPointerChanged: true, networkAttempted: false, collectorStarted: false, kosisReadOrChanged: false,
+      parentProjectionAnalyses: dependencies.fixture === true ? null : 0, semanticValidationExecution: dependencies.fixture === true ? "fixture_child_protocol" : "strict_isolated_child", semanticPrevalidationSha256: prepared.publicationPreparationSha256 };
     delete result.expectedCatalogSha256; await H.writeNew(completeFile, result);
     // Clearing pending dependencies is a cache acknowledgement after verified
     // publication. If it fails, the same data is safely recalculated on retry.
@@ -162,7 +172,7 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     }
     throw e;
   } finally {
-    const lock = await H.read(lockFile, 16384); H.need(lock.value.token === token && lock.value.sourceKey === sourceKey, "KEYWORD_INCREMENTAL_LOCK_CHANGED"); await fs.unlink(lockFile);
+    await workerLease.release();
   }
 }
 module.exports = { VERSION, OWNER, BASIS, keyFor, retainedPreparation, refreshKeywordMonthlyIncremental };
