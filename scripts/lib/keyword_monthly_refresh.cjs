@@ -93,6 +93,7 @@ function createKeywordMonthlyRefresh(options = {}) {
       if (k === "dataThrough") need(iso(value[k]), "KEYWORD_REFRESH_RESULT_INVALID"); out[k] = value[k];
     }
     for (const k of ["scopeCount", "refreshedScopeCount", "providerCalls"]) if (value[k] !== undefined) { need(Number.isSafeInteger(value[k]) && value[k] >= 0 && (k !== "providerCalls" || value[k] === 0), "KEYWORD_REFRESH_RESULT_INVALID"); out[k] = value[k]; }
+    for (const k of ["repeatedSource", "operatingPointerChanged"]) if (value[k] !== undefined) { need(typeof value[k] === "boolean", "KEYWORD_REFRESH_RESULT_INVALID"); out[k] = value[k]; }
     if (value.networkAttempted !== undefined) { need(value.networkAttempted === false, "KEYWORD_REFRESH_RESULT_INVALID"); out.networkAttempted = false; }
     need(Buffer.byteLength(JSON.stringify(out)) <= 4096, "KEYWORD_REFRESH_RESULT_BOUND"); return out;
   }
@@ -161,7 +162,9 @@ function createKeywordMonthlyRefresh(options = {}) {
   async function initialize() {
     if (!initializing) initializing = (async () => {
       await ensureDirectories(); activatedAt = await activation(true); const found = await scan(); records.clear(); for (const [id, row] of found.records) records.set(id, row); journalBytes = found.bytes;
-      for (const row of [...records.values()]) if (row.status === "running") {
+      // A new worker version is a separate recovery cohort. Historical rows,
+      // including interrupted work, remain unchanged and available to audit.
+      for (const row of [...records.values()]) if (row.intent.refreshVersion === refreshVersion && row.status === "running") {
         const at = stamp(), exhausted = row.attempts >= row.maxAttempts;
         await writeRecord({ ...row, status: exhausted ? "needs_verification" : "queued", reasonCode: exhausted ? "KEYWORD_REFRESH_INTERRUPTED_EXHAUSTED" : "KEYWORD_REFRESH_INTERRUPTED", updatedAt: at, recoveredAt: at, finishedAt: exhausted ? at : null, nextAttemptAt: exhausted ? null : at });
       }
@@ -203,7 +206,7 @@ function createKeywordMonthlyRefresh(options = {}) {
     try {
       await initialize(); need(!storeError, storeError); if (closed) return null;
       const dueAt = row => deferredUntil.get(row.jobId) || row.nextAttemptAt;
-      const at = stamp(), row = [...records.values()].filter(r => ["queued", "deferred"].includes(r.status) && dueAt(r) <= at)
+      const at = stamp(), row = [...records.values()].filter(r => r.intent.refreshVersion === refreshVersion && ["queued", "deferred"].includes(r.status) && dueAt(r) <= at)
         .sort((a, b) => dueAt(a).localeCompare(dueAt(b)) || a.createdAt.localeCompare(b.createdAt) || a.jobId.localeCompare(b.jobId))[0]; if (!row) return null;
       let admission;
       try { admission = await canProcess(publicRow(row)); } catch { return defer(row, "KEYWORD_REFRESH_ADMISSION_UNAVAILABLE"); }
@@ -250,12 +253,23 @@ function createKeywordMonthlyRefresh(options = {}) {
       // start a worker or promote a bundle. Disk-only status is explicitly marked.
       const view = initialized ? { records, bytes: journalBytes } : await scan(), rows = [...view.records.values()], admissionAt = initialized ? activatedAt : await activation(false);
       const unresolved = rows.filter(row => row.status === "needs_verification");
+      const countStates = values => values.reduce((counts, row) => { counts[row.status] = (counts[row.status] || 0) + 1; return counts; }, {});
+      const currentRows = rows.filter(row => row.intent.refreshVersion === refreshVersion), historical = new Map();
+      for (const row of rows) if (row.intent.refreshVersion !== refreshVersion) {
+        if (!historical.has(row.intent.refreshVersion)) historical.set(row.intent.refreshVersion, []);
+        historical.get(row.intent.refreshVersion).push(row);
+      }
       return { schemaVersion: 1, status: storeError || lastWorkerError || lastEnqueueError || unresolved.length ? "needs_verification" : "available", readOnly: true,
         initialized, started, closed, activeJobId, refreshVersion, activatedAt: admissionAt, errorCode: storeError || lastWorkerError || lastEnqueueError,
         unresolvedNeedsVerification: unresolved.length,
-        journalBytes: view.bytes, maxJournalBytes, maxRecords, counts: rows.reduce((n, r) => { n[r.status] = (n[r.status] || 0) + 1; return n; }, {}),
+        currentVersionNeedsVerification: currentRows.filter(row => row.status === "needs_verification").length,
+        historicalNeedsVerification: unresolved.filter(row => row.intent.refreshVersion !== refreshVersion).length,
+        currentVersionCounts: countStates(currentRows),
+        historicalCountsByVersion: Object.fromEntries([...historical].sort(([a], [b]) => a.localeCompare(b)).map(([version, values]) => [version, countStates(values)])),
+        journalBytes: view.bytes, maxJournalBytes, maxRecords, counts: countStates(rows),
         items: rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.jobId.localeCompare(a.jobId)).slice(0, limit).map(publicRow) };
-    } catch (e) { return { schemaVersion: 1, status: "needs_verification", readOnly: true, errorCode: safeCode(e), items: null, counts: null }; }
+    } catch (e) { return { schemaVersion: 1, status: "needs_verification", readOnly: true, errorCode: safeCode(e), refreshVersion, items: null, counts: null,
+      currentVersionCounts: null, historicalCountsByVersion: null, currentVersionNeedsVerification: null, historicalNeedsVerification: null }; }
   }
   return Object.freeze({ enqueue, runOnce, start, close, status, directory, refreshVersion });
 }

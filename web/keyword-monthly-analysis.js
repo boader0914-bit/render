@@ -40,9 +40,15 @@
         provenanceByMonth: Object.fromEntries(Object.entries(row.provenanceByMonth || {}).filter(([month, item]) => MONTH.test(month) && item && typeof item === "object" && Number.isFinite(Date.parse(item.dataThrough || ""))).map(([month, item]) => [month, { dataThrough: item.dataThrough }])) });
     }
     const fresh = value.refreshStatus;
+    const versionCounts = counts => counts && typeof counts === "object" && !Array.isArray(counts)
+      && Object.values(counts).every(n => Number.isSafeInteger(n) && n >= 0)
+      ? Object.fromEntries(["queued", "deferred", "running", "complete", "needs_verification"].map(key => [key, counts[key] ?? 0])) : null;
     const refreshStatus = fresh && typeof fresh === "object" ? { status: fresh.status === "needs_verification" ? "needs_verification" : fresh.status === "available" ? "available" : "unknown",
       started: fresh.started === true, counts: Object.fromEntries(["queued", "deferred", "running", "complete", "needs_verification"].map(key => [key, Number.isSafeInteger(fresh.counts?.[key]) && fresh.counts[key] >= 0 ? fresh.counts[key] : null])),
-      cleanupNeedsVerification: fresh.cleanup?.status === "needs_verification" } : null;
+      currentVersionCounts: versionCounts(fresh.currentVersionCounts),
+      historicalNeedsVerification: Number.isSafeInteger(fresh.historicalNeedsVerification) && fresh.historicalNeedsVerification >= 0 ? fresh.historicalNeedsVerification : null,
+      hasRuntimeError: fresh.errorCode !== null,
+      cleanupNeedsVerification: fresh.cleanup != null && fresh.cleanup.status !== "complete" } : null;
     return { status: value.status || "needs_verification", currentDay, currentMonth: MONTH.test(value.currentMonth || "") ? value.currentMonth : currentDay.slice(0, 7), keywords, provenance: value.provenance || null, diagnostics: Array.isArray(value.diagnostics) ? value.diagnostics : [], refreshStatus };
   }
   function metricView(value = {}) {
@@ -356,7 +362,11 @@
       notice.textContent = loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
       const automatic = catalog?.refreshStatus;
       refreshNotice.hidden = !allowed() || !automatic;
-      refreshNotice.textContent = automatic ? automatic.status === "needs_verification" || automatic.cleanupNeedsVerification
+      const historicalOnly = automatic?.status === "needs_verification" && !automatic.hasRuntimeError && !automatic.cleanupNeedsVerification
+        && automatic.started && automatic.currentVersionCounts?.needs_verification === 0 && automatic.historicalNeedsVerification > 0;
+      refreshNotice.textContent = historicalOnly
+        ? `이전 갱신 검수 이력 ${number(automatic.historicalNeedsVerification)}건 보존 · 현재 갱신 작업 처리 ${number(automatic.currentVersionCounts.running)} / 대기 ${number(automatic.currentVersionCounts.queued)} / 이월 ${number(automatic.currentVersionCounts.deferred)}. 선택 자료의 실제 반영 범위는 아래 자료 마감과 출처 근거로 확인하세요. 이전 이력은 삭제하거나 정상 완료로 바꾸지 않습니다.`
+        : automatic ? automatic.status === "needs_verification" || automatic.cleanupNeedsVerification
         ? "자동 반영 확인 필요 · 기존 검증 자료를 유지합니다. 수집 재실행이나 보호 해제를 시작하지 않습니다."
         : automatic.started ? `수집·DB 반영 완료 후 자동 갱신 · 처리 ${number(automatic.counts.running)} / 대기 ${number(automatic.counts.queued)} / 이월 ${number(automatic.counts.deferred)}. 새 자료는 화면 재진입 또는 저장 자료 조회로 확인합니다.`
           : "자동 반영 실행 상태 미확인 · 아래 자료 마감 시각을 확인하세요." : "";

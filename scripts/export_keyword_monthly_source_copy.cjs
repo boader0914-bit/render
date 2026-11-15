@@ -2,7 +2,7 @@
 const fs = require("node:fs/promises"), path = require("node:path");
 const { inspect, copy, safeJson, checkedPath } = require("./lib/keyword_monthly_source_copy.cjs");
 function args(values) {
-  const result = {}, allowed = new Set(["mode", "source-data", "scratch-parent", "inspection", "copy-root", "output", "include-prepared"]);
+  const result = {}, allowed = new Set(["mode", "source-data", "scratch-parent", "inspection", "copy-root", "output", "include-prepared", "history-compression"]);
   for (let i = 0; i < values.length; i += 2) {
     const key = values[i]?.replace(/^--/, "");
     if (!values[i]?.startsWith("--") || !allowed.has(key) || !values[i + 1] || Object.hasOwn(result, key)) throw Error("KEYWORD_COPY_ARGUMENTS");
@@ -11,11 +11,13 @@ function args(values) {
   if (!["inspect", "copy"].includes(result.mode) || !result["source-data"] || !path.isAbsolute(result["source-data"])) throw Error("KEYWORD_COPY_ARGUMENTS");
   for (const key of ["scratch-parent", "inspection", "copy-root", "output"]) if (result[key] && !path.isAbsolute(result[key])) throw Error("KEYWORD_COPY_ABSOLUTE_PATH_REQUIRED");
   if (result["include-prepared"] && !["true", "false"].includes(result["include-prepared"])) throw Error("KEYWORD_COPY_ARGUMENTS");
+  if (result["history-compression"] && result["history-compression"] !== "gzip") throw Error("KEYWORD_COPY_ARGUMENTS");
   if (result.mode === "copy" && (!result.inspection || !result["copy-root"])) throw Error("KEYWORD_COPY_INSPECTION_REQUIRED");
   return result;
 }
 async function run(values) {
-  const input = args(values), options = { sourceDataDir: input["source-data"], scratchParent: input["scratch-parent"], includePrepared: input["include-prepared"] === "true" };
+  const input = args(values), options = { sourceDataDir: input["source-data"], scratchParent: input["scratch-parent"], includePrepared: input["include-prepared"] === "true",
+    ...(input["history-compression"] ? { historyCompression: input["history-compression"] } : {}) };
   if (input.output) {
     const output = path.resolve(input.output), source = path.resolve(input["source-data"]), operations = path.join(source, "operations");
     // Receipts may be created only in an explicitly named operations folder,
@@ -29,7 +31,8 @@ async function run(values) {
   // The console contains no business rows, paths inside runs, credentials or contact data.
   return { mode: input.mode, state: value.state || "inspected", fileCount: value.fileCount, bytes: value.bytes, inventorySha256: value.inventorySha256 || value.sourceInventorySha256,
     sourceWrites: 0, captureMode: value.captureMode, ...(input.mode === "inspect" ? { copyFileCount: value.copyFileCount, copyBytes: value.copyBytes, scratchAvailableBytes: value.scratchAvailableBytes,
-      ownScratchHardBytes: value.ownScratchHardBytes, conservativeRequiredBytes: value.conservativeRequiredBytes, canCopyWithReserve: value.canCopyWithReserve }
+      ownScratchHardBytes: value.ownScratchHardBytes, conservativeRequiredBytes: value.conservativeRequiredBytes, canCopyWithReserve: value.canCopyWithReserve,
+      ...(value.historyCompression ? { historyCompression: value.historyCompression, uncompressedCopyBytes: value.uncompressedCopyBytes, nonHistoryCopyBytes: value.nonHistoryCopyBytes, physicalCopyReservationBytes: value.physicalCopyReservationBytes } : {}) }
       : { copyRoot: value.copyRoot, captureManifestSha256: value.captureManifestSha256, sourcePreserved: value.sourcePreserved, elapsedMs: value.elapsedMs,
         originalOutputBodiesCopied: value.originalOutputBodiesCopied, originalOutputFileCount: value.originalOutputFileCount, ownScratchHardBytes: value.ownScratchHardBytes }) };
 }

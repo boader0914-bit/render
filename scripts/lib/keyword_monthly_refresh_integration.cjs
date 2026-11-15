@@ -84,7 +84,9 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
     if (closed || !isCollectionIdle()) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_BUSY" };
     return readStoredCollectionAdmission(dataDir, clock());
   }
-  const queue = createQueue({ dataDir,
+  // The compressed physical-copy worker gets new durable job identities while
+  // retaining the original activation and all previous-version job receipts.
+  const queue = createQueue({ dataDir, refreshVersion: "keyword-monthly-refresh-compressed-v2",
     readCompletedEvidence: intent => readCompletedKeywordEvidence({ dataDir, intent, readPostprocess, allowsDerivedUpdates }),
     canProcess: admission, idleIntervalMs: 30000,
     refresh: (evidence, intent, work = {}) => runWork(async () => {
@@ -97,6 +99,10 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
         const result = await refresh({ dataDir, codeRoot, scratchParent: path.resolve(require("node:os").tmpdir()), mode: "live",
         evidence, now: clock, signal: controller.signal,
         canPublish: async () => { const gate = await admission(); return gate.allowed; } });
+        for (const name of ["repeatedSource", "operatingPointerChanged"]) if (result?.[name] !== undefined && typeof result[name] !== "boolean") fail("KEYWORD_REFRESH_RESULT_INVALID");
+        // A reused receipt describes an earlier publication. Its saved pointer
+        // may no longer be current, so it cannot authorize retention cleanup.
+        if (result?.repeatedSource === true) return { ...result, operatingPointerChanged: false };
         if (["published", "unchanged", "complete"].includes(result?.status) && SHA.test(result.pointerSha256 || "") && !controller.signal.aborted && (await admission()).allowed) {
           try {
             await pruneKeywordMonthlyRefreshGenerations({ projectionDir: path.join(dataDir, "keyword_monthly_analysis"),
@@ -123,15 +129,31 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
     if (closed) return;
     if (reconciling) return reconciling;
     reconciling = (async () => {
-      const status = await queue.status(), activatedAt = status.activatedAt;
+      const status = await queue.status({ limit: 512 }), activatedAt = status.activatedAt;
       if (!iso(activatedAt)) return;
+      // A validated terminal job from the reviewed v1 worker already consumed
+      // this exact source event. Skip only redundant reconciliation signals;
+      // these historical receipts do not certify the current bundle/freshness.
+      // Unseen/truncated or unreadable metadata keeps the normal enqueue path.
+      const completed = new Set();
+      if (!status.errorCode && Array.isArray(status.items)) for (const item of status.items.slice(0, 512)) {
+        const intent = item?.intent;
+        if (item?.status !== "complete" || !SHA.test(item.jobId || "") || !iso(item.finishedAt)
+          || !intent || intent.refreshVersion !== "keyword-monthly-refresh-v1" || !RUN.test(intent.runId || "") || !keyword(intent.keyword)
+          || !SHA.test(intent.manifestSha256 || "") || !Object.hasOwn(intent, "scheduleOccurrenceId")
+          || intent.scheduleOccurrenceId !== null && !RUN.test(intent.scheduleOccurrenceId || "") || !keyword(intent.scope)
+          || !["published", "unchanged", "complete"].includes(item.result?.status) || !SHA.test(item.result?.pointerSha256 || "")) continue;
+        completed.add(JSON.stringify([intent.runId, intent.manifestSha256, intent.keyword, intent.scheduleOccurrenceId, intent.scope]));
+      }
       const snapshot = await readPostprocessList();
       if (!Array.isArray(snapshot?.items)) fail("KEYWORD_REFRESH_DB_INDEX_UNKNOWN");
       for (const row of snapshot.items.slice(0, 1024)) {
         if ((row.status || row.state) !== "complete" || !RUN.test(row.runId || "") || !iso(row.finishedAt) || Date.parse(row.finishedAt) < Date.parse(activatedAt)) continue;
         const r = await readJson(path.join(dataDir, "outputs", row.runId, "manifest.json"), 1024 * 1024), m = r.value;
         if (!keyword(m.keyword) || m.searchMode === "company" || m.collectionQuality?.status !== "complete" || !allowsDerivedUpdates(m)) continue;
-        await queue.enqueue({ runId: row.runId, keyword: m.keyword, manifestSha256: r.sha256, scheduleOccurrenceId: row.scheduleOccurrenceId || null });
+        const intent = { runId: row.runId, keyword: m.keyword, manifestSha256: r.sha256, scheduleOccurrenceId: row.scheduleOccurrenceId || null };
+        if (completed.has(JSON.stringify([intent.runId, intent.manifestSha256, intent.keyword, intent.scheduleOccurrenceId, intent.keyword]))) continue;
+        await queue.enqueue(intent);
       }
     })().catch(e => report("keyword_monthly_refresh_reconcile_failed", e)).finally(() => { reconciling = null; });
     return reconciling;
@@ -144,6 +166,8 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
   }
   async function close() { closed = true; if (timer) clearIntervalImpl(timer); timer = null; await queue.close(); if (reconciling) await reconciling; }
   return { start, close, signalCompletedRun, reconcile, status: async () => namespaceSupported ? { ...(await queue.status()), cleanup }
-    : { status: "needs_verification", readOnly: true, errorCode: "KEYWORD_REFRESH_OUTPUT_NAMESPACE_UNSUPPORTED", counts: null, items: null }, runOnce: () => queue.runOnce() };
+    : { status: "needs_verification", readOnly: true, errorCode: "KEYWORD_REFRESH_OUTPUT_NAMESPACE_UNSUPPORTED", counts: null, items: null,
+      refreshVersion: "keyword-monthly-refresh-compressed-v2", currentVersionCounts: null, historicalCountsByVersion: null,
+      currentVersionNeedsVerification: null, historicalNeedsVerification: null }, runOnce: () => queue.runOnce() };
 }
 module.exports = { createKeywordMonthlyRefreshIntegration, readCompletedKeywordEvidence, readStoredCollectionAdmission, holdActive };

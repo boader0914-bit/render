@@ -2,11 +2,13 @@
 // Explicit saved-source capture only. No application, database, collector,
 // provider, source/catalog factory or operating configuration is imported.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
+const zlib = require("node:zlib"), { Readable } = require("node:stream"), { pipeline } = require("node:stream/promises");
 const LIMITS = Object.freeze({ files: 15000, bytes: 4 * 1024 ** 3, fileBytes: 512 * 1024 ** 2, historyBytes: 512 * 1024 ** 2,
   depth: 10, reserveBytes: 256 * 1024 ** 2, copyChunkBytes: 1024 * 1024, milliseconds: 15 * 60 * 1000 });
 // statfs reports host capacity, not the service's /tmp quota. Never infer the
 // application quota from it. Keep this complete workflow below one GiB.
 const OWN_SCRATCH_HARD_BYTES = 1024 ** 3, CORE_COPY_MAX_BYTES = 512 * 1024 ** 2;
+const HISTORY_RELATIVE = "history/observations.jsonl";
 const SHA = /^[a-f0-9]{64}$/, GENERATION = /^generation-[a-f0-9]{32}$/;
 const hash = () => crypto.createHash("sha256"), canonical = value => Array.isArray(value) ? value.map(canonical)
   : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -93,30 +95,40 @@ async function inventory({ sourceDataDir, includePrepared = false, limits: suppl
   return { ...body, inventorySha256: digest(body), inspectedAt: new Date().toISOString(), sourceWrites: 0 };
 }
 async function inspect(options = {}) {
+  need(options.historyCompression === undefined || options.historyCompression === "gzip", "KEYWORD_COPY_COMPRESSION_INVALID");
   const capture = await inventory(options), scratchParent = path.resolve(options.scratchParent || os.tmpdir());
   await checkedPath(scratchParent, true); const free = await available(scratchParent), limits = validateLimits(options.limits);
   const core = capture.files.filter(row => !row.relative.startsWith("outputs/") && !row.relative.startsWith("monthly_reports/company_sources/")), copyBytes = core.reduce((sum, row) => sum + row.bytes, 0);
+  const gzip = options.historyCompression === "gzip", nonHistoryCopyBytes = core.filter(row => row.relative !== HISTORY_RELATIVE).reduce((sum, row) => sum + row.bytes, 0);
+  // Inspection reads metadata only; compressed size is deliberately unknown.
+  // Reserve the entire physical budget, then enforce actual bytes while copying.
+  const reservation = gzip ? CORE_COPY_MAX_BYTES : copyBytes;
   return { ...capture, captureMode: "core_physical_copy_with_readonly_original_outputs", copyFileCount: core.length, copyBytes,
+    ...(gzip ? { historyCompression: "gzip", uncompressedCopyBytes: copyBytes, nonHistoryCopyBytes, physicalCopyReservationBytes: reservation } : {}),
     referencedOutputFiles: capture.files.filter(row => row.relative.startsWith("outputs/")).length,
     scratchParent, scratchAvailableBytes: String(free), ownScratchHardBytes: OWN_SCRATCH_HARD_BYTES, coreCopyMaxBytes: CORE_COPY_MAX_BYTES,
-    conservativeRequiredBytes: String(BigInt(copyBytes) + BigInt(limits.reserveBytes)),
-    canCopyWithReserve: copyBytes <= CORE_COPY_MAX_BYTES && free > BigInt(copyBytes) + BigInt(limits.reserveBytes),
+    conservativeRequiredBytes: String(BigInt(reservation) + BigInt(limits.reserveBytes)),
+    canCopyWithReserve: (gzip ? nonHistoryCopyBytes < CORE_COPY_MAX_BYTES : copyBytes <= CORE_COPY_MAX_BYTES) && free > BigInt(reservation) + BigInt(limits.reserveBytes),
     copiedFiles: 0, sourceBodiesRead: "prepared_pointer_only_if_present", operatingMutations: 0 };
 }
 async function copy(options = {}) {
+  need(options.historyCompression === undefined || options.historyCompression === "gzip", "KEYWORD_COPY_COMPRESSION_INVALID");
   const limits = validateLimits(options.limits), prior = options.inspection;
   need(prior?.schemaVersion === 1 && SHA.test(prior.inventorySha256 || ""), "KEYWORD_COPY_INSPECTION_REQUIRED");
+  const gzip = options.historyCompression === "gzip";
+  need((prior.historyCompression === "gzip") === gzip, "KEYWORD_COPY_COMPRESSION_MISMATCH");
   const fresh = await inventory(options); need(fresh.inventorySha256 === prior.inventorySha256, "KEYWORD_COPY_SOURCE_CHANGED");
   const coreFiles = fresh.files.filter(row => !row.relative.startsWith("outputs/") && !row.relative.startsWith("monthly_reports/company_sources/")), coreBytes = coreFiles.reduce((sum, row) => sum + row.bytes, 0);
-  need(coreBytes <= CORE_COPY_MAX_BYTES, "KEYWORD_COPY_CORE_WORKING_SET_BOUND");
+  const nonHistoryBytes = coreFiles.filter(row => row.relative !== HISTORY_RELATIVE).reduce((sum, row) => sum + row.bytes, 0);
+  need(gzip ? nonHistoryBytes < CORE_COPY_MAX_BYTES : coreBytes <= CORE_COPY_MAX_BYTES, "KEYWORD_COPY_CORE_WORKING_SET_BOUND");
   const target = path.resolve(options.copyRoot || ""), parent = path.dirname(target);
   need(typeof options.copyRoot === "string" && path.isAbsolute(options.copyRoot) && !contained(fresh.sourceDataDir, target)
     && !contained(target, fresh.sourceDataDir) && /^keyword-monthly-source-[A-Za-z0-9_-]{8,120}$/.test(path.basename(target)), "KEYWORD_COPY_TARGET_INVALID");
-  await checkedPath(parent, true); need(await available(parent) > BigInt(coreBytes) + BigInt(limits.reserveBytes), "KEYWORD_COPY_DISK_RESERVE");
+  await checkedPath(parent, true); need(await available(parent) > BigInt(gzip ? CORE_COPY_MAX_BYTES : coreBytes) + BigInt(limits.reserveBytes), "KEYWORD_COPY_DISK_RESERVE");
   await fs.mkdir(target, { mode: 0o700 }); const data = path.join(target, "data"), control = path.join(target, "control");
   await fs.mkdir(data, { mode: 0o700 }); await fs.mkdir(control, { mode: 0o700 });
   const scratch = require("./keyword_monthly_scratch_budget.cjs").installScratchBudget(target);
-  const started = Date.now(), copied = [], journal = path.join(control, "copy-progress.jsonl");
+  const started = Date.now(), copied = [], journal = path.join(control, "copy-progress.jsonl"); let physicalBytes = 0;
   async function checkBudget() {
     scratch.assertCurrent();
     need(Date.now() - started <= limits.milliseconds, "KEYWORD_COPY_TIME_BOUND");
@@ -132,6 +144,8 @@ async function copy(options = {}) {
       need(same(before, await input.stat({ bigint: true })), "KEYWORD_COPY_SOURCE_CHANGED");
       while (true) {
         await checkBudget(); const r = await input.read(buffer, 0, buffer.length, position); if (!r.bytesRead) break;
+        need(position + r.bytesRead <= row.bytes, "KEYWORD_COPY_SOURCE_CHANGED");
+        need(physicalBytes + position + r.bytesRead <= CORE_COPY_MAX_BYTES, "KEYWORD_COPY_CORE_WORKING_SET_BOUND");
         first.update(buffer.subarray(0, r.bytesRead)); let written = 0;
         while (written < r.bytesRead) { const w = await out.write(buffer, written, r.bytesRead - written, position + written); need(w.bytesWritten > 0, "KEYWORD_COPY_WRITE_FAILED"); written += w.bytesWritten; }
         position += r.bytesRead; need(position <= row.bytes, "KEYWORD_COPY_SOURCE_CHANGED");
@@ -145,16 +159,61 @@ async function copy(options = {}) {
     const sha256 = first.digest("hex"); need(readPosition === position && second.digest("hex") === sha256, "KEYWORD_COPY_READBACK_FAILED");
     await fs.chmod(output, 0o400);
     const result = { relative: row.relative, bytes: position, sha256, sourceStamp: row.stamp, sourceUnchanged: true, physicalCopy: true };
+    physicalBytes += position;
     copied.push(result); await fs.appendFile(journal, JSON.stringify({ relative: result.relative, bytes: position, sha256 }) + "\n", { mode: 0o600 });
+  }
+  async function hashCompressedHistory(row) {
+    await checkBudget();
+    const source = path.join(fresh.sourceDataDir, ...row.relative.split("/")), storageRelative = HISTORY_RELATIVE + ".gz", output = path.join(data, ...storageRelative.split("/"));
+    const before = await checkedPath(source); need(JSON.stringify(stamp(before)) === JSON.stringify(row.stamp), "KEYWORD_COPY_SOURCE_CHANGED");
+    await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+    const input = await fs.open(source, native.constants.O_RDONLY | (native.constants.O_NOFOLLOW || 0)), out = await fs.open(output, "wx", 0o600);
+    const sourceHash = hash(), storedHash = hash(); let sourceBytes = 0, storedBytes = 0;
+    async function* chunks() {
+      const buffer = Buffer.alloc(limits.copyChunkBytes);
+      while (true) {
+        await checkBudget(); const r = await input.read(buffer, 0, buffer.length, sourceBytes); if (!r.bytesRead) break;
+        const chunk = Buffer.from(buffer.subarray(0, r.bytesRead)); sourceBytes += r.bytesRead;
+        need(sourceBytes <= row.bytes && sourceBytes <= limits.historyBytes, "KEYWORD_COPY_SOURCE_CHANGED"); sourceHash.update(chunk); yield chunk;
+      }
+    }
+    try {
+      need(same(before, await input.stat({ bigint: true })), "KEYWORD_COPY_SOURCE_CHANGED");
+      await pipeline(Readable.from(chunks()), zlib.createGzip({ level: 6, chunkSize: 64 * 1024 }), async compressed => {
+        for await (const chunk of compressed) {
+          await checkBudget(); need(physicalBytes + storedBytes + chunk.length <= CORE_COPY_MAX_BYTES, "KEYWORD_COPY_CORE_WORKING_SET_BOUND");
+          storedHash.update(chunk); let written = 0;
+          while (written < chunk.length) { const w = await out.write(chunk, written, chunk.length - written, storedBytes + written); need(w.bytesWritten > 0, "KEYWORD_COPY_WRITE_FAILED"); written += w.bytesWritten; }
+          storedBytes += chunk.length;
+        }
+      });
+      await out.sync(); need(sourceBytes === row.bytes && same(before, await input.stat({ bigint: true })) && same(before, await checkedPath(source)), "KEYWORD_COPY_SOURCE_CHANGED");
+    } finally { await input.close(); await out.close(); }
+    const sourceSha256 = sourceHash.digest("hex"), sha256 = storedHash.digest("hex"), second = hash(), expanded = hash(); let readBytes = 0, expandedBytes = 0;
+    const readback = await fs.open(output, "r");
+    async function* storedChunks() {
+      const buffer = Buffer.alloc(limits.copyChunkBytes);
+      while (true) { await checkBudget(); const r = await readback.read(buffer, 0, buffer.length, readBytes); if (!r.bytesRead) break; const chunk = Buffer.from(buffer.subarray(0, r.bytesRead)); readBytes += r.bytesRead; second.update(chunk); yield chunk; }
+    }
+    try {
+      await pipeline(Readable.from(storedChunks()), zlib.createGunzip(), async decompressed => {
+        for await (const chunk of decompressed) { expandedBytes += chunk.length; need(expandedBytes <= row.bytes && expandedBytes <= limits.historyBytes, "KEYWORD_COPY_READBACK_FAILED"); expanded.update(chunk); }
+      });
+    } finally { await readback.close(); }
+    need(readBytes === storedBytes && second.digest("hex") === sha256 && expandedBytes === sourceBytes && expanded.digest("hex") === sourceSha256, "KEYWORD_COPY_READBACK_FAILED");
+    await fs.chmod(output, 0o400); physicalBytes += storedBytes;
+    const result = { relative: row.relative, storageRelative, compression: "gzip", bytes: storedBytes, sha256, sourceBytes, sourceSha256, sourceStamp: row.stamp, sourceUnchanged: true, physicalCopy: true };
+    copied.push(result); await fs.appendFile(journal, JSON.stringify(result) + "\n", { mode: 0o600 });
   }
   try {
     await fs.writeFile(path.join(control, "capture-inspection.json"), JSON.stringify(fresh), { flag: "wx", mode: 0o600 });
-    for (const row of coreFiles) await hashCopyFile(row);
+    for (const row of coreFiles) await (gzip && row.relative === HISTORY_RELATIVE ? hashCompressedHistory(row) : hashCopyFile(row));
     const after = await inventory(options); need(after.inventorySha256 === fresh.inventorySha256, "KEYWORD_COPY_SOURCE_CHANGED");
     const manifest = { schemaVersion: 1, state: "complete", sourceDataDir: fresh.sourceDataDir, copyRoot: target, dataDir: data,
       sourceInventorySha256: fresh.inventorySha256, sourcePreserved: true, inputFiles: copied, fileCount: copied.length,
       bytes: copied.reduce((sum, row) => sum + row.bytes, 0), capturedAt: new Date().toISOString(), startedAt: new Date(started).toISOString(), elapsedMs: Date.now() - started,
       captureMode: "core_physical_copy_with_readonly_original_outputs", ownScratchHardBytes: OWN_SCRATCH_HARD_BYTES, observationIndexMode: "exact_streaming_fallback",
+      ...(gzip ? { historyCompression: "gzip", uncompressedCopyBytes: coreBytes, physicalCopyMaxBytes: CORE_COPY_MAX_BYTES } : {}),
       wholeSourcePhysicallyCopied: false, physicalCoreCopiesOnly: true, scratch: scratch.status(),
       originalOutputs: { root: path.join(fresh.sourceDataDir, "outputs"), fileCount: fresh.files.filter(row => row.relative.startsWith("outputs/")).length,
         files: fresh.files.filter(row => row.relative.startsWith("outputs/")).map(row => ({ ...row, relative: row.relative.slice(8) })), bodyReadsDuringCopy: 0, copied: false, writeAllowed: false },

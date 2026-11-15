@@ -142,6 +142,19 @@ test("refresh verification warning never replaces valid saved amounts with zero 
     ? { ...optionsFixture(), refreshStatus: { status: "needs_verification", counts: null } } : payloadFixture() }) });
   await ui.controller.open(); assert.match(ui.text(), /자동 반영 확인 필요/); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /400원/);
 });
+test("historical failures stay visible while current-version processing is reported separately without claiming freshness", async () => {
+  const status = { status: "needs_verification", started: true, errorCode: null, counts: { complete: 52, needs_verification: 20, queued: 1 },
+    currentVersionCounts: { queued: 1, deferred: 0, running: 0, complete: 0, needs_verification: 0 }, historicalNeedsVerification: 20 };
+  const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
+    ? { ...optionsFixture(), refreshStatus: status } : payloadFixture() }) });
+  await ui.controller.open(); assert.match(ui.text(), /이전 갱신 검수 이력 20건 보존/); assert.match(ui.text(), /현재 갱신 작업 처리 0 \/ 대기 1 \/ 이월 0/);
+  assert.match(ui.text(), /선택 자료의 실제 반영 범위/); assert.doesNotMatch(ui.text(), /최신 반영 완료/); assert.match(ui.text(), /400원/); assert.equal(ui.calls.length, 2);
+  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { errorCode: undefined }, { errorCode: {} }, { cleanup: { status: "needs_verification" } }, { cleanup: { status: "unknown" } }, { currentVersionCounts: { needs_verification: 1 } }, { currentVersionCounts: null }, { currentVersionCounts: { running: -1 } }]) {
+    const blocked = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
+      ? { ...optionsFixture(), refreshStatus: { ...status, ...patch } } : payloadFixture() }) });
+    await blocked.controller.open(); assert.match(blocked.text(), /자동 반영 확인 필요/); assert.doesNotMatch(blocked.text(), /이전 갱신 검수 이력 20건 보존/);
+  }
+});
 test("invalid or future cutoff produces an explanation without another request", async () => {
   const ui = mockUi(); await ui.controller.open(); for (const value of ["2026-02-30", "2026-10-31"]) { ui.field("cutoffDate").value = value; await ui.field("cutoffDate").fire("change"); await ui.apply(); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /관측 마감일은 오늘 이하/); }
 });

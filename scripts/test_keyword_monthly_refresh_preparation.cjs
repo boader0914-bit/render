@@ -53,6 +53,23 @@ test("recorded 21-day range crosses the month boundary; checkOut is not the whol
   assert.throws(() => H.rangeFromManifest({ ...m, bookingRangeDays: undefined }, e), { code: "KEYWORD_MONTHLY_REFRESH_RECORDED_STAY_RANGE_REQUIRED" });
   assert.throws(() => H.rangeFromManifest(m, { ...e, stayEndDate: "2026-10-31" }), { code: "KEYWORD_MONTHLY_REFRESH_MANIFEST_SCOPE_MISMATCH" });
 });
+test("copy admission distinguishes immutable contract, physical working-set and disk reserve failures", () => {
+  const base = { historyCompression: "gzip", copyBytes: 570 * 1024 * 1024, nonHistoryCopyBytes: 120 * 1024 * 1024,
+    physicalCopyReservationBytes: 512 * 1024 * 1024, ownScratchHardBytes: H.LIMITS.scratchBytes, canCopyWithReserve: true };
+  assert.equal(R.assertCopyAdmission(base), base);
+  assert.throws(() => R.assertCopyAdmission({ ...base, ownScratchHardBytes: base.ownScratchHardBytes + 1 }), { code: "KEYWORD_MONTHLY_REFRESH_COPY_CONTRACT_MISMATCH" });
+  assert.throws(() => R.assertCopyAdmission({ ...base, nonHistoryCopyBytes: 512 * 1024 * 1024 }), { code: "KEYWORD_MONTHLY_REFRESH_CORE_WORKING_SET_BOUND" });
+  assert.throws(() => R.assertCopyAdmission({ ...base, canCopyWithReserve: false }), { code: "KEYWORD_MONTHLY_REFRESH_COPY_DISK_RESERVE" });
+  assert.throws(() => R.assertCopyAdmission({ ...base, historyCompression: undefined }), { code: "KEYWORD_MONTHLY_REFRESH_CORE_WORKING_SET_BOUND" });
+});
+test("unreadable source preflight creates neither an owned preparation nor a copy prefix", async t => {
+  const f = await fixture(t, { mode: "live" }), pointer = await fs.readFile(path.join(f.liveDir, "current.json"));
+  await assert.rejects(R.refreshKeywordMonthlyFromCompletedRun(f.call, { fixture: true }), { code: "ENOENT" });
+  assert.deepEqual(await fs.readdir(f.scratchParent), []);
+  const operations = path.join(f.dataDir, "operations", "monthly-keyword-production-20261030");
+  assert.deepEqual(await fs.readdir(operations), []);
+  assert.deepEqual(await fs.readFile(path.join(f.liveDir, "current.json")), pointer);
+});
 test("scope plan adds collection-month evidence and only an existing immediate successor comparison", () => {
   const range = { stayMonths: ["2026-11"], collectionMonth: "2026-10" }, catalog = { scopes: [{ keyword: KEYWORD, month: "2026-12" }, { keyword: OTHER, month: "2027-01" }] };
   const candidates = ["2026-09", "2026-10", "2026-11", "2026-12"].map(month => ({ keyword: KEYWORD, month }));

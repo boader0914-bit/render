@@ -9,6 +9,16 @@ const capture = require("./lib/keyword_monthly_source_copy.cjs");
 const bundle = require("./lib/keyword_monthly_bundle.cjs");
 const { inspectManifest, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const JOB_MS = 60 * 60 * 1000, RESERVE_BYTES = 128 * 1024 * 1024;
+// Transport compression changes no observation, calculator or source identity.
+// The physical-copy and complete scratch limits remain 512MiB / 1GiB.
+function assertCopyAdmission(inspection) {
+  H.need(inspection && inspection.ownScratchHardBytes === H.LIMITS.scratchBytes, "KEYWORD_MONTHLY_REFRESH_COPY_CONTRACT_MISMATCH");
+  const reserved = inspection.historyCompression === "gzip" ? inspection.physicalCopyReservationBytes : inspection.copyBytes;
+  H.need(Number.isSafeInteger(reserved) && reserved >= 0 && reserved <= capture.CORE_COPY_MAX_BYTES
+    && (inspection.historyCompression !== "gzip" || Number.isSafeInteger(inspection.nonHistoryCopyBytes) && inspection.nonHistoryCopyBytes < capture.CORE_COPY_MAX_BYTES), "KEYWORD_MONTHLY_REFRESH_CORE_WORKING_SET_BOUND");
+  H.need(inspection.canCopyWithReserve === true, "KEYWORD_MONTHLY_REFRESH_COPY_DISK_RESERVE");
+  return inspection;
+}
 const safeCause = error => /^(?:KEYWORD_|ISOLATION_)[A-Z0-9_]{1,150}$/.test(error?.code || "") ? error.code : "KEYWORD_MONTHLY_REFRESH_PREPARATION_FAILED";
 async function maybeRead(file, maximum) { try { return await H.read(file, maximum); } catch (e) { if (e.code === "ENOENT") return null; throw e; } }
 function currentIso(now) { const value = new Date(typeof now === "function" ? now() : now ?? Date.now()); H.need(Number.isFinite(value.getTime()), "KEYWORD_MONTHLY_REFRESH_CLOCK_INVALID"); return value.toISOString(); }
@@ -75,19 +85,20 @@ async function removeOwnedTree(root, owner, expectedToken, expectedSourceKey) {
   await remove(root, 0); H.need((await H.read(owner, 16384)).sha256 === marker.sha256 && H.identity(rootStamp, await H.checked(root, true)), "KEYWORD_MONTHLY_REFRESH_CLEANUP_OWNERSHIP");
   await fs.unlink(owner); await fs.rmdir(root); return { removed: true, privateOwnedPathOnly: true, sourceKey: expectedSourceKey };
 }
-async function copyInDedicatedProcess({ codeRoot, nodePath, sourceDataDir, scratchParent, copyRoot, inspectionFile, execute = prep.runChild }) {
+async function copyInDedicatedProcess({ codeRoot, nodePath, sourceDataDir, scratchParent, copyRoot, inspectionFile, historyCompression = null, execute = prep.runChild }) {
+  H.need(historyCompression === null || historyCompression === "gzip", "KEYWORD_MONTHLY_REFRESH_COPY_CONTRACT_MISMATCH");
   const exporter = path.join(codeRoot, "scripts/export_keyword_monthly_source_copy.cjs"), reviewedFiles = [exporter, path.join(codeRoot, "scripts/lib/keyword_monthly_source_copy.cjs"), path.join(codeRoot, "scripts/lib/keyword_monthly_scratch_budget.cjs")];
   const pins = await Promise.all(reviewedFiles.map(file => prep.fileHash(file)));
   // capture.copy installs process-global fs guards while copying. It MUST run
   // in this disposable process, never in the live web process owning the queue.
   const child = await execute(nodePath, ["--no-warnings", "--max-old-space-size=256", exporter, "--mode", "copy", "--source-data", sourceDataDir,
-    "--scratch-parent", scratchParent, "--inspection", inspectionFile, "--copy-root", copyRoot, "--include-prepared", "false"], { cwd: codeRoot });
+    "--scratch-parent", scratchParent, "--inspection", inspectionFile, "--copy-root", copyRoot, "--include-prepared", "false", ...(historyCompression ? ["--history-compression", historyCompression] : [])], { cwd: codeRoot });
   H.need(child.exitCode === 0 && prep.childStderrSafe(child) && child.stdout?.state === "complete" && child.stdout.sourceWrites === 0 && child.stdout.sourcePreserved === true
     && child.stdout.copyRoot === copyRoot && child.stdout.originalOutputBodiesCopied === 0 && child.stdout.ownScratchHardBytes === H.LIMITS.scratchBytes, "KEYWORD_MONTHLY_REFRESH_COPY_CHILD_INVALID");
   for (const pin of pins) { const after = await prep.fileHash(pin.file); H.need(after.sha256 === pin.sha256 && H.same(after.stat, pin.stat), "KEYWORD_MONTHLY_REFRESH_COPY_CODE_CHANGED"); }
   return child.stdout;
 }
-async function defaultPrepare({ options, evidence, manifest, initial, jobDir, copyRoot, operationsDir, admission, startedAt }, dependencies = {}) {
+async function defaultPrepare({ options, evidence, manifest, initial, jobDir, copyRoot, operationsDir, admission, startedAt, sourceInspection }, dependencies = {}) {
   const codeRoot = options.codeRoot, nodePath = options.nodePath || await fs.realpath(process.execPath), pythonPath = options.pythonPath || "/usr/bin/python3.11";
   const guardPath = path.join(codeRoot, "scripts/reconstruct_keyword_monthly_source_copy.cjs"), launcherPath = path.join(codeRoot, "scripts/launch_keyword_monthly_isolated.py");
   const pins = { node: await prep.fileHash(nodePath), guard: await prep.fileHash(guardPath), launcher: await prep.fileHash(launcherPath) };
@@ -97,10 +108,10 @@ async function defaultPrepare({ options, evidence, manifest, initial, jobDir, co
     return prep.runChild(executable, argv, { ...childOptions, signal: options.signal, timeout: Math.min(prep.LIMITS.timeout, JOB_MS - elapsed) });
   };
   await admission();
-  const inspection = await capture.inspect({ sourceDataDir: options.dataDir, scratchParent: options.scratchParent, includePrepared: false });
-  H.need(inspection.canCopyWithReserve && inspection.copyBytes <= capture.CORE_COPY_MAX_BYTES && inspection.ownScratchHardBytes === H.LIMITS.scratchBytes, "KEYWORD_MONTHLY_REFRESH_SOURCE_COPY_BOUND");
+  const inspection = assertCopyAdmission(sourceInspection || await capture.inspect({ sourceDataDir: options.dataDir, scratchParent: options.scratchParent, includePrepared: false, historyCompression: "gzip" }));
+  H.need(inspection.historyCompression === "gzip", "KEYWORD_MONTHLY_REFRESH_COPY_CONTRACT_MISMATCH");
   const inspectionFile = path.join(jobDir, "capture-inspection.json"); await prep.writeNew(inspectionFile, inspection);
-  const copied = await copyInDedicatedProcess({ codeRoot, nodePath, sourceDataDir: options.dataDir, scratchParent: options.scratchParent, copyRoot, inspectionFile, execute });
+  const copied = await copyInDedicatedProcess({ codeRoot, nodePath, sourceDataDir: options.dataDir, scratchParent: options.scratchParent, copyRoot, inspectionFile, historyCompression: "gzip", execute });
   await H.writeNew(path.join(copyRoot, "refresh-owner.json"), { schemaVersion: 1, token: options.ownerToken, sourceKey: H.sourceKey(evidence), root: copyRoot });
   H.need(copied.state === "complete" && copied.sourceWrites === 0 && copied.sourcePreserved === true, "KEYWORD_MONTHLY_REFRESH_SOURCE_COPY_INVALID");
   const captured = await prep.read(path.join(copyRoot, "control/capture-complete.json"));
@@ -178,6 +189,14 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
   // A prior private copy from another preparation is never deleted or ignored.
   const other = (await fs.readdir(options.scratchParent, { withFileTypes: true })).filter(e => e.name.startsWith("keyword-monthly-source-") || e.name.startsWith("refresh-copy-"));
   H.need(other.length === 0, "KEYWORD_MONTHLY_REFRESH_OTHER_PREPARATION_PRESENT");
+  // Inspect before owning any copy folder. A known size/reserve rejection must
+  // not create a prefix which blocks later independent jobs. Foreign or
+  // uncertain preparations above still fail closed and remain untouched.
+  let sourceInspection = null;
+  if (!(dependencies.fixture === true && dependencies.prepare)) {
+    await admission();
+    sourceInspection = assertCopyAdmission(await capture.inspect({ sourceDataDir: options.dataDir, scratchParent: options.scratchParent, includePrepared: false, historyCompression: "gzip" }));
+  }
   const token = crypto.randomUUID(), jobDir = path.join(operationsDir, "refresh-job-" + token), copyContainer = path.join(options.scratchParent, "refresh-copy-" + token), copyRoot = path.join(copyContainer, "keyword-monthly-source-" + token);
   options.ownerToken = token; await fs.mkdir(jobDir, { mode: 0o700 }); await H.checked(jobDir, true);
   await H.writeNew(path.join(jobDir, "refresh-owner.json"), { schemaVersion: 1, token, sourceKey, root: jobDir });
@@ -192,7 +211,7 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
     await H.writeNew(path.join(copyContainer, "refresh-owner.json"), { schemaVersion: 1, token, sourceKey, root: copyContainer, copyRoot });
     await admission();
     const prepare = dependencies.fixture === true && dependencies.prepare ? dependencies.prepare : defaultPrepare;
-    prepared = await prepare({ options, evidence, manifest, initial, jobDir, copyRoot, operationsDir, admission, startedAt });
+    prepared = await prepare({ options, evidence, manifest, initial, jobDir, copyRoot, operationsDir, admission, startedAt, sourceInspection });
     H.need(prepared && Array.isArray(prepared.inputs) && prepared.inputs.length > 0 && prepared.providerCalls === 0 && prepared.sourceWrites === 0 && prepared.strictIsolationVerified === true
       && H.SHA.test(prepared.captureSha256 || "") && H.SHA.test(prepared.sourceInventorySha256 || "") && H.validIso(prepared.capturedAt) && H.validIso(prepared.prepDate), "KEYWORD_MONTHLY_REFRESH_PREPARATION_INVALID");
     const expectedScopes = prepared.inputs.flatMap(row => row.exposeScopes);
@@ -274,7 +293,7 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
     throw Object.assign(H.fault(code, causeCode), { ...(deferredCleanupVerified ? { deferred: true } : {}), ...(publicationUncertain ? { publicationState: "pointer_was_promoted_verify_current" } : {}) });
   }
 }
-module.exports = { refreshKeywordMonthlyFromCompletedRun, manifestEvidence, planCatalog, verifyPublished, defaultPrepare, copyInDedicatedProcess, removeOwnedTree, JOB_MS };
+module.exports = { refreshKeywordMonthlyFromCompletedRun, manifestEvidence, planCatalog, verifyPublished, defaultPrepare, copyInDedicatedProcess, removeOwnedTree, assertCopyAdmission, JOB_MS };
 if (require.main === module) {
   // Admission and the exact durable completion reader belong to the trusted
   // host adapter. A bare CLI cannot silently skip those callback contracts.

@@ -124,12 +124,14 @@ test("production prepared reads own the existing analytical lease until the full
 test("Git-normalized collection, pacing, protection and held runtime sources remain at approved release", () => {
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",
     "scripts/keyword_worker_scheduler.cjs", "scripts/collector_broker.cjs", "scripts/collector_dispatch.cjs",
-    "scripts/operating_web_collector.cjs", "scripts/lib/kosis.cjs", "scripts/lib/regional_market_bootstrap.cjs",
+    "scripts/operating_web_collector.cjs", "scripts/collector_worker.cjs", "scripts/lib/kosis.cjs", "scripts/lib/regional_market_bootstrap.cjs",
     "scripts/lib/regional_market_missing_weekly.cjs", "scripts/naver_request_pacing.cjs", "scripts/collector_requests.cjs",
-    "scripts/lib/keyword_monthly_refresh.cjs", "scripts/lib/monthly_reports.cjs",
+    // The separately versioned derived refresh queue changes in this release;
+    // its history preservation/admission/deduplication have dedicated tests.
+    "scripts/lib/monthly_reports.cjs",
     "web/keyword-monthly-dashboard-model.js", "web/keyword-monthly-benchmark.js"];
   for (const file of protectedFiles) {
-    const baseline = execFileSync("git", ["show", `c29bf467999ae7d7643e42f7d8506972590494da:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+    const baseline = execFileSync("git", ["show", `e9cf9b61cf2f9123edb5db40b2520d467cfc0e0b:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
     const normalizedHash = bytes => createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
     assert.equal(normalizedHash(fs.readFileSync(path.join(root, file))), normalizedHash(baseline), file);
   }

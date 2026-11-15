@@ -53,7 +53,35 @@ test("fresh preparation receives an advancing clock callback rather than a froze
     createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({}) }; },
     refresh: async options => { assert.equal(typeof options.now, "function"); assert.equal(options.mode, "live"); instant += 5000; observedClock = options.now(); return { status: "staged" }; }
   });
+  assert.equal(callbacks.refreshVersion, "keyword-monthly-refresh-compressed-v2");
   await callbacks.refresh({}, {}); assert.equal(observedClock, "2026-10-30T10:00:05.000Z"); await integration.close();
+});
+
+test("a reused source receipt is historical metadata and never authorizes cleanup of its old pointer", async t => {
+  const f = await fixture(t); let callbacks, refreshes = 0;
+  const original = Object.freeze({ status: "published", pointerSha256: "a".repeat(64), generation: "b".repeat(32), repeatedSource: true, operatingPointerChanged: true });
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, now: () => new Date(at), isCollectionIdle: () => true,
+    readPostprocess: async () => null, readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({ status: "available" }) }; },
+    refresh: async () => { refreshes++; return original; }
+  }); t.after(() => integration.close());
+  // There is deliberately no bundle/current.json. Any retention attempt would
+  // fail and incorrectly create a new cleanup warning for a past publication.
+  const value = await callbacks.refresh({}, {}); assert.equal(refreshes, 1); assert.equal(value.repeatedSource, true); assert.equal(value.operatingPointerChanged, false);
+  assert.equal(value.pointerSha256, original.pointerSha256); assert.equal(original.operatingPointerChanged, true); assert.equal((await integration.status()).cleanup, null);
+  await assert.rejects(fs.lstat(path.join(f.root, "keyword_monthly_analysis")), { code: "ENOENT" });
+});
+
+test("malformed optional reuse metadata fails before any cleanup or successful normalization", async t => {
+  for (const invalid of [{ repeatedSource: "true" }, { repeatedSource: true, operatingPointerChanged: "true" }]) await t.test(JSON.stringify(invalid), async st => {
+    const f = await fixture(st); let callbacks;
+    const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, now: () => new Date(at), isCollectionIdle: () => true,
+      readPostprocess: async () => null, readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+      createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({}) }; },
+      refresh: async () => ({ status: "published", pointerSha256: "a".repeat(64), ...invalid })
+    }); st.after(() => integration.close());
+    await assert.rejects(callbacks.refresh({}, {}), { code: "KEYWORD_REFRESH_RESULT_INVALID" }); assert.equal((await integration.status()).cleanup, null);
+  });
 });
 test("a failed independent enqueue cannot fail the original postprocess caller", async t => {
   const f = await fixture(t), logs = [];
@@ -74,4 +102,119 @@ test("reconciliation ignores historical records and only signals newly completed
     ] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
     createQueue: () => ({ enqueue: async x => signals.push(x), status: async () => ({ activatedAt }), close: async () => {} }) });
   await integration.reconcile(); assert.equal(signals.length, 1); assert.deepEqual(signals[0], f.intent); await integration.close();
+});
+
+test("compressed-version reconciliation preserves the durable postprocess order and future signals share its queue", async t => {
+  const f = await fixture(t), signals = [], activatedAt = "2026-10-30T09:00:00.000Z"; let callbacks;
+  for (const n of [2, 3]) await f.write(`outputs/run_${n}/manifest.json`, f.m);
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, readPostprocess: async () => null,
+    readPostprocessList: async () => ({ items: [3, 2, 1].map(n => ({ runId: `run_${n}`, status: "complete", finishedAt: at, scheduleOccurrenceId: `rotation_2026-10-30_${n}` })) }),
+    allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: options => { callbacks = options; return { enqueue: async value => { signals.push(value); return { status: "queued" }; }, status: async () => ({ activatedAt }), close: async () => {} }; }
+  }); t.after(() => integration.close());
+  await integration.reconcile(); assert.equal(callbacks.refreshVersion, "keyword-monthly-refresh-compressed-v2"); assert.deepEqual(signals.map(value => value.runId), ["run_3", "run_2", "run_1"]);
+  const value = await integration.signalCompletedRun("run_1", { historyPayload: { keyword: f.m.keyword }, manifestSha256: f.intent.manifestSha256, scheduleOccurrenceId: f.intent.scheduleOccurrenceId });
+  assert.equal(value.status, "queued"); assert.equal(signals.at(-1).runId, "run_1"); assert.equal(signals.at(-1).manifestSha256, f.intent.manifestSha256);
+});
+
+test("unsupported output namespaces report unknown cohort counts without activating any worker", async t => {
+  const f = await fixture(t); let starts = 0;
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, outputsDir: path.join(f.root, "not-the-output-namespace"),
+    readPostprocess: async () => null, readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: () => ({ start: async () => { starts++; }, close: async () => {}, status: async () => { throw Error("not called"); } })
+  }); t.after(() => integration.close());
+  const state = await integration.status(); assert.equal(state.status, "needs_verification"); assert.equal(state.errorCode, "KEYWORD_REFRESH_OUTPUT_NAMESPACE_UNSUPPORTED");
+  for (const name of ["counts", "items", "currentVersionCounts", "historicalCountsByVersion", "currentVersionNeedsVerification", "historicalNeedsVerification"]) assert.equal(state[name], null);
+  assert.equal(state.refreshVersion, "keyword-monthly-refresh-compressed-v2"); await integration.start(); assert.equal(starts, 0);
+});
+
+function completedMetadata(intent, patch = {}) {
+  const normalized = { ...intent, scope: intent.scope ?? intent.keyword, scheduleOccurrenceId: intent.scheduleOccurrenceId ?? null, refreshVersion: intent.refreshVersion ?? "keyword-monthly-refresh-v1" };
+  return { jobId: hash(JSON.stringify([normalized.refreshVersion, normalized.runId, normalized.manifestSha256, normalized.keyword, normalized.scope, normalized.scheduleOccurrenceId])),
+    intent: normalized, status: "complete", finishedAt: at, result: { status: "published", pointerSha256: "a".repeat(64) }, ...patch };
+}
+function reconcileReader(f, items, overrides = {}) {
+  const signals = [], statusCalls = [];
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root,
+    readPostprocess: async () => null, readPostprocessList: async () => ({ items: [{ runId: "run_1", status: "complete", finishedAt: at, scheduleOccurrenceId: f.intent.scheduleOccurrenceId }] }),
+    allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: () => ({ enqueue: async value => { signals.push(value); return { status: "queued" }; }, close: async () => {},
+      status: async options => { statusCalls.push(options); return { activatedAt: "2026-10-30T09:00:00.000Z", refreshVersion: "keyword-monthly-refresh-compressed-v2", status: "needs_verification", errorCode: null, items, ...overrides }; } })
+  });
+  return { integration, signals, statusCalls };
+}
+
+test("reconciliation skips only exact historical source events while retaining all 20 failed events in current order", async t => {
+  const f = await fixture(t), items = [], completions = [], signals = [];
+  for (let n = 1; n <= 72; n++) {
+    if (n > 1) await f.write(`outputs/run_${n}/manifest.json`, f.m);
+    const intent = { ...f.intent, runId: `run_${n}`, scheduleOccurrenceId: `rotation_2026-10-30_${n}` };
+    items.push(completedMetadata(intent, n <= 52 ? {} : { status: "needs_verification", result: null }));
+    completions.unshift({ runId: intent.runId, scheduleOccurrenceId: intent.scheduleOccurrenceId, status: "complete", finishedAt: at });
+  }
+  let bound;
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, readPostprocess: async () => null,
+    readPostprocessList: async () => ({ items: completions }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+    createQueue: () => ({ close: async () => {}, enqueue: async value => signals.push(value), status: async options => { bound = options; return { activatedAt: "2026-10-30T09:00:00.000Z", refreshVersion: "keyword-monthly-refresh-compressed-v2", status: "needs_verification", errorCode: null, items }; } })
+  }); t.after(() => integration.close());
+  const originalMetadata = JSON.stringify(items); await integration.reconcile();
+  assert.deepEqual(bound, { limit: 512 }); assert.deepEqual(signals.map(value => value.runId), Array.from({ length: 20 }, (_, i) => `run_${72 - i}`));
+  assert.equal(JSON.stringify(items), originalMetadata); assert.equal(signals.length, 20);
+});
+
+test("prior completion optimization never guesses missing or changed source identity", async t => {
+  const cases = [
+    ["run", item => { item.intent.runId = "other_run"; }],
+    ["manifest", item => { item.intent.manifestSha256 = "f".repeat(64); }],
+    ["keyword", item => { item.intent.keyword = "경남 글램핑"; }],
+    ["slot", item => { item.intent.scheduleOccurrenceId = "rotation_2026-10-30_5"; }],
+    ["null_slot", item => { item.intent.scheduleOccurrenceId = null; }],
+    ["missing_slot", item => { delete item.intent.scheduleOccurrenceId; }],
+    ["scope", item => { item.intent.scope = "경남글램핑:2026-10"; }],
+    ["missing_scope", item => { delete item.intent.scope; }],
+    ["missing_version", item => { delete item.intent.refreshVersion; }],
+    ["current_version", item => { item.intent.refreshVersion = "keyword-monthly-refresh-compressed-v2"; }],
+    ["unknown_valid_version", item => { Object.assign(item, completedMetadata({ ...item.intent, refreshVersion: "keyword-monthly-refresh-v9" })); }],
+    ["queued", item => { item.status = "queued"; }], ["running", item => { item.status = "running"; }],
+    ["deferred", item => { item.status = "deferred"; }], ["needs_verification", item => { item.status = "needs_verification"; }],
+    ["no_result", item => { item.result = null; }], ["unknown_result", item => { item.result.status = "unknown"; }],
+    ["bad_pointer", item => { item.result.pointerSha256 = "unknown"; }], ["no_finish", item => { item.finishedAt = null; }],
+    ["bad_job_identity", item => { item.jobId = "not-a-sha"; }]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async st => {
+    const f = await fixture(st), item = completedMetadata(f.intent); mutate(item); const view = reconcileReader(f, [item]); st.after(() => view.integration.close());
+    await view.integration.reconcile(); assert.equal(view.signals.length, 1); assert.deepEqual(view.signals[0], f.intent);
+  });
+});
+
+test("unseen completions beyond the 512 item window or errored metadata use normal enqueue", async t => {
+  for (const kind of ["outside_window", "missing_items", "unreadable_items", "status_error"]) await t.test(kind, async st => {
+    const f = await fixture(st), target = completedMetadata(f.intent);
+    let items = [target], overrides = {};
+    if (kind === "outside_window") items = Array.from({ length: 512 }, (_, n) => completedMetadata({ ...f.intent, runId: `unrelated_run_${n}` }));
+    if (kind === "missing_items") items = undefined;
+    if (kind === "unreadable_items") items = null;
+    if (kind === "status_error") overrides = { errorCode: "KEYWORD_REFRESH_JOURNAL_BOUND" };
+    const view = reconcileReader(f, items, overrides); st.after(() => view.integration.close()); await view.integration.reconcile();
+    assert.equal(view.signals.length, 1); assert.deepEqual(view.statusCalls, [{ limit: 512 }]);
+  });
+});
+
+test("exact null occurrence and default keyword scope may reuse a validated prior completion", async t => {
+  const f = await fixture(t); f.intent.scheduleOccurrenceId = null; const view = reconcileReader(f, [completedMetadata(f.intent)]); t.after(() => view.integration.close());
+  await view.integration.reconcile(); assert.deepEqual(view.signals, []); assert.deepEqual(view.statusCalls, [{ limit: 512 }]);
+});
+
+test("skipping an already completed source only reads the real v1 journal and does not create a v2 job or certify a current bundle", async t => {
+  const f = await fixture(t), { createKeywordMonthlyRefresh } = require("./lib/keyword_monthly_refresh.cjs");
+  const legacy = createKeywordMonthlyRefresh({ dataDir: f.root, now: () => new Date(at), readCompletedEvidence: async intent => ({ ...intent, status: "complete", quality: "complete", postprocessStatus: "complete" }),
+    refresh: async () => ({ status: "published", pointerSha256: "a".repeat(64) }) });
+  const job = await legacy.enqueue(f.intent); await legacy.runOnce(); await legacy.close();
+  const file = path.join(legacy.directory, "jobs", job.jobId + ".json"), original = await fs.readFile(file);
+  const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, now: () => new Date(at), readPostprocess: async () => null,
+    readPostprocessList: async () => ({ items: [{ runId: f.intent.runId, scheduleOccurrenceId: f.intent.scheduleOccurrenceId, status: "complete", finishedAt: at }] }),
+    allowsDerivedUpdates: () => true, runWork: async work => work() }); t.after(() => integration.close());
+  await integration.reconcile(); assert.deepEqual(await fs.readFile(file), original); assert.deepEqual(await fs.readdir(path.dirname(file)), [job.jobId + ".json"]);
+  const state = await integration.status(); assert.deepEqual(state.currentVersionCounts, {}); assert.deepEqual(state.historicalCountsByVersion["keyword-monthly-refresh-v1"], { complete: 1 }); assert.equal(state.cleanup, null);
+  await assert.rejects(fs.lstat(path.join(f.root, "keyword_monthly_analysis")), { code: "ENOENT" });
 });

@@ -15,6 +15,7 @@ async function fixture(t, options = {}) {
 test("cold GET status does not mkdir, recover, enqueue or start work", async t => {
   let calls = 0; const f = await fixture(t, { readCompletedEvidence: async () => { calls++; }, refresh: async () => { calls++; } });
   const result = await f.q.status(); assert.equal(result.status, "available"); assert.equal(result.readOnly, true); assert.equal(result.initialized, false); assert.deepEqual(result.items, []); assert.equal(calls, 0);
+  assert.deepEqual(result.currentVersionCounts, {}); assert.deepEqual(result.historicalCountsByVersion, {}); assert.equal(result.currentVersionNeedsVerification, 0); assert.equal(result.historicalNeedsVerification, 0);
   await assert.rejects(fs.lstat(path.join(f.dataDir, "keyword_monthly_refresh")), { code: "ENOENT" });
 });
 
@@ -165,6 +166,94 @@ test("unsafe hardlinked record and corrupt journal never reset to empty success"
   const second = path.join(f.dataDir, "alias.json"); await fs.link(file, second);
   const q2 = createKeywordMonthlyRefresh({ dataDir: f.dataDir, readCompletedEvidence: async i => proof(i), refresh: async () => published }); t.after(() => q2.close());
   const s = await q2.status(); assert.equal(s.status, "needs_verification"); assert.equal(s.items, null); assert.equal(s.counts, null); assert.equal((await q2.enqueue(intent())).status, "needs_verification");
+  assert.equal(s.currentVersionCounts, null); assert.equal(s.historicalCountsByVersion, null); assert.equal(s.currentVersionNeedsVerification, null); assert.equal(s.historicalNeedsVerification, null);
+});
+
+const COMPRESSED_VERSION = "keyword-monthly-refresh-compressed-v2";
+function resumedQueue(f, options = {}) {
+  return createKeywordMonthlyRefresh({ dataDir: f.dataDir, now: f.now, refreshVersion: COMPRESSED_VERSION,
+    readCompletedEvidence: async value => proof(value), refresh: async () => published, ...options });
+}
+async function setJournalState(f, row, status, extra = {}) {
+  const file = path.join(f.q.directory, "jobs", row.jobId + ".json"), value = JSON.parse(await fs.readFile(file, "utf8"));
+  Object.assign(value, { status, attempts: 1, startedAt: f.now().toISOString(), nextAttemptAt: status === "queued" || status === "deferred" ? f.now().toISOString() : null,
+    finishedAt: status === "complete" || status === "needs_verification" ? f.now().toISOString() : null,
+    reasonCode: status === "needs_verification" ? "KEYWORD_SOURCE_CORE_COPY_BOUND" : null, result: status === "complete" ? { ...published } : null }, extra);
+  await fs.writeFile(file, JSON.stringify(value)); return { file, bytes: await fs.readFile(file) };
+}
+
+test("compressed version preserves all 20 prior failures and 52 complete receipts and reports both cohorts", async t => {
+  const f = await fixture(t), originals = [];
+  for (let n = 1; n <= 72; n++) originals.push(await f.q.enqueue(intent(n)));
+  await f.q.close();
+  const frozen = [];
+  for (let n = 0; n < originals.length; n++) frozen.push(await setJournalState(f, originals[n], n < 20 ? "needs_verification" : "complete"));
+  const activation = path.join(f.q.directory, "activation.json"), activationBytes = await fs.readFile(activation); let calls = 0;
+  const current = resumedQueue(f, { refresh: async () => { calls++; return { ...published, repeatedSource: true, operatingPointerChanged: false }; } }); t.after(() => current.close());
+  const cold = await current.status({ limit: 0 });
+  assert.equal(cold.status, "needs_verification"); assert.deepEqual(cold.counts, { needs_verification: 20, complete: 52 }); assert.deepEqual(cold.items, []);
+  assert.deepEqual(cold.currentVersionCounts, {}); assert.deepEqual(cold.historicalCountsByVersion["keyword-monthly-refresh-v1"], { needs_verification: 20, complete: 52 });
+  assert.equal(cold.unresolvedNeedsVerification, 20); assert.equal(cold.currentVersionNeedsVerification, 0); assert.equal(cold.historicalNeedsVerification, 20);
+  const job = await current.enqueue(intent(1)); assert.notEqual(job.jobId, originals[0].jobId); const done = await current.runOnce();
+  assert.equal(done.status, "complete"); assert.equal(done.result.repeatedSource, true); assert.equal(done.result.operatingPointerChanged, false); assert.equal(calls, 1);
+  assert.equal((await current.enqueue(intent(1))).jobId, job.jobId); assert.equal(await current.runOnce(), null); assert.equal(calls, 1);
+  const state = await current.status({ limit: 1 }); assert.equal(state.items.length, 1); assert.equal(state.status, "needs_verification");
+  assert.deepEqual(state.currentVersionCounts, { complete: 1 }); assert.deepEqual(state.counts, { needs_verification: 20, complete: 53 });
+  assert.deepEqual(state.historicalCountsByVersion, cold.historicalCountsByVersion); assert.equal(state.historicalNeedsVerification, 20);
+  for (const value of frozen) assert.deepEqual(await fs.readFile(value.file), value.bytes); assert.deepEqual(await fs.readFile(activation), activationBytes);
+});
+
+test("a current worker recovers only its own interrupted work and never executes other versions", async t => {
+  const f = await fixture(t), oldRows = [];
+  for (let n = 1; n <= 5; n++) oldRows.push(await f.q.enqueue(intent(n)));
+  await f.q.close(); const frozen = [];
+  for (const [n, status] of ["running", "queued", "deferred", "needs_verification", "complete"].entries()) frozen.push(await setJournalState(f, oldRows[n], status));
+  const future = resumedQueue(f, { refreshVersion: "keyword-monthly-refresh-v9" }), futureRow = await future.enqueue(intent(6)); await future.close(); frozen.push(await setJournalState(f, futureRow, "running"));
+  const writer = resumedQueue(f), own = await writer.enqueue(intent(7)); await writer.close(); const ownFile = await setJournalState(f, own, "running"); let calls = 0;
+  const current = resumedQueue(f, { refresh: async (e, i, work) => { calls++; assert.equal(i.runId, intent(7).runId); assert.equal(work.attempt, 2); assert.ok(work.recoveredAt); return published; } }); t.after(() => current.close());
+  const cold = await current.status(); assert.equal(cold.items.find(row => row.jobId === own.jobId).status, "running"); assert.deepEqual(await fs.readFile(ownFile.file), ownFile.bytes);
+  const done = await current.runOnce(); assert.equal(done.jobId, own.jobId); assert.equal(done.status, "complete"); assert.equal(await current.runOnce(), null); assert.equal(calls, 1);
+  const state = await current.status(); assert.deepEqual(state.currentVersionCounts, { complete: 1 }); assert.equal(state.historicalCountsByVersion["keyword-monthly-refresh-v9"].running, 1);
+  for (const value of frozen) assert.deepEqual(await fs.readFile(value.file), value.bytes);
+});
+
+test("historical pending work still consumes the global bound without being executed by a new version", async t => {
+  const f = await fixture(t), old = await f.q.enqueue(intent()); await f.q.close();
+  const oldFile = path.join(f.q.directory, "jobs", old.jobId + ".json"), before = await fs.readFile(oldFile);
+  const current = resumedQueue(f, { maxPending: 1 }); t.after(() => current.close());
+  assert.equal((await current.enqueue(intent())).errorCode, "KEYWORD_REFRESH_QUEUE_FULL"); assert.equal(await current.runOnce(), null);
+  const state = await current.status(); assert.equal(state.errorCode, "KEYWORD_REFRESH_QUEUE_FULL"); assert.equal(state.status, "needs_verification"); assert.deepEqual(state.currentVersionCounts, {});
+  assert.deepEqual(state.counts, { queued: 1 }); assert.deepEqual(state.historicalCountsByVersion["keyword-monthly-refresh-v1"], { queued: 1 }); assert.deepEqual(await fs.readFile(oldFile), before);
+});
+
+test("version count dictionaries safely preserve unknown valid versions without prototype inheritance", async t => {
+  const f = await fixture(t, { refreshVersion: "__proto__" }); await f.q.enqueue(intent()); await f.q.close();
+  const current = resumedQueue(f); t.after(() => current.close()); const result = await current.status({ limit: 0 });
+  assert.equal(Object.hasOwn(result.historicalCountsByVersion, "__proto__"), true); assert.deepEqual(result.historicalCountsByVersion.__proto__, { queued: 1 });
+  assert.equal(Object.getPrototypeOf(result.historicalCountsByVersion), Object.prototype); assert.equal(Object.prototype.queued, undefined); assert.deepEqual(result.currentVersionCounts, {}); assert.equal(await current.runOnce(), null);
+});
+
+test("tampered version identity or source SHA is unknown and never an empty successful cohort", async t => {
+  for (const patch of [{ refreshVersion: "unregistered-version" }, { manifestSha256: "not-a-sha" }]) await t.test(Object.keys(patch)[0], async st => {
+    const f = await fixture(st), job = await f.q.enqueue(intent()), file = path.join(f.q.directory, "jobs", job.jobId + ".json"); await f.q.close();
+    const row = JSON.parse(await fs.readFile(file)); Object.assign(row.intent, patch); await fs.writeFile(file, JSON.stringify(row)); const before = await fs.readFile(file);
+    const current = resumedQueue(f); st.after(() => current.close()); const result = await current.status();
+    assert.equal(result.status, "needs_verification"); assert.equal(result.counts, null); assert.equal(result.currentVersionCounts, null); assert.equal(result.historicalCountsByVersion, null);
+    assert.equal(result.currentVersionNeedsVerification, null); assert.equal(result.historicalNeedsVerification, null); assert.deepEqual(await fs.readFile(file), before);
+  });
+});
+
+test("source reuse and per-call pointer change metadata are strict optional booleans", async t => {
+  for (const value of [true, false]) await t.test(String(value), async st => {
+    const f = await fixture(st, { refresh: async () => ({ ...published, repeatedSource: value, operatingPointerChanged: !value }) });
+    const job = await f.q.enqueue(intent()), done = await f.q.runOnce(); assert.equal(done.result.repeatedSource, value); assert.equal(done.result.operatingPointerChanged, !value); await f.q.close();
+    const resumed = createKeywordMonthlyRefresh({ dataDir: f.dataDir, now: f.now, readCompletedEvidence: async i => proof(i), refresh: async () => published }); st.after(() => resumed.close());
+    const saved = (await resumed.status()).items.find(row => row.jobId === job.jobId); assert.equal(saved.result.repeatedSource, value); assert.equal(saved.result.operatingPointerChanged, !value);
+  });
+  for (const name of ["repeatedSource", "operatingPointerChanged"]) for (const value of ["true", 0, null]) await t.test(name + ":" + String(value), async st => {
+    const f = await fixture(st, { refresh: async () => ({ ...published, [name]: value }) }); await f.q.enqueue(intent()); const done = await f.q.runOnce();
+    assert.equal(done.status, "needs_verification"); assert.equal(done.reasonCode, "KEYWORD_REFRESH_RESULT_INVALID"); assert.equal(done.result, null);
+  });
 });
 
 test("refresh results persist only whitelisted bounded metadata and reject provider use", async t => {

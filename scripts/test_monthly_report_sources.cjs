@@ -12,6 +12,21 @@ const { YIELD_CODE } = require("./lib/cooperative_work_checkpoint.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+test("an upstream history stream error cannot turn a truncated saved history into a successful selector", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-history-stream-error-"));
+  t.after(async () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
+  await fs.mkdir(path.join(root, "company_master")); await fs.mkdir(path.join(root, "history"));
+  await fs.writeFile(path.join(root, "company_master/companies.json"), '{"companies":{}}');
+  const history = path.join(root, "history/observations.jsonl"); await fs.writeFile(history, "");
+  const native = require("node:fs"), { Readable } = require("node:stream"), original = native.createReadStream;
+  native.createReadStream = (file, options) => file !== history ? original(file, options) : new Readable({
+    read() { this.push('{"stayDate":"2026-10-20"}\n'); this.destroy(Object.assign(new Error("fixture truncated transport"), { code: "Z_BUF_ERROR" })); }
+  });
+  try {
+    const service = createMonthlyReportSources({ dataDir: root, regionMasterFile: path.join(root, "regions.json"), listRuns: async () => [] });
+    await assert.rejects(service.options(), { code: "MONTHLY_SOURCE_UNAVAILABLE" });
+  } finally { native.createReadStream = original; }
+});
 async function sourceFixture(t, hooks = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "monthly-concurrency-"));
   t.after(async () => { assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)); await fs.rm(root, { recursive: true, force: true }); });

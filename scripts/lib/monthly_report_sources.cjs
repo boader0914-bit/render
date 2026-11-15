@@ -146,7 +146,11 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     try {
       const stream = fs.createReadStream(historyFile, { encoding: "utf8" });
       const input = readline.createInterface({ input: stream, crlfDelay: Infinity });
-      let lines = 0;
+      let lines = 0, historyFailure = null;
+      // An upstream stream can close readline without propagating its error.
+      // A truncated saved file (including an explicit isolated gzip transport)
+      // must be unavailable, never a valid empty or partial history.
+      stream.on("error", error => { historyFailure = error; input.close(); });
       try {
       for await (const line of input) {
         if (lines++ % 256 === 0) await checkpoint();
@@ -156,6 +160,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         if (row && typeof row === "object" && !Array.isArray(row)) consume(row);
         else malformed++;
       }
+      if (historyFailure) throw historyFailure;
       } finally { input.close(); stream.destroy(); }
     } catch { throw sourceError(); }
     return malformed;

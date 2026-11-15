@@ -5,6 +5,7 @@ const native = require("node:fs"), fs = require("node:fs/promises"), path = requ
 const { safeJson, checkedPath } = require("./lib/keyword_monthly_source_copy.cjs");
 const { installReadOnlyOutputs } = require("./lib/keyword_monthly_readonly_outputs.cjs");
 const { installScratchBudget } = require("./lib/keyword_monthly_scratch_budget.cjs");
+const { installCompressedHistory } = require("./lib/keyword_monthly_compressed_history.cjs");
 const MAX_SOURCE_BYTES = 64 * 1024 * 1024, MAX_ROWS = 50000, MAX_TIME_MS = 15 * 60 * 1000;
 const SHA = /^[a-f0-9]{64}$/, PRIVATE = /(?:token|secret|password|cookie|authorization|private|rawPayload|guest|customer|contact|address|account|kosis|context)/i;
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex"), clone = value => JSON.parse(JSON.stringify(value));
@@ -129,7 +130,12 @@ async function verifyCopyInputs(copyRoot, capture, { immutableOnly = false, star
   for (const row of capture.inputFiles) {
     if (immutableOnly && !/^(?:company_master\/|history\/observations\.jsonl$|history\/saved_product_recoveries\/|history\/special_days\/|outputs\/)/.test(row.relative)) continue;
     need(Date.now() - started <= MAX_TIME_MS, "KEYWORD_RECONSTRUCT_TIME_BOUND");
-    const filename = path.join(copyRoot, "data", ...row.relative.split("/")); need(inside(path.join(copyRoot, "data"), filename), "KEYWORD_RECONSTRUCT_CAPTURE_PATH_INVALID");
+    const stored = row.compression === "gzip" ? row.storageRelative : row.relative;
+    need(row.compression === undefined || row.compression === "gzip" && row.relative === "history/observations.jsonl"
+      && stored === "history/observations.jsonl.gz" && Number.isSafeInteger(row.sourceBytes) && row.sourceBytes >= 0 && row.sourceBytes <= 512 * 1024 * 1024
+      && SHA.test(row.sourceSha256 || ""), "KEYWORD_RECONSTRUCT_CAPTURE_PATH_INVALID");
+    need(row.compression || row.storageRelative === undefined || row.storageRelative === row.relative, "KEYWORD_RECONSTRUCT_CAPTURE_PATH_INVALID");
+    const filename = path.join(copyRoot, "data", ...stored.split("/")); need(inside(path.join(copyRoot, "data"), filename), "KEYWORD_RECONSTRUCT_CAPTURE_PATH_INVALID");
     const before = await checkedPath(filename); need(Number(before.size) === row.bytes, "KEYWORD_RECONSTRUCT_COPY_CHANGED");
     const handle = await fs.open(filename, native.constants.O_RDONLY | (native.constants.O_NOFOLLOW || 0)), h = crypto.createHash("sha256"); let position = 0;
     try { while (true) { const result = await handle.read(buffer, 0, buffer.length, position); if (!result.bytesRead) break; h.update(buffer.subarray(0, result.bytesRead)); position += result.bytesRead; } }
@@ -150,7 +156,12 @@ async function run(values) {
     && !inside(path.resolve(capture.sourceDataDir), root), "KEYWORD_RECONSTRUCT_CAPTURE_INVALID");
   const isolation = await kernelIsolation(input["isolation-proof"], root), guards = installGuards(root, { codeRoot, originalOutputs: capture.originalOutputs }), removed = {};
   const outputs = installReadOnlyOutputs(capture.originalOutputs), scratch = installScratchBudget(root);
+  let compressedHistory = null;
   try {
+    need(capture.historyCompression === undefined || capture.historyCompression === "gzip", "KEYWORD_RECONSTRUCT_CAPTURE_INVALID");
+    need(capture.historyCompression === "gzip" || capture.inputFiles.every(row => row.compression === undefined), "KEYWORD_RECONSTRUCT_CAPTURE_INVALID");
+    compressedHistory = capture.historyCompression === "gzip" ? installCompressedHistory(capture.dataDir, capture)
+      : { verification: () => ({ installed: false, compression: "none", physicalRawHistory: true }), restore() {} };
     await outputs.assertInventoryCurrent();
     // Only private derived capacity/catalog/cache files may evolve. Raw
     // physical master/history/calendar/recovery copies remain byte-identical.
@@ -166,8 +177,12 @@ async function run(values) {
         const key = JSON.stringify([keyword, month]), row = candidates.get(key) || { keyword, month, historyRows: 0, requestedRunCoverage: 0, rankRunCandidates: 0, normalizedObserved: null };
         row[field]++; candidates.set(key, row); need(candidates.size <= 1200, "KEYWORD_RECONSTRUCT_CANDIDATE_BOUND");
       };
-      const readline = require("node:readline"), stream = native.createReadStream(path.join(capture.dataDir, "history/observations.jsonl"), { encoding: "utf8", highWaterMark: 64 * 1024 }), lines = readline.createInterface({ input: stream, crlfDelay: Infinity }); let malformedLines = 0;
-      try { for await (const line of lines) { need(Buffer.byteLength(line) <= 1024 * 1024 && Date.now() - started <= MAX_TIME_MS, "KEYWORD_RECONSTRUCT_DISCOVERY_BOUND"); if (!line.trim()) continue; let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { malformedLines++; continue; } const run = runMap.get(String(row?.runId || "")); add(String(row?.keyword || run?.keyword || ""), String(row?.stayDate || row?.date || "").slice(0, 7), "historyRows"); } } finally { lines.close(); stream.destroy(); }
+      const readline = require("node:readline"), stream = native.createReadStream(path.join(capture.dataDir, "history/observations.jsonl"), { encoding: "utf8", highWaterMark: 64 * 1024 }), lines = readline.createInterface({ input: stream, crlfDelay: Infinity }); let malformedLines = 0, historyFailure = null;
+      // readline does not reliably forward an upstream decompression error.
+      // Never let truncated history look like a complete (possibly empty) file.
+      const onHistoryError = error => { historyFailure = error; lines.close(); };
+      stream.on("error", onHistoryError);
+      try { for await (const line of lines) { need(Buffer.byteLength(line) <= 1024 * 1024 && Date.now() - started <= MAX_TIME_MS, "KEYWORD_RECONSTRUCT_DISCOVERY_BOUND"); if (!line.trim()) continue; let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { malformedLines++; continue; } const run = runMap.get(String(row?.runId || "")); add(String(row?.keyword || run?.keyword || ""), String(row?.stayDate || row?.date || "").slice(0, 7), "historyRows"); } if (historyFailure) throw historyFailure; } finally { lines.close(); stream.destroy(); }
       for (const run of runs) {
         if (!allowed.has(run.keyword)) continue;
         const start = Date.parse(String(run.checkIn || "") + "T00:00:00Z"), days = Number(run.bookingRangeDays);
@@ -178,12 +193,12 @@ async function run(values) {
         if (Number.isFinite(Date.parse(run.collectedAt)) && run.collectedAtSource !== "filesystem") add(run.keyword, new Date(Date.parse(run.collectedAt) + 9 * 3600000).toISOString().slice(0, 7), "rankRunCandidates");
       }
       need(malformedLines === 0, "KEYWORD_RECONSTRUCT_DISCOVERY_MALFORMED_HISTORY");
-      const originalOutputVerification = await outputs.verify(), after = await verifyCopyInputs(root, capture, { immutableOnly: true, started }); wiring.assertCodeCurrent(); scratch.assertCurrent();
+      const originalOutputVerification = await outputs.verify(), historyVerification = compressedHistory.verification(), after = await verifyCopyInputs(root, capture, { immutableOnly: true, started }); wiring.assertCodeCurrent(); scratch.assertCurrent();
       need(!guards.metrics.networkAttempts && !guards.metrics.childProcessAttempts && !guards.metrics.outsideCopyWriteAttempts && !guards.metrics.outsideReadAttempts
         && !wiring.metrics.deniedRequires && !outputs.metrics.originalWriteAttempts && !outputs.metrics.uncapturedReadAttempts && !outputs.metrics.validationDenials && !scratch.status().deniedOperations, "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED");
       const result = { schemaVersion: 1, mode: "discover", state: "complete", copiedAt: capture.capturedAt, captureManifestSha256: captured.sha256,
         candidateBasis: "exact_saved_selector_keywords_and_actual_history_or_recorded_run_coverage; every_pair_requires_normalization", candidates: [...candidates.values()].sort((a, b) => a.keyword.localeCompare(b.keyword) || a.month.localeCompare(b.month)),
-        malformedHistoryLines: malformedLines, keywordCount: allowed.size, globalSelectorMonths: options.months, syntheticCurrentMonthNotTreatedAsEvidence: true, originalOutputVerification, isolation,
+        malformedHistoryLines: malformedLines, keywordCount: allowed.size, globalSelectorMonths: options.months, syntheticCurrentMonthNotTreatedAsEvidence: true, originalOutputVerification, historyVerification, isolation,
         observationIndexMode: "exact_application_streaming_fallback", immutableCopyInputsAfter: after, guardMetrics: guards.metrics, scratch: scratch.status(), providerCalls: 0, sourceWrites: 0, appEntryExecutions: 0, operatingMutations: 0, elapsedMs: Date.now() - started };
       await fs.writeFile(path.join(output, "discovery-complete.json"), JSON.stringify(result), { flag: "wx", mode: 0o600 });
       return { mode: "discover", state: "complete", output: path.join(output, "discovery-complete.json"), keywordCount: result.keywordCount, candidates: result.candidates,
@@ -222,7 +237,7 @@ async function run(values) {
     source.companies = [...companies.values()]; source.runs = [...runs.values()];
     need(source.observations.length <= MAX_ROWS && source.rankObservations.length <= MAX_ROWS && source.savedProductRecoveries.length <= MAX_ROWS, "KEYWORD_RECONSTRUCT_ROW_BOUND");
     const bytes = Buffer.from(JSON.stringify(source)); need(bytes.length <= MAX_SOURCE_BYTES, "KEYWORD_RECONSTRUCT_SOURCE_64MIB_BOUND");
-    const after = await verifyCopyInputs(root, capture, { immutableOnly: true, started }), originalOutputVerification = await outputs.verify(); wiring.assertCodeCurrent(); scratch.assertCurrent();
+    const after = await verifyCopyInputs(root, capture, { immutableOnly: true, started }), originalOutputVerification = await outputs.verify(), historyVerification = compressedHistory.verification(); wiring.assertCodeCurrent(); scratch.assertCurrent();
     need(!guards.metrics.networkAttempts && !guards.metrics.childProcessAttempts && !guards.metrics.outsideCopyWriteAttempts && !guards.metrics.outsideReadAttempts && !wiring.metrics.deniedRequires
       && !outputs.metrics.originalWriteAttempts && !outputs.metrics.uncapturedReadAttempts && !outputs.metrics.validationDenials && !scratch.status().deniedOperations, "KEYWORD_RECONSTRUCT_SIDE_EFFECT_ATTEMPTED");
     const sourceFile = path.join(output, "source.json"), provenance = { inputSha256: sha(bytes), inputBytes: bytes.length, copiedAt: capture.capturedAt, observationScope: "normalized_multirun",
@@ -234,7 +249,7 @@ async function run(values) {
       counts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(key => [key, source[key].length])), captureManifestSha256: captured.sha256,
       sourceInventorySha256: capture.sourceInventorySha256, copiedAt: capture.capturedAt, snapshotCapturedAt: capture.capturedAt, latestTrustedObservationAt: trustedTimes.at(-1) || null,
       dataThrough: capture.capturedAt, dataThroughBasis: "saved_namespace_capture_time; individual observation/run timestamps are separate", isolation, removedFields: removed, records,
-      captureMode: capture.captureMode, originalOutputVerification, observationIndexMode: "exact_application_streaming_fallback", scratch: scratch.status(),
+      captureMode: capture.captureMode, originalOutputVerification, historyVerification, observationIndexMode: "exact_application_streaming_fallback", scratch: scratch.status(),
       copyInputsBefore: before, immutableCopyInputsAfter: after, sourceWrites: 0, operatingMutations: 0, appEntryExecutions: 0, providerFactories: 0,
       guardMetrics: guards.metrics, sourceMetrics: wiring.metrics, sourceReadMetrics: wiring.sources.sourceReadMetrics(), bindings: wiring.bindings, memory: process.memoryUsage(), resourceUsage: process.resourceUsage(), elapsedMs: Date.now() - started };
     await fs.writeFile(path.join(output, "reconstruction-complete.json"), JSON.stringify(result), { flag: "wx", mode: 0o600 });
@@ -243,7 +258,7 @@ async function run(values) {
   } catch (error) {
     try { await fs.writeFile(path.join(output, "reconstruction-failed.json"), JSON.stringify({ state: "failed", code: error.code || "KEYWORD_RECONSTRUCT_FAILED", sourceWrites: 0, partialFilesRetained: true }), { flag: "wx", mode: 0o600 }); } catch {}
     throw error;
-  } finally { scratch.restore(); outputs.restore(); guards.restore(); }
+  } finally { compressedHistory?.restore(); scratch.restore(); outputs.restore(); guards.restore(); }
 }
 if (require.main === module) run(process.argv.slice(2)).then(value => console.log(JSON.stringify(value))).catch(error => { console.error(JSON.stringify({ code: error.code || "KEYWORD_RECONSTRUCT_FAILED" })); process.exitCode = 1; });
 module.exports = { args, kernelIsolation, installGuards, publicSource, snapshotCore, snapshotReceiptFields, verifyCopyInputs, run };
