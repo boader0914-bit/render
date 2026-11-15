@@ -38,6 +38,8 @@ v5의 전체 partition 의미 검증은 1GiB heap 상한과 네트워크 차단�
 
 별도 검토한 사망 작업 복구는 정확한 큐 job ID와 저장 lock·manifest·같은 run/slot DB 완료·준비/격리 증거·source checkpoint·현재 발행 영수증을 먼저 대조한다. 현재 서버와 검증된 조상 프로세스 이외의 Node/Python, 살아 있는 소유자/자식, 수집·DB 후처리·증분 작업의 실행/대기, 보호 상태 또는 미완료 발행 intent는 보류 사유다. 기존 v2의 역사 이월과 현재 실행은 구분한다. 기존 schema1 lock에는 별도로 검토한 종료 사건 근거도 필요하다. 고정된 snapshot SHA의 dry-run을 통과한 뒤 모든 근거를 다시 읽어 확인한다.
 
+schema1의 과거 PID가 현재 검증된 서버·조상에서 재사용된 경우에는 별도 재사용 검토 대상으로만 표시한다. 고정 system `getconf CLK_TCK`, kernel boot 시각과 [`/proc/PID/stat`의 시작 tick](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html), 같은 time namespace 및 현재 wall/uptime 일치 검사를 거친다. 보수적인 현재 프로세스 시작 하한보다 독립 검토한 같은 과거 PID의 exit134 시각이 엄격히 앞설 때만 dry-run·복구를 허용한다. 동적 시계 표본은 snapshot SHA에 넣지 않으며 매번 새로 검증한다. chain 밖 live PID, schema2 재사용, 불명확한 시계·namespace·identity, 같은 시각 경계는 계속 보류한다.
+
 복구는 원본 lock을 삭제하지 않고 새로운 0700 private recovery 폴더로 보관한다. Linux [`renameat2(RENAME_NOREPLACE)`](https://man7.org/linux/man-pages/man2/rename.2.html)를 사용해 보관 목적지가 이미 있으면 덮어쓰지 않는다. 고정된 system Python의 단일 OS 호출에만 의존하고 환경·사용자 site·표준 입출력 전달을 차단한다. 지원 불명·실패에는 덮어쓰는 일반 rename으로 우회하지 않는다. 이동 전후 바이트 SHA·inode·권한을 대조하고 감사 영수증을 남긴다. 근거 변경이나 불완전 복구는 claim과 증거를 유지해 다시 보류하며, 원본·수집/DB/실패 원장을 수정하지 않는다.
 
 과거 완료 영수증 재사용은 그 source event를 이미 처리했다는 이력이다. 이후의 현재 pointer를 바꾸거나 현재 월의 최신 채택을 인증하지 않는다. 실제 run → 같은 DB 완료 → 정확한 작업/준비 영수증 → 현재 catalog/partition → 채택 관측 → 실제 UI를 별도로 확인한다. 화면 GET은 저장된 projection만 읽으며 수집·원본 정규화·게시를 시작하지 않는다. UI의 지표 정의·표 수치나 표시 식을 이 변경으로 수정하지 않는다.

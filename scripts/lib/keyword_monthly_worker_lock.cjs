@@ -75,6 +75,21 @@ async function pseudo(file, bound = 8192) {
     need(at <= bound, "KEYWORD_INCREMENTAL_PROCESS_UNKNOWN"); return b.subarray(0, at).toString("utf8");
   } finally { await h.close(); }
 }
+async function trustedClockTicks() {
+  const systemGetconf = "/usr/bin/getconf", pin = await executablePin(systemGetconf);
+  const output = await new Promise((resolve, reject) => {
+    const p = spawn(pin.file, ["CLK_TCK"], { cwd: "/", shell: false, stdio: ["ignore", "pipe", "ignore"], env: {}, windowsHide: true });
+    const chunks = []; let bytes = 0, denied = false;
+    const stop = () => { denied = true; try { p.kill("SIGKILL"); } catch {} };
+    const timer = setTimeout(stop, 5000);
+    p.stdout.on("data", b => { bytes += b.length; if (bytes > 32) stop(); else chunks.push(b); });
+    p.once("error", () => { clearTimeout(timer); reject(fault("KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN")); });
+    p.once("close", (code, signal) => { clearTimeout(timer); if (denied || signal || code !== 0) reject(fault("KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN")); else resolve(Buffer.concat(chunks).toString("utf8")); });
+  });
+  need(/^[1-9]\d{0,5}\n$/.test(output), "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+  const after = await executablePin(systemGetconf); need(after.file === pin.file && after.sha256 === pin.sha256 && same(after.stat, pin.stat), "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+  return { ticksPerSecond: output.trim(), getconfSha256: pin.sha256, getconfIdentity: smallStat(pin.stat) };
+}
 function createLinuxProcessReader() {
   need(process.platform === "linux", "KEYWORD_INCREMENTAL_PROCESS_PROOF_UNAVAILABLE");
   async function context() {
@@ -90,7 +105,8 @@ function createLinuxProcessReader() {
       need(a[19] === fields[19], "KEYWORD_INCREMENTAL_PROCESS_CHANGED");
       const exe = await fs.readlink("/proc/" + pid + "/exe"), cwd = await fs.readlink("/proc/" + pid + "/cwd"), st = await fs.stat("/proc/" + pid + "/exe", { bigint: true });
       const base = path.basename(exe), kind = /^(?:node|nodejs)$/.test(base) ? "node" : /^(?:sh|bash|dash)$/.test(base) ? "shell" : "other";
-      return { pid, ppid: Number(fields[1]), startTicks: fields[19], state: fields[0], kind,
+      const timeNamespace = await fs.readlink("/proc/" + pid + "/ns/time");
+      return { pid, ppid: Number(fields[1]), startTicks: fields[19], state: fields[0], kind, timeNamespace,
         executableIdentity: hash(jsonBytes([exe, String(st.dev), String(st.ino), String(st.size)])), cwdIdentity: hash(Buffer.from(cwd)) };
     } catch (e) { if (["ENOENT", "ESRCH"].includes(e.code)) return null; throw e; }
   }
@@ -105,7 +121,21 @@ function createLinuxProcessReader() {
     }
     return found;
   }
-  return { context, process: processAt, peers };
+  async function clockBasis(startTicks) {
+    const ticks = await trustedClockTicks(), ns = await fs.readlink("/proc/self/ns/time"), before = Date.now();
+    const first = await pseudo("/proc/stat", 128 * 1024), btime = first.match(/^btime (\d+)$/gm), uptime = await pseudo("/proc/uptime", 256);
+    const second = await pseudo("/proc/stat", 128 * 1024), afterBtime = second.match(/^btime (\d+)$/gm), after = Date.now();
+    need(btime?.length === 1 && afterBtime?.length === 1 && btime[0] === afterBtime[0] && /^time:\[\d+\]$/.test(ns)
+      && await fs.readlink("/proc/self/ns/time") === ns, "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+    const bootEpochSeconds = btime[0].slice(6), up = Number(uptime.trim().split(/\s+/)[0]), boot = Number(bootEpochSeconds) * 1000;
+    need(Number.isSafeInteger(boot) && Number.isFinite(up) && up >= 0 && up < 1e10 && after >= before && after - before <= 10000
+      && after >= boot + Math.floor(up * 1000) - 2000 && before <= boot + Math.ceil(up * 1000) + 2000
+      && /^\d+$/.test(startTicks || "") && Number(BigInt(startTicks) * 1000n / BigInt(ticks.ticksPerSecond)) <= up * 1000 + 2000, "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+    // Only static boot/HZ/executable identity is returned. Fresh wall/uptime
+    // samples are a gate, never part of a review hash shared by later processes.
+    return { bootEpochSeconds, ...ticks, timeNamespace: ns, coherenceVerified: true };
+  }
+  return { context, process: processAt, peers, clockBasis };
 }
 function reader(options) {
   if (options.processReader) { need(options.fixture === true, "KEYWORD_INCREMENTAL_PROCESS_ADAPTER_FORBIDDEN"); return options.processReader; }
@@ -177,6 +207,28 @@ async function serverChain(proc, pid) {
   }
   throw fault("KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
 }
+function ownerIdentity(p) { return p && { pid: p.pid, ppid: p.ppid, startTicks: p.startTicks, kind: p.kind, executableIdentity: p.executableIdentity, cwdIdentity: p.cwdIdentity }; }
+async function legacyReuseCandidate(proc, owner, chain) {
+  const current = chain.find(p => p.pid === owner.pid);
+  need(current && JSON.stringify(ownerIdentity(owner)) === JSON.stringify(current), "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
+  need(typeof proc.clockBasis === "function", "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN"); const c = await proc.clockBasis(owner.startTicks);
+  need(c && /^\d+$/.test(c.bootEpochSeconds || "") && /^[1-9]\d{0,5}$/.test(c.ticksPerSecond || "") && c.coherenceVerified === true
+    && /^time:\[\d+\]$/.test(c.timeNamespace || "") && owner.timeNamespace === c.timeNamespace
+    && SHA.test(c.getconfSha256 || "") && c.getconfIdentity && typeof c.getconfIdentity === "object", "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+  const ticks = BigInt(owner.startTicks), hz = BigInt(c.ticksPerSecond), base = BigInt(c.bootEpochSeconds) * 1000n;
+  // btime is whole seconds and starttime is whole CLK_TCK units. The fixed
+  // two-second margin is conservative clock quantization, not lock age/TTL.
+  const lower = base + ticks * 1000n / hz - 2000n, upper = base + (ticks * 1000n + hz - 1n) / hz + 2000n;
+  need(lower > 0n && upper <= BigInt(Number.MAX_SAFE_INTEGER), "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
+  return { ...ownerIdentity(owner), currentKind: owner.kind, oldOwnerRuntimeContract: "node_host_worker", bootEpochSeconds: c.bootEpochSeconds,
+    ticksPerSecond: c.ticksPerSecond, timeNamespace: c.timeNamespace, getconfSha256: c.getconfSha256, getconfIdentity: c.getconfIdentity,
+    currentBirthLowerEpochMs: Number(lower), currentBirthUpperEpochMs: Number(upper) };
+}
+async function ownerStillMatches(proc, pid, candidate) {
+  const p = await proc.process(pid); if (!candidate) return !p;
+  if (!p || JSON.stringify(ownerIdentity(p)) !== JSON.stringify(ownerIdentity(candidate))) return false;
+  try { return JSON.stringify(await legacyReuseCandidate(proc, p, [ownerIdentity(p)])) === JSON.stringify(candidate); } catch { return false; }
+}
 async function inspectInternal(options) {
   const { dataDir, targetJobId, serverPid } = options; need(path.isAbsolute(dataDir) && SHA.test(targetJobId || "") && Number.isSafeInteger(serverPid) && serverPid > 0);
   const directory = path.join(dataDir, "keyword_monthly_incremental"), namespace = await checked(directory, true), r = await read(path.join(directory, LOCK), 16384), l = r.value;
@@ -190,9 +242,10 @@ async function inspectInternal(options) {
   const proc = reader(options), context = await proc.context();
   if (l.schemaVersion === 2) need(l.version === i.refreshVersion && l.owner && /^\d+$/.test(l.owner.startTicks || "") && l.owner.bootId === context.bootId && l.owner.pidNamespace === context.pidNamespace && l.owner.hostId === context.hostId, "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
   const owner = await proc.process(l.pid);
-  if (owner) throw fault(l.schemaVersion === 2 && owner.startTicks !== l.owner.startTicks ? "KEYWORD_INCREMENTAL_LOCK_PID_REUSED" : "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
-  need(serverPid !== l.pid, "KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN"); const chain = await serverChain(proc, serverPid), excluded = [process.pid, ...chain.map(p => p.pid)];
-  need(!chain.some(p => p.pid === l.pid), "KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
+  if (owner && l.schemaVersion === 2) throw fault(owner.startTicks !== l.owner.startTicks ? "KEYWORD_INCREMENTAL_LOCK_PID_REUSED" : "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
+  const chain = await serverChain(proc, serverPid), excluded = [process.pid, ...chain.map(p => p.pid)];
+  const ownerReuse = owner ? await legacyReuseCandidate(proc, owner, chain) : null;
+  if (!ownerReuse) need(!chain.some(p => p.pid === l.pid), "KEYWORD_INCREMENTAL_LOCK_SERVER_UNKNOWN");
   const jobId = l.schemaVersion === 1 ? l.token : l.jobId; need(UUID.test(jobId || "")); const jobRoot = path.join(directory, "jobs", "refresh-job-" + jobId);
   const ownerRecord = await read(path.join(jobRoot, "refresh-owner.json"), 16384); need(ownerRecord.value.token === jobId && ownerRecord.value.sourceKey === l.sourceKey && ownerRecord.value.root === jobRoot);
   const input = await read(path.join(jobRoot, "job-input.json"), 1024 * 1024); need(input.value.version === i.refreshVersion && input.value.dataDir === dataDir);
@@ -241,17 +294,17 @@ async function inspectInternal(options) {
   need(retained.value.stateSha256 === c.stateSha256 && retained.value.version === c.refreshVersion && retained.value.status === "complete" && retained.value.providerCalls === 0 && retained.value.sourceWrites === 0);
   await gzipJson(path.join(directory, "states", c.stateSha256 + ".json.gz"), MAX_STATE, MAX_STATE, null, c.stateSha256, false);
   const queueSha256 = await queueSnapshot(dataDir), collectionSha256 = await collectionSnapshot(dataDir); need(JSON.stringify(await proc.context()) === JSON.stringify(context));
-  need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && !await proc.process(l.pid) && !await proc.process(p.pid)
+  need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && await ownerStillMatches(proc, l.pid, ownerReuse) && !await proc.process(p.pid)
     && (await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
   const fresh = await read(r.file, 16384); need(fresh.sha256 === r.sha256 && same(fresh.stat, r.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
   const snapshot = { schemaVersion: 1, targetJobId, lockSha256: r.sha256, lockStat: smallStat(r.stat), lockSchemaVersion: l.schemaVersion, ownerPid: l.pid, sourceKey: l.sourceKey, createdAt: l.createdAt,
-    processContext: context, serverChain: chain, childPid: p.pid, childProofSha256: proof.sha256,
+    processContext: context, serverChain: chain, ownerReuse, childPid: p.pid, childProofSha256: proof.sha256,
     jobInputSha256: input.sha256, jobOwnerRecordSha256: ownerRecord.sha256, sourceManifestSha256: manifest.sha256, dbReceiptSha256: db.sha256,
     preparationSha256: preparation?.sha256 || null, sourcePointerSha256: source.sha256, sourceStateSha256: s.stateSha256,
     publicPointerSha256: pub.sha256, catalogSha256: catalog.sha256, publicationReceiptSha256: published.sha256, lastCompleteSha256: completed.sha256, queueSha256, collectionSha256 };
   return { snapshot, snapshotSha256: hash(jsonBytes(snapshot)), lock: r, directory, processes: proc };
 }
-async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
+async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: r.snapshot.ownerReuse ? "reuse_review_required" : "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
 function validateReview(proof, inspected) {
   need(proof && Object.keys(proof).every(k => ["schemaVersion", "action", "targetJobId", "snapshotSha256", "lockSha256", "sourcePointerSha256", "publicPointerSha256", "incident"].includes(k))
     && proof.schemaVersion === 1 && proof.action === "reviewed_dead_worker_lock_recovery" && proof.targetJobId === inspected.snapshot.targetJobId
@@ -260,6 +313,8 @@ function validateReview(proof, inspected) {
   const e = proof.incident; need(e && Object.keys(e).every(k => ["pid", "exitCode", "exitedAt", "evidenceSha256"].includes(k)) && e.pid === inspected.snapshot.ownerPid
     && Number.isSafeInteger(e.exitCode) && e.exitCode > 0 && e.exitCode <= 255 && iso(e.exitedAt) && SHA.test(e.evidenceSha256 || "")
     && Date.parse(e.exitedAt) >= Date.parse(inspected.snapshot.createdAt), "KEYWORD_INCREMENTAL_LOCK_EXIT_EVIDENCE_REQUIRED");
+  if (inspected.snapshot.ownerReuse) need(inspected.snapshot.lockSchemaVersion === 1 && e.exitCode === 134
+    && Date.parse(e.exitedAt) < inspected.snapshot.ownerReuse.currentBirthLowerEpochMs, "KEYWORD_INCREMENTAL_LOCK_PID_REUSE_EXIT_UNPROVEN");
 }
 async function recoverWorkerLock(options) {
   const inspected = await inspectInternal(options); validateReview(options.reviewedProof, inspected);
@@ -277,7 +332,7 @@ async function recoverWorkerLock(options) {
     archive = path.join(destination, "original-lock.json"); need(await absent(archive)); const before = await read(current.lock.file, 16384);
     need(before.sha256 === current.lock.sha256 && same(before.stat, current.lock.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
     need(JSON.stringify(await serverChain(current.processes, options.serverPid)) === JSON.stringify(current.snapshot.serverChain)
-      && !await current.processes.process(current.snapshot.ownerPid) && !await current.processes.process(current.snapshot.childPid)
+      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse) && !await current.processes.process(current.snapshot.childPid)
       && (await current.processes.peers([process.pid, ...current.snapshot.serverChain.map(p => p.pid)])).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
     need((await read(path.join(current.directory, "source-current.json"), 16384)).sha256 === current.snapshot.sourcePointerSha256
       && (await read(path.join(options.dataDir, "keyword_monthly_analysis/current.json"), 16384)).sha256 === current.snapshot.publicPointerSha256
@@ -293,7 +348,7 @@ async function recoverWorkerLock(options) {
       && (await read(path.join(options.dataDir, "keyword_monthly_analysis/current.json"), 16384)).sha256 === current.snapshot.publicPointerSha256
       && await queueSnapshot(options.dataDir) === current.snapshot.queueSha256 && await collectionSnapshot(options.dataDir) === current.snapshot.collectionSha256
       && JSON.stringify(await serverChain(current.processes, options.serverPid)) === JSON.stringify(current.snapshot.serverChain)
-      && !await current.processes.process(current.snapshot.ownerPid) && !await current.processes.process(current.snapshot.childPid)
+      && await ownerStillMatches(current.processes, current.snapshot.ownerPid, current.snapshot.ownerReuse) && !await current.processes.process(current.snapshot.childPid)
       && (await current.processes.peers([process.pid, ...current.snapshot.serverChain.map(p => p.pid)])).length === 0, "KEYWORD_INCREMENTAL_LOCK_POST_ARCHIVE_HOLD");
     const receipt = await writeNew(path.join(destination, "recovery-complete.json"), { schemaVersion: 1, recoveryId: id, action: "archived_verified_dead_worker_lock", lockSha256: preserved.sha256,
       snapshotSha256: current.snapshotSha256, preflightSha256: planned.sha256, sourcePointerSha256: current.snapshot.sourcePointerSha256, publicPointerSha256: current.snapshot.publicPointerSha256,

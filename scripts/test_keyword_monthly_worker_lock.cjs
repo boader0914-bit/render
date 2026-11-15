@@ -68,6 +68,16 @@ async function fixture(t, schema = 1) {
     incident: { pid: 84, exitCode: 134, exitedAt: "2026-11-15T11:42:52.000Z", evidenceSha256: "9".repeat(64) } }; }
   return { root, dataDir, directory, lockFile, lock, sourceKey, jobRoot, proofFile, ownerFile, receiptDir, queueFile, q, pointerFile, pointer, sourcePointerFile, options, processReader, rows, approval };
 }
+function reusedOwner(f, asServer = false) {
+  const identity = { executableIdentity: "a".repeat(64), cwdIdentity: "b".repeat(64), timeNamespace: "time:[1234]" };
+  f.rows.delete(64); f.rows.delete(63); f.rows.delete(52); f.options.serverPid = asServer ? 84 : 85;
+  f.rows.set(73, { pid: 73, ppid: 1, startTicks: "4319900", kind: "node", ...identity });
+  f.rows.set(84, { pid: 84, ppid: 73, startTicks: "4320000", kind: asServer ? "node" : "shell", ...identity });
+  if (!asServer) f.rows.set(85, { pid: 85, ppid: 84, startTicks: "4320100", kind: "node", ...identity });
+  const basis = { bootEpochSeconds: String(Date.parse("2026-11-15T00:00:00.000Z") / 1000), ticksPerSecond: "100", timeNamespace: "time:[1234]",
+    getconfSha256: "7".repeat(64), getconfIdentity: { dev: "1", ino: "2", mode: "33261", uid: "0", gid: "0", size: "100", nlink: "1", mtimeNs: "3", ctimeNs: "4" }, coherenceVerified: true };
+  f.processReader.clockBasis = async () => ({ ...basis }); return basis;
+}
 
 test("schema2 acquisition keeps its secret distinct from the public job id and releases only its exact own lock", async t => {
   const f = await fixture(t); await fs.unlink(f.lockFile);
@@ -189,6 +199,8 @@ test("Linux atomic no-replace rejects a destination appearing after preflight wi
 test("Linux proc identity reads boot, namespace, start ticks and executable without cmdline or environment", { skip: process.platform !== "linux" }, async () => {
   const p = L.createLinuxProcessReader(), c = await p.context(), me = await p.process(process.pid); assert.match(c.bootId, /^[a-f0-9-]{36}$/); assert.match(c.pidNamespace, /^pid:\[\d+\]$/);
   assert.match(me.startTicks, /^\d+$/); assert.match(me.executableIdentity, /^[a-f0-9]{64}$/); assert.equal(me.kind, "node");
+  const birth = await p.clockBasis(me.startTicks); assert.match(birth.bootEpochSeconds, /^\d+$/); assert.match(birth.ticksPerSecond, /^[1-9]\d*$/);
+  assert.equal(birth.coherenceVerified, true); assert.equal(birth.timeNamespace, me.timeNamespace); assert.match(birth.getconfSha256, /^[a-f0-9]{64}$/);
 });
 test("collection admission is rechecked at the final rename boundary", async t => {
   const f = await fixture(t), approved = await f.approval(); let calls = 0;
@@ -207,4 +219,46 @@ test("preflight-only and other-guard proof files cannot authorize legacy lock re
   for (const patch of [{ guardName: "another.cjs" }, { guardRequiredBeforeNormalization: false }, { applicationStarted: true }, { preflightOnly: true }, { providerCalls: 1 }]) {
     await save(f.proofFile, { ...proof, ...patch }); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_CHILD_PROOF_INVALID" });
   }
+});
+test("legacy reused shell ancestor is only an inspect candidate until an independently reviewed earlier exit134", async t => {
+  const f = await fixture(t); reusedOwner(f); const inspected = await L.inspectWorkerLockRecovery(f.options);
+  assert.equal(inspected.status, "reuse_review_required"); assert.equal(inspected.snapshot.ownerReuse.currentKind, "shell"); assert.equal(inspected.snapshot.ownerReuse.oldOwnerRuntimeContract, "node_host_worker");
+  assert.equal(inspected.snapshot.ownerReuse.currentBirthLowerEpochMs, Date.parse("2026-11-15T11:59:58.000Z"));
+  assert.equal(JSON.stringify(inspected).includes(SECRET), false);
+  const dry = await L.recoverWorkerLock({ ...f.options, reviewedProof: await f.approval() }); assert.equal(dry.status, "verified_dry_run");
+  const result = await L.recoverWorkerLock({ ...f.options, reviewedProof: await f.approval(), dryRun: false }); assert.equal(result.status, "recovered");
+});
+test("a legacy PID reused by the exact current server has the same strict reviewed-birth rule", async t => {
+  const f = await fixture(t); reusedOwner(f, true); const plan = await L.inspectWorkerLockRecovery(f.options);
+  assert.equal(plan.snapshot.ownerReuse.currentKind, "node"); const r = await L.recoverWorkerLock({ ...f.options, reviewedProof: await f.approval() }); assert.equal(r.status, "verified_dry_run");
+});
+test("legacy PID reuse rejects equal/later exit boundaries and a non134 exit", async t => {
+  const f = await fixture(t); reusedOwner(f); const approved = await f.approval(), lower = (await L.inspectWorkerLockRecovery(f.options)).snapshot.ownerReuse.currentBirthLowerEpochMs;
+  for (const incident of [{ ...approved.incident, exitedAt: new Date(lower).toISOString() }, { ...approved.incident, exitedAt: new Date(lower + 1).toISOString() }, { ...approved.incident, exitCode: 1 }])
+    await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: { ...approved, incident }, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_PID_REUSE_EXIT_UNPROVEN" });
+  assert.equal(JSON.parse(await fs.readFile(f.lockFile)).token, SECRET);
+});
+test("a live PID outside the current server chain remains active even with a later clock basis", async t => {
+  const f = await fixture(t); reusedOwner(f); f.rows.set(85, { ...f.rows.get(85), ppid: 73 });
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE" });
+});
+test("unknown HZ/btime/coherence/time namespace cannot authorize a reuse candidate", async t => {
+  const f = await fixture(t), basis = reusedOwner(f);
+  for (const patch of [{ ticksPerSecond: "0" }, { ticksPerSecond: "unknown" }, { bootEpochSeconds: "unknown" }, { coherenceVerified: false }, { timeNamespace: "time:[999]" }]) {
+    f.processReader.clockBasis = async () => ({ ...basis, ...patch }); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN" });
+  }
+});
+test("reviewed reuse pins remain stable across fresh clock samples and reject changed process/birth identities", async t => {
+  const f = await fixture(t), basis = reusedOwner(f); let sample = 0;
+  f.processReader.clockBasis = async () => ({ ...basis, diagnosticSample: ++sample });
+  const a = await L.inspectWorkerLockRecovery(f.options), approved = await f.approval(), b = await L.inspectWorkerLockRecovery(f.options); assert.equal(a.snapshotSha256, b.snapshotSha256);
+  const original = { ...f.rows.get(84) };
+  for (const patch of [{ startTicks: "4320200" }, { executableIdentity: "2".repeat(64) }, { cwdIdentity: "3".repeat(64) }, { ppid: 1 }]) {
+    f.rows.set(84, { ...original, ...patch }); await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }));
+  }
+  f.rows.set(84, original); f.processReader.clockBasis = async () => ({ ...basis, bootEpochSeconds: String(Number(basis.bootEpochSeconds) + 1) });
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_REVIEW_MISMATCH" });
+});
+test("schema2 still refuses a live reused PID even when it is a verified current ancestor", async t => {
+  const f = await fixture(t, 2); reusedOwner(f); await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_PID_REUSED" });
 });
