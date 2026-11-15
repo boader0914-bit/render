@@ -134,10 +134,10 @@ async function acquireWorkerLock(options) {
     await fs.unlink(file); await syncDir(directory); released = true;
   } });
 }
-async function gzipJson(file, storedBound, rawBound, expectedStored, expectedRaw) {
+async function gzipJson(file, storedBound, rawBound, expectedStored, expectedRaw, decodeJson = true) {
   const r = await read(file, storedBound, true); if (expectedStored) need(r.sha256 === expectedStored);
   const raw = zlib.gunzipSync(r.bytes, { maxOutputLength: rawBound }); if (expectedRaw) need(hash(raw) === expectedRaw);
-  return { value: JSON.parse(raw), sha256: r.sha256, rawSha256: hash(raw), rawBytes: raw.length };
+  return { value: decodeJson ? JSON.parse(raw) : null, sha256: r.sha256, rawSha256: hash(raw), rawBytes: raw.length };
 }
 async function queueSnapshot(dataDir) {
   const dir = path.join(dataDir, "keyword_monthly_refresh/jobs"), before = await checked(dir, true); const entries = await fs.readdir(dir, { withFileTypes: true }); need(entries.length <= 4096);
@@ -239,7 +239,7 @@ async function inspectInternal(options) {
   need(SHA.test(c.preparationSha256 || "") && SHA.test(c.preparationEvidenceSha256 || ""));
   const retained = await gzipJson(path.join(receiptDir, "incremental-evidence-" + last.sourceKey + ".json.gz"), 16 * 1024 ** 2, 16 * 1024 ** 2, c.preparationEvidenceSha256, c.preparationSha256);
   need(retained.value.stateSha256 === c.stateSha256 && retained.value.version === c.refreshVersion && retained.value.status === "complete" && retained.value.providerCalls === 0 && retained.value.sourceWrites === 0);
-  await gzipJson(path.join(directory, "states", c.stateSha256 + ".json.gz"), MAX_STATE, MAX_STATE, null, c.stateSha256);
+  await gzipJson(path.join(directory, "states", c.stateSha256 + ".json.gz"), MAX_STATE, MAX_STATE, null, c.stateSha256, false);
   const queueSha256 = await queueSnapshot(dataDir), collectionSha256 = await collectionSnapshot(dataDir); need(JSON.stringify(await proc.context()) === JSON.stringify(context));
   need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && !await proc.process(l.pid) && !await proc.process(p.pid)
     && (await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
