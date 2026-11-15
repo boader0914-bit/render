@@ -9,7 +9,7 @@ test("source inspection parses exact declarations without application or provide
   for (const forbidden of ["tourism_collector.cjs", "lib/kosis.cjs", "collector_worker.cjs", "glamping_app_server.cjs"]) assert.equal(IMPORTS.some(row => row[0] === forbidden), false);
   assert.equal(BUILD_ORDER.includes("monthlyReportService"), false); assert.equal(BUILD_ORDER.includes("kosisService"), false);
 });
-test("copy-only wiring builds and normalizes an empty saved fixture without importing a service entry", async t => {
+test("copy-only wiring builds and normalizes an empty saved fixture without importing a service entry", { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-wiring-fixture-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, "company_master")); await fs.mkdir(path.join(root, "history")); await fs.mkdir(path.join(root, "outputs"));
@@ -27,7 +27,7 @@ test("copy-only wiring builds and normalizes an empty saved fixture without impo
   } finally { guard.restore(); }
 });
 
-test("incremental wiring adopts a lazy pinned catalog without a master or history scan", async t => {
+test("incremental wiring adopts a lazy pinned catalog without a master or history scan", { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-wiring-incremental-"));
   t.after(async () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
   const descriptor = { generation: 0, contentDigest: "1".repeat(64), malformedHistoryLines: 0, source: null };
@@ -61,7 +61,7 @@ test("incremental wiring adopts a lazy pinned catalog without a master or histor
   await assert.rejects(fs.access(path.join(root, "history/observations.jsonl")), { code: "ENOENT" });
 });
 
-test("incremental wiring preserves catalog rejection instead of falling back to original inputs", async t => {
+test("incremental wiring preserves catalog rejection instead of falling back to original inputs", { timeout: 10000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-wiring-incremental-failed-"));
   t.after(async () => { assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
   let originalReads = 0;
@@ -144,4 +144,61 @@ test("public projection removes private fields recursively while retaining safe 
 test("reconstruction requires a fingerprinted physical capture and an explicit kernel proof", () => {
   assert.throws(() => args(["--copy-root", path.resolve("fixture")]), { code: "KEYWORD_RECONSTRUCT_ARGUMENTS" });
   assert.equal(typeof snapshotCore, "function");
+});
+
+function bounded(operation, milliseconds = 4000) {
+  let timer;
+  return Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("private source read did not terminate"),
+    { code: "FIXTURE_PRIVATE_SOURCE_TIMEOUT" })), milliseconds); })]).finally(() => clearTimeout(timer));
+}
+test("private source schedulers never execute or import the host maintenance callback even while its real marker is active", { timeout: 15000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-wiring-host-gate-")), host = path.join(root, "host"), copy = path.join(root, "copy");
+  t.after(async () => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
+  await fs.mkdir(host); await fs.mkdir(path.join(host, "keyword_monthly_incremental"), { mode: 0o700 }); await fs.mkdir(copy);
+  for (const directory of ["company_master", "history", "outputs"]) await fs.mkdir(path.join(copy, directory));
+  await fs.writeFile(path.join(copy, "company_master/companies.json"), '{"companies":{}}'); await fs.writeFile(path.join(copy, "history/observations.jsonl"), "");
+  const maintenance = require("./lib/keyword_monthly_maintenance.cjs"), schedulerModule = require("./lib/analytical_work_scheduler.cjs"), originalFactory = schedulerModule.createAnalyticalWorkScheduler;
+  const lease = await maintenance.acquirePreparedConversionLease({ dataDir: host, mode: "stage", operationId: require("node:crypto").randomUUID() });
+  const marker = path.join(host, "keyword_monthly_incremental/prepared-conversion-lock.json"), before = await fs.readFile(marker);
+  assert.equal((await maintenance.readPreparedConversionAdmission({ dataDir: host })).allowed, false);
+  let callbackCalls = 0, factories = 0;
+  schedulerModule.createAnalyticalWorkScheduler = options => {
+    factories++;
+    assert.equal(options.externalAdmission, null, "the extracted host closure must not reach the private scheduler");
+    assert.equal(typeof options.sampleMemory, "function"); assert.equal(options.highWatermark, 0.65); assert.equal(options.lowWatermark, 0.55);
+    // Without the explicit private option, this spy would read an unauthorized
+    // real host marker and reject. It is not a provider or an approval stub.
+    return originalFactory({ ...options, externalAdmission: options.externalAdmission === null ? null : async () => {
+      callbackCalls++; await fs.readFile(marker); throw Object.assign(new Error(), { code: "FIXTURE_HOST_GATE_MUST_NOT_EXECUTE" });
+    } });
+  };
+  const guard = installGuards(copy, { codeRoot });
+  try {
+    for (const mode of ["saved-copy", "incremental"]) {
+      const descriptor = { generation: 0, contentDigest: "1".repeat(64), malformedHistoryLines: 0, source: null };
+      const observationIndex = { ensure: async () => structuredClone(descriptor), readRows: async () => {}, readHeaders: async () => {},
+        revisionPartitions: async () => ({ ...descriptor, partitions: [] }), listMonths: async () => [] };
+      const incremental = mode === "incremental" ? { observationIndex, catalog: null, revision: "private-gate-fixture", runs: [] } : null;
+      const wiring = buildSourceWiring({ codeRoot, copyDataDir: copy, now: "2026-11-15T00:00:00.000Z", streamHistoryOnly: true, incremental });
+      try {
+        assert.equal(wiring.bindings.schedulerScope, "private_saved_copy_no_host_maintenance"); assert.equal(wiring.bindings.schedulerDataDir, copy);
+        assert.equal(wiring.scheduler.status().maintenance.enabled, false);
+        assert.equal(wiring.requireAllowlist.includes("./lib/keyword_monthly_maintenance.cjs"), false);
+        if (incremental) incremental.catalog = await require("./lib/keyword_monthly_incremental_catalog.cjs").createIncrementalCatalog({ entries: [], runs: [], regions: [],
+          revision: incremental.revision, readRawCompany: async () => { throw new Error("no raw fixture"); }, capacityForCompany: wiring.bridge.capacityForCompany,
+          projectCapacityCompany: wiring.bridge.projectCapacityCompany });
+        const value = await bounded(wiring.sources.loadSources({ type: "keyword", targetId: "private-gate-fixture", month: "2026-11", cutoffDate: "2026-11-15" },
+          { includeContext: false, priority: "foreground" }));
+        assert.deepEqual(value.observations, []); assert.deepEqual(value.rankObservations, []); assert.equal(wiring.metrics.sourceReads, 1);
+        assert.equal(wiring.metrics.deniedRequires, 0); assert.equal(wiring.metrics.appEntryExecutions, 0); assert.equal(wiring.metrics.providerFactories, 0);
+      } finally { await wiring.scheduler.close(); await wiring.index?.close?.(); }
+    }
+    assert.equal(factories, 2); assert.equal(callbackCalls, 0);
+    for (const key of ["networkAttempts", "childProcessAttempts", "outsideReadAttempts", "outsideCopyWriteAttempts", "appEntryExecutions", "providerFactories"]) assert.equal(guard.metrics[key], 0);
+  } finally { guard.restore(); schedulerModule.createAnalyticalWorkScheduler = originalFactory; await lease.release(); }
+  await assert.rejects(fs.access(marker), { code: "ENOENT" }); assert.ok(before.length > 0);
+});
+test("copy wiring cannot be pointed at the live production data root", () => {
+  for (const directory of [path.parse(path.resolve("fixture")).root, path.resolve("/var/data")])
+    assert.throws(() => buildSourceWiring({ codeRoot, copyDataDir: directory, now: "2026-11-15T00:00:00.000Z" }), { code: "KEYWORD_WIRING_PRIVATE_COPY_REQUIRED" });
 });

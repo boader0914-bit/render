@@ -2,7 +2,7 @@
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs/promises"),os=require("node:os"),path=require("node:path"),crypto=require("node:crypto");
 const M=require("./lib/keyword_monthly_maintenance.cjs"),{createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
 const turn=()=>new Promise(r=>setImmediate(r)),flush=async()=>{for(let i=0;i<6;i++)await turn();};
-async function fixture(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),"keyword-maintenance-test-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.mkdir(path.join(root,"keyword_monthly_incremental"),{mode:0o700});return {root,file:path.join(root,"keyword_monthly_incremental",M.MAINTENANCE_FILE)};}
+async function fixture(t){const parent=await fs.realpath(os.tmpdir()),root=await fs.mkdtemp(path.join(parent,"keyword-maintenance-test-"));t.after(async()=>{assert.equal(path.dirname(await fs.realpath(root)),parent);assert.match(path.basename(root),/^keyword-maintenance-test-/);await fs.rm(root,{recursive:true,force:true});});await fs.mkdir(path.join(root,"keyword_monthly_incremental"),{mode:0o700});return {root,file:path.join(root,"keyword_monthly_incremental",M.MAINTENANCE_FILE)};}
 const lease=root=>M.acquirePreparedConversionLease({dataDir:root,mode:"stage",operationId:crypto.randomUUID(),contextSha256:"a".repeat(64)});
 test("explicit conversion owns one private marker and release does not alter any source",async t=>{
  const f=await fixture(t);await fs.writeFile(path.join(f.root,"original.json"),"unchanged");assert.equal((await M.readPreparedConversionAdmission({dataDir:f.root})).allowed,true);

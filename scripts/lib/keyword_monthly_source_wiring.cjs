@@ -61,7 +61,9 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
   need(typeof copyDataDir === "string" && path.isAbsolute(copyDataDir) && Number.isFinite(Date.parse(now)), "KEYWORD_WIRING_COPY_AND_CLOCK_REQUIRED");
   need(incremental === null || incremental && typeof incremental === "object" && incremental.observationIndex
     && ["ensure", "readRows", "revisionPartitions"].every(method => typeof incremental.observationIndex[method] === "function"), "KEYWORD_WIRING_INCREMENTAL_INVALID");
-  const I = inspectSource(codeRoot), dataDir = path.resolve(copyDataDir), req = createRequire(I.filename), quiet = () => {};
+  const dataDir = path.resolve(copyDataDir);
+  need(dataDir !== path.parse(dataDir).root && dataDir !== path.resolve("/var/data"), "KEYWORD_WIRING_PRIVATE_COPY_REQUIRED");
+  const I = inspectSource(codeRoot), req = createRequire(I.filename), quiet = () => {};
   const metrics = { sourceReads: 0, savedRunLoads: 0, appEntryExecutions: 0, providerFactories: 0, collectorFactories: 0, deniedRequires: 0 };
   let sourceOptions = null;
   const incrementalRevision = async () => {
@@ -98,6 +100,13 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
         if (to === "createHistoryObservationIndex" && streamHistoryOnly) return null;
         if (to.startsWith("create")) {
           args[0] = { ...(args[0] || {}) };
+          if (to === "createAnalyticalWorkScheduler") {
+            // This scheduler owns only this explicit saved copy/private child.
+            // The host already holds the real worker/maintenance admission.
+            // Do not evaluate the extracted host callback or import/read its
+            // production maintenance ledger inside the restricted VM.
+            args[0].externalAdmission = null;
+          }
           if (!["createAnalyticalWorkScheduler", "createAnalyticalMemorySampler"].includes(to)) args[0].now = () => new Date(now);
           if (to === "createMonthlyCompanyRecalculation") {
             const read = args[0].loadRun; args[0].loadRun = (...values) => { metrics.savedRunLoads++; return read(...values); };
@@ -142,6 +151,7 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
     bridge: { prepareCompanies: sourceOptions.prepareCompanies, projectCapacityCompany: sourceOptions.projectCapacityCompany,
       capacityForCompany: sourceOptions.capacityForCompany, maximumRoomCapacity: vm.runInContext("companyMaximumRoomCapacity", context), sourceOptions },
     scheduler: vm.runInContext("analyticalWork", context), metrics, bindings: { ...I.bindings, ranges, imports: IMPORTS.map(row => row[0]), declarationOrder: BUILD_ORDER,
+      schedulerScope: "private_saved_copy_no_host_maintenance", schedulerDataDir: dataDir,
       observationIndexMode: incremental ? "incremental_saved_deltas" : streamHistoryOnly ? "exact_application_streaming_fallback" : "copied_data_index", originalOutputsReadOnlyReferenced: Boolean(readOnlyOriginalOutputs) },
     assertCodeCurrent() { need(inspectSource(I.root).bindings.codeFingerprint === I.bindings.codeFingerprint, "KEYWORD_WIRING_CODE_CHANGED"); },
     requireAllowlist: [...requireAllowlist] };
