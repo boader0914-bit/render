@@ -136,7 +136,7 @@ test("saved read renews catalog/cutoff and preserves month/product instead of us
   await ui.button("저장 자료 조회").fire("click"); await settle();
   assert.equal(ui.calls.filter(x => x.url.endsWith("/options")).length, 2);
   assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-31"); assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().product, "dayuse");
-  assert.match(ui.text(), /수집·DB 반영 완료 후 자동 갱신/);
+  assert.match(ui.text(), /현재 갱신 작업/); assert.match(ui.text(), /이전 버전 기록/);
 });
 test("refresh verification warning never replaces valid saved amounts with zero or starts a job", async () => {
   const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
@@ -144,17 +144,100 @@ test("refresh verification warning never replaces valid saved amounts with zero 
   await ui.controller.open(); assert.match(ui.text(), /자동 반영 확인 필요/); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /400원/);
 });
 test("historical failures stay visible while current-version processing is reported separately without claiming freshness", async () => {
-  const status = { status: "needs_verification", started: true, errorCode: null, counts: { complete: 52, needs_verification: 20, queued: 1 },
-    currentVersionCounts: { queued: 1, deferred: 0, running: 0, complete: 0, needs_verification: 0 }, historicalNeedsVerification: 20 };
+  const status = { status: "needs_verification", started: true, initialized: true, closed: false, errorCode: null, counts: { complete: 52, needs_verification: 20, queued: 1 },
+    currentVersionCounts: { queued: 1, deferred: 0, running: 0, complete: 0, needs_verification: 0 }, historicalNeedsVerification: 20,
+    historicalCountsByVersion: { "keyword-monthly-refresh-v1": { queued: 0, deferred: 0, running: 0, complete: 52, needs_verification: 20 } } };
   const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
     ? { ...optionsFixture(), refreshStatus: status } : payloadFixture() }) });
-  await ui.controller.open(); assert.match(ui.text(), /이전 갱신 검수 이력 20건 보존/); assert.match(ui.text(), /현재 갱신 작업 처리 0 \/ 대기 1 \/ 이월 0/);
+  await ui.controller.open(); assert.match(ui.text(), /이전 버전 기록 · 이월 0 \/ 검수 필요 20/); assert.match(ui.text(), /현재 갱신 작업 · 처리 0 \/ 대기 1 \/ 이월 0 \/ 검수 필요 0/);
   assert.match(ui.text(), /선택 자료의 실제 반영 범위/); assert.doesNotMatch(ui.text(), /최신 반영 완료/); assert.match(ui.text(), /400원/); assert.equal(ui.calls.length, 2);
-  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { errorCode: undefined }, { errorCode: {} }, { status: "unexpected", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { status: "available", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { cleanup: { status: "needs_verification" } }, { cleanup: { status: "unknown" } }, { currentVersionCounts: { needs_verification: 1 } }, { currentVersionCounts: null }, { currentVersionCounts: { running: -1 } }]) {
+  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { errorCode: undefined }, { errorCode: {} }, { status: "unexpected", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { status: "available", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { cleanup: { status: "needs_verification" } }, { cleanup: { status: "unknown" } }, { currentVersionCounts: { needs_verification: 1 } }, { currentVersionCounts: null }, { currentVersionCounts: { running: -1 } }, { closed: true }, { started: false }, { initialized: false }]) {
     const blocked = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
       ? { ...optionsFixture(), refreshStatus: { ...status, ...patch } } : payloadFixture() }) });
-    await blocked.controller.open(); assert.match(blocked.text(), /자동 반영 확인 필요/); assert.doesNotMatch(blocked.text(), /이전 갱신 검수 이력 20건 보존/);
+    await blocked.controller.open(); assert.match(blocked.text(), /자동 반영 확인 필요/); assert.match(blocked.text(), /이전 버전 기록 · 이월 0 \/ 검수 필요 20/); assert.match(blocked.text(), /현재 갱신 작업/);
   }
+});
+
+function refreshHistoryFixture() {
+  const counts = patch => ({ queued: 0, deferred: 0, running: 0, complete: 0, needs_verification: 0, ...patch });
+  const groups = [
+    ["keyword-monthly-refresh-v1", "needs_verification", "KEYWORD_MONTHLY_REFRESH_OTHER_PREPARATION_PRESENT", 15],
+    ["keyword-monthly-refresh-v1", "needs_verification", "KEYWORD_MONTHLY_SOURCE_COPY_BOUND", 5],
+    ["keyword-monthly-refresh-compressed-v2", "deferred", "KEYWORD_REFRESH_COLLECTION_BUSY", 6],
+    ["keyword-monthly-incremental-v3", "needs_verification", "ISOLATION_SOCKET_OR_UNSAFE_STDIO", 7],
+    ["keyword-monthly-incremental-v4", "needs_verification", "KEYWORD_INCREMENTAL_WORKER_LOCKED", 1]
+  ].map(([version, status, reasonCode, count]) => ({ version, status, reasonCode, count, sameEventLaterCompleted: count, priorExactComplete: 0, notCovered: 0, unknown: 0 }));
+  return { status: "needs_verification", started: true, initialized: true, closed: false, errorCode: null, cleanup: null,
+    counts: { complete: 75, deferred: 6, needs_verification: 28 }, currentVersionCounts: { complete: 1 }, historicalNeedsVerification: 28,
+    historicalCountsByVersion: { "keyword-monthly-refresh-v1": { complete: 68, needs_verification: 20 }, "keyword-monthly-refresh-compressed-v2": { deferred: 6 },
+      "keyword-monthly-incremental-v3": { needs_verification: 7 }, "keyword-monthly-incremental-v4": { complete: 6, needs_verification: 1 } },
+    currentVersionReasonCounts: [], historicalReview: { schemaVersion: 1, readOnly: true, currentScopeFreshnessVerified: false, originalJournalRowsChanged: false, retryAuthorized: false, invalidRows: 0, allRowsCoverage: true,
+      rowsExamined: 109, historicalRows: 108, reviewedRows: 34, sameEventLaterCompleted: 34, priorExactComplete: 0, notCovered: 0, unknown: 0, groups,
+      currentVersionCounts: counts({ complete: 1 }), historicalCountsByVersion: { "keyword-monthly-refresh-v1": counts({ complete: 68, needs_verification: 20 }),
+        "keyword-monthly-refresh-compressed-v2": counts({ deferred: 6 }), "keyword-monthly-incremental-v3": counts({ needs_verification: 7 }),
+        "keyword-monthly-incremental-v4": counts({ complete: 6, needs_verification: 1 }) } } };
+}
+const refreshUi = status => mockUi({ request: async url => ({ ok: true, status: 200,
+  json: async () => url.endsWith("/options") ? { ...optionsFixture(), refreshStatus: status } : payloadFixture() }) });
+
+test("full journal review separates current zero pending from six historical deferrals and28 reviews", async () => {
+  const status = refreshHistoryFixture(), ui = refreshUi(status); await ui.controller.open();
+  assert.match(text(ui.find("kma-refresh-current")[0]), /처리 0 \/ 대기 0 \/ 이월 0 \/ 검수 필요 0/);
+  assert.match(text(ui.find("kma-refresh-historical")[0]), /이월 6 \/ 검수 필요 28/);
+  assert.equal(ui.find("kma-refresh-warning").length, 0); assert.equal(ui.find("kma-refresh-history")[0].tagName, "DETAILS");
+  assert.match(ui.text(), /원기록을 보존하며 재실행하지 않습니다/); assert.match(ui.text(), /같은 입력의 후속 완료 기록 34/);
+  assert.match(ui.text(), /같은 입력의 완료 기록과 현재 선택 자료의 최신 반영 여부는 별개/);
+  for (const word of ["다른 준비 작업", "자료 복사 용량", "입출력 검증", "작업 잠금 보호", "수집 보호·예약 간격"]) assert.ok(ui.text().includes(word));
+  assert.match(ui.text(), /400원/); assert.equal(ui.calls.length, 2); assert.ok(ui.calls.every(call => call.settings.method === "GET"));
+  assert.doesNotMatch(ui.text(), /최신 반영 완료|34건 정상 완료로 변경/);
+});
+
+test("sparse or unavailable count metadata stays unknown instead of claiming no pending work", async () => {
+  for (const patch of [{ historicalReview: null }, { historicalReview: undefined }, { historicalReview: null, currentVersionCounts: { complete: 1, queued: "0" } }]) {
+    const status = { ...refreshHistoryFixture(), ...patch }, ui = refreshUi(status); await ui.controller.open();
+    assert.match(text(ui.find("kma-refresh-current")[0]), /처리 미확인 \/ 대기 미확인 \/ 이월 미확인 \/ 검수 필요 미확인/);
+    assert.match(ui.text(), /자동 반영 확인 필요/); assert.match(ui.text(), /이전 버전 기록/);
+    assert.doesNotMatch(ui.text(), /현재 갱신 작업 · 처리 0/); assert.match(ui.text(), /확인하지 못한 건수를 0으로 표시하지 않습니다/);
+  }
+});
+
+test("historical linkage metadata rejects inconsistent coverage and cannot claim current-scope freshness", async () => {
+  for (const mutate of [review => { review.currentScopeFreshnessVerified = true; }, review => { review.sameEventLaterCompleted = 33; review.priorExactComplete = 1; },
+    review => { review.rowsExamined++; }, review => { delete review.currentVersionCounts.deferred; }, review => { review.groups[0].count = -1; },
+    review => { review.invalidRows = 1; }, review => { review.originalJournalRowsChanged = true; }, review => { review.retryAuthorized = true; }]) {
+    const status = refreshHistoryFixture(); mutate(status.historicalReview);
+    const normalized = uiModule.normalizeOptions({ ...optionsFixture(), refreshStatus: status }); assert.equal(normalized.refreshStatus.historicalReview, null);
+    const ui = refreshUi(status); await ui.controller.open(); assert.doesNotMatch(ui.text(), /같은 입력의 후속 완료 기록 34/); assert.match(ui.text(), /분류 근거가 전체 원장을 포함하는지 미확인/);
+  }
+});
+
+test("prior exact completions are distinct from later completions and neither overrides runtime protection", async () => {
+  const status = refreshHistoryFixture(); status.historicalReview.sameEventLaterCompleted = 19; status.historicalReview.priorExactComplete = 15;
+  status.historicalReview.groups[0].sameEventLaterCompleted = 0; status.historicalReview.groups[0].priorExactComplete = 15;
+  const ui = refreshUi(status); await ui.controller.open(); assert.match(ui.text(), /후속 완료 기록 19 \/ 기존 완료 기록 15/);
+  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { closed: true }, { started: false }, { initialized: false }, { cleanup: { status: "needs_verification" } }]) {
+    const blocked = refreshUi({ ...status, ...patch }); await blocked.controller.open(); assert.match(blocked.text(), /자동 반영 확인 필요/);
+    assert.match(blocked.text(), /현재 갱신 작업/); assert.match(blocked.text(), /이전 버전 기록 · 이월 6 \/ 검수 필요 28/); assert.match(blocked.text(), /400원/);
+  }
+});
+
+test("a current verification job and its reason stay visible despite completed historical inputs", async () => {
+  const status = refreshHistoryFixture(); status.historicalReview.currentVersionCounts = { queued: 0, deferred: 0, running: 0, complete: 0, needs_verification: 1 };
+  status.currentVersionReasonCounts = [{ status: "needs_verification", reasonCode: "KEYWORD_INCREMENTAL_WORKER_LOCKED", count: 1 }];
+  const ui = refreshUi(status); await ui.controller.open(); assert.match(text(ui.find("kma-refresh-current")[0]), /검수 필요 1/);
+  assert.match(ui.text(), /자동 반영 확인 필요/); assert.match(ui.text(), /현재 검수 필요 1건 · 작업 잠금 보호로 보류/);
+  assert.match(ui.text(), /같은 입력의 후속 완료 기록 34/); assert.match(ui.text(), /현재 선택 자료의 최신 반영 여부는 별개/);
+});
+
+test("history classification never changes applied scope product company or calculated result tables", async () => {
+  const status = refreshHistoryFixture(), ui = refreshUi(status); await ui.controller.open();
+  const before = clone(ui.controller.state()), sold = uiModule.buildViewModel(payloadFixture(), payloadFixture().request, "2026-10").summary.lodging.sold;
+  const tableState = () => descendants(ui.find("kma-results")[0]).filter(node => node.tagName === "TABLE").map(node => text(node));
+  const tables = tableState(); await ui.controller.refresh();
+  assert.deepEqual(tableState(), tables); assert.equal(ui.controller.state().benchmarkCompanyId, before.benchmarkCompanyId);
+  assert.equal(ui.controller.state().listPage, before.listPage); assert.equal(ui.controller.state().product, before.product);
+  assert.deepEqual(clone(ui.controller.state().selection), before.selection); assert.equal(sold, 4);
+  assert.ok(ui.calls.every(call => call.settings.method === "GET"));
 });
 test("invalid or future cutoff produces an explanation without another request", async () => {
   const ui = mockUi(); await ui.controller.open(); for (const value of ["2026-02-30", "2026-10-31"]) { ui.field("cutoffDate").value = value; await ui.field("cutoffDate").fire("change"); await ui.apply(); assert.equal(ui.calls.length, 2); assert.match(ui.text(), /관측 마감일은 오늘 이하/); }

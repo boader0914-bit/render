@@ -221,6 +221,21 @@ test("compressed version preserves all 20 prior failures and 52 complete receipt
   for (const value of frozen) assert.deepEqual(await fs.readFile(value.file), value.bytes); assert.deepEqual(await fs.readFile(activation), activationBytes);
 });
 
+test("historical review covers every journal row independent of returned-item limit and leaves bytes and guards unchanged", async t => {
+  const f = await fixture(t), old = await f.q.enqueue(intent()); await f.q.close();
+  const frozen = await setJournalState(f, old, "needs_verification"); f.advance(1000); let calls = 0;
+  const current = resumedQueue(f, { refresh: async () => { calls++; return published; } }); t.after(() => current.close());
+  await current.enqueue(intent()); await current.runOnce();
+  const state = await current.status({ limit: 0 }); assert.deepEqual(state.items, []); assert.equal(state.status, "needs_verification");
+  assert.equal(state.unresolvedNeedsVerification, 1); assert.equal(state.historicalNeedsVerification, 1); assert.equal(state.currentVersionNeedsVerification, 0);
+  assert.deepEqual(state.currentVersionCounts, { complete: 1 });
+  assert.deepEqual(state.historicalReview.currentVersionCounts, { queued: 0, deferred: 0, running: 0, complete: 1, needs_verification: 0 });
+  assert.equal(state.historicalReview.rowsExamined, 2); assert.equal(state.historicalReview.allRowsCoverage, true);
+  assert.equal(state.historicalReview.sameEventLaterCompleted, 1); assert.equal(state.historicalReview.currentScopeFreshnessVerified, false);
+  assert.equal(state.historicalReview.retryAuthorized, false); assert.equal(calls, 1);
+  assert.deepEqual(await fs.readFile(frozen.file), frozen.bytes); assert.equal(await current.runOnce(), null);
+});
+
 test("a current worker recovers only its own interrupted work and never executes other versions", async t => {
   const f = await fixture(t), oldRows = [];
   for (let n = 1; n <= 5; n++) oldRows.push(await f.q.enqueue(intent(n)));

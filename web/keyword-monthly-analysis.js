@@ -115,6 +115,56 @@
   }
   const hasDiagnostic = (rows, code) => rows.some(value => value === code || value?.code === code);
   const timeLabel = value => dateValid(value) ? value : typeof value === "string" && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "미확인";
+  const REFRESH_STATES = ["queued", "deferred", "running", "complete", "needs_verification"];
+  const refreshCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const refreshCounts = counts => counts && typeof counts === "object" && !Array.isArray(counts)
+    && Object.values(counts).every(value => refreshCount(value) !== null)
+    ? Object.fromEntries(REFRESH_STATES.map(key => [key, refreshCount(counts[key])])) : null;
+  const refreshVersion = value => typeof value === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(value);
+  const refreshReason = value => value === null || typeof value === "string" && /^[A-Z][A-Z0-9_]{1,119}$/.test(value);
+  function refreshHistory(value) {
+    if (!value || value.schemaVersion !== 1 || value.readOnly !== true || value.currentScopeFreshnessVerified !== false
+      || value.originalJournalRowsChanged !== false || value.retryAuthorized !== false || value.invalidRows !== 0
+      || typeof value.allRowsCoverage !== "boolean" || !Array.isArray(value.groups) || value.groups.length > 128) return null;
+    const fields = ["rowsExamined", "historicalRows", "reviewedRows", "sameEventLaterCompleted", "priorExactComplete", "notCovered", "unknown"];
+    if (fields.some(key => refreshCount(value[key]) === null)) return null;
+    const groups = [];
+    for (const row of value.groups) {
+      if (!row || !refreshVersion(row.version) || !REFRESH_STATES.includes(row.status) || row.status === "complete" || !refreshReason(row.reasonCode)
+        || ["count", "sameEventLaterCompleted", "priorExactComplete", "notCovered", "unknown"].some(key => refreshCount(row[key]) === null)
+        || row.count !== row.sameEventLaterCompleted + row.priorExactComplete + row.notCovered + row.unknown) return null;
+      groups.push(Object.fromEntries(["version", "status", "reasonCode", "count", "sameEventLaterCompleted", "priorExactComplete", "notCovered", "unknown"].map(key => [key, row[key]])));
+    }
+    if (groups.reduce((sum, row) => sum + row.count, 0) !== value.reviewedRows
+      || value.reviewedRows !== value.sameEventLaterCompleted + value.priorExactComplete + value.notCovered + value.unknown) return null;
+    const dense = refreshCounts(value.currentVersionCounts), versions = value.historicalCountsByVersion;
+    if (!dense || REFRESH_STATES.some(key => dense[key] === null) || !versions || typeof versions !== "object" || Array.isArray(versions)
+      || Object.keys(versions).length > 32) return null;
+    const historicalCountsByVersion = {};
+    for (const [version, counts] of Object.entries(versions)) {
+      const checked = refreshCounts(counts);
+      if (!refreshVersion(version) || !checked || REFRESH_STATES.some(key => checked[key] === null)) return null;
+      historicalCountsByVersion[version] = checked;
+    }
+    if (["sameEventLaterCompleted", "priorExactComplete", "notCovered", "unknown"].some(key => groups.reduce((sum, row) => sum + row[key], 0) !== value[key])) return null;
+    const historicalTotal = Object.values(historicalCountsByVersion).reduce((sum, counts) => sum + REFRESH_STATES.reduce((n, key) => n + counts[key], 0), 0);
+    const historicalComplete = Object.values(historicalCountsByVersion).reduce((sum, counts) => sum + counts.complete, 0);
+    if (historicalTotal !== value.historicalRows || historicalTotal - historicalComplete !== value.reviewedRows
+      || historicalTotal + REFRESH_STATES.reduce((sum, key) => sum + dense[key], 0) !== value.rowsExamined) return null;
+    return { ...Object.fromEntries(fields.map(key => [key, value[key]])), allRowsCoverage: value.allRowsCoverage, groups,
+      currentVersionCounts: dense, historicalCountsByVersion };
+  }
+  const sumRefreshCounts = (versions, key) => versions && Object.values(versions).every(counts => refreshCount(counts?.[key]) !== null)
+    ? Object.values(versions).reduce((sum, counts) => sum + counts[key], 0) : null;
+  function refreshReasonLabel(code) {
+    if (code?.endsWith("OTHER_PREPARATION_PRESENT")) return "다른 준비 작업이 있어 보류";
+    if (code?.endsWith("SOURCE_COPY_BOUND")) return "당시 자료 복사 용량 한도";
+    if (code === "ISOLATION_SOCKET_OR_UNSAFE_STDIO") return "격리 실행의 입출력 검증 미통과";
+    if (code?.endsWith("WORKER_LOCKED")) return "작업 잠금 보호로 보류";
+    if (code?.endsWith("COLLECTION_BUSY")) return "수집 보호·예약 간격 때문에 대기";
+    if (code?.endsWith("POSTPROCESS_NOT_COMPLETE")) return "수집 자료의 DB 반영 대기";
+    return "사유 확인 필요";
+  }
   function normalizeOptions(value = {}, today = kstDay(Date.now())) {
     const currentDay = dateValid(value.currentDay) ? value.currentDay : today;
     const keywords = [], seen = new Set();
@@ -129,13 +179,21 @@
         provenanceByMonth: Object.fromEntries(Object.entries(row.provenanceByMonth || {}).filter(([month, item]) => MONTH.test(month) && item && typeof item === "object" && Number.isFinite(Date.parse(item.dataThrough || ""))).map(([month, item]) => [month, { dataThrough: item.dataThrough }])) });
     }
     const fresh = value.refreshStatus;
-    const versionCounts = counts => counts && typeof counts === "object" && !Array.isArray(counts)
-      && Object.values(counts).every(n => Number.isSafeInteger(n) && n >= 0)
-      ? Object.fromEntries(["queued", "deferred", "running", "complete", "needs_verification"].map(key => [key, counts[key] ?? 0])) : null;
+    const historicalReview = refreshHistory(fresh?.historicalReview);
+    const reviewedCounts = historicalReview?.allRowsCoverage === true ? historicalReview : null;
+    const historicalCountsByVersion = reviewedCounts?.historicalCountsByVersion || (fresh?.historicalCountsByVersion
+      && typeof fresh.historicalCountsByVersion === "object" && !Array.isArray(fresh.historicalCountsByVersion)
+      && Object.keys(fresh.historicalCountsByVersion).length <= 32
+      && Object.entries(fresh.historicalCountsByVersion).every(([version, counts]) => refreshVersion(version) && refreshCounts(counts))
+      ? Object.fromEntries(Object.entries(fresh.historicalCountsByVersion).map(([version, counts]) => [version, refreshCounts(counts)])) : null);
     const refreshStatus = fresh && typeof fresh === "object" ? { status: fresh.status === "needs_verification" ? "needs_verification" : fresh.status === "available" ? "available" : "unknown",
-      started: fresh.started === true, counts: Object.fromEntries(["queued", "deferred", "running", "complete", "needs_verification"].map(key => [key, Number.isSafeInteger(fresh.counts?.[key]) && fresh.counts[key] >= 0 ? fresh.counts[key] : null])),
-      currentVersionCounts: versionCounts(fresh.currentVersionCounts),
-      historicalNeedsVerification: Number.isSafeInteger(fresh.historicalNeedsVerification) && fresh.historicalNeedsVerification >= 0 ? fresh.historicalNeedsVerification : null,
+      started: typeof fresh.started === "boolean" ? fresh.started : null, initialized: typeof fresh.initialized === "boolean" ? fresh.initialized : null,
+      closed: typeof fresh.closed === "boolean" ? fresh.closed : null, counts: refreshCounts(fresh.counts),
+      currentVersionCounts: reviewedCounts?.currentVersionCounts || refreshCounts(fresh.currentVersionCounts), historicalCountsByVersion, historicalReview,
+      historicalNeedsVerification: refreshCount(fresh.historicalNeedsVerification),
+      currentVersionReasonCounts: Array.isArray(fresh.currentVersionReasonCounts) && fresh.currentVersionReasonCounts.length <= 128
+        && fresh.currentVersionReasonCounts.every(row => row && REFRESH_STATES.includes(row.status) && refreshReason(row.reasonCode) && refreshCount(row.count) !== null)
+        ? fresh.currentVersionReasonCounts.map(row => ({ status: row.status, reasonCode: row.reasonCode, count: row.count })) : null,
       hasRuntimeError: fresh.errorCode !== null,
       cleanupNeedsVerification: fresh.cleanup != null && fresh.cleanup.status !== "complete" } : null;
     return { status: value.status || "needs_verification", currentDay, currentMonth: MONTH.test(value.currentMonth || "") ? value.currentMonth : currentDay.slice(0, 7), keywords, provenance: value.provenance || null, diagnostics: Array.isArray(value.diagnostics) ? value.diagnostics : [], refreshStatus };
@@ -224,7 +282,8 @@
     for (const [key, info] of Object.entries(PRODUCTS)) { const node = button(info.label, () => { product = key; rememberScope(); render(); }, "kma-product-button"); productButtons[key] = node; productTabs.append(node); }
     panel.append(productTabs);
     const notice = el("p", "mr-notice kma-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite"); panel.append(notice);
-    const refreshNotice = el("p", "kma-note kma-refresh-status"); refreshNotice.hidden = true; panel.append(refreshNotice);
+    const refreshNotice = el("div", "kma-note kma-refresh-status"), refreshDetails = el("details", "kma-refresh-history");
+    refreshNotice.hidden = true; panel.append(refreshNotice);
     const errors = el("div", "mr-error kma-error"); errors.hidden = true; errors.setAttribute("role", "alert"); panel.append(errors);
     const results = el("div", "kma-results"); panel.append(results); parent.append(panel);
     const allowed = () => typeof options.isAdmin === "function" ? options.isAdmin() : Boolean(doc.body?.classList.contains("role-admin") && !doc.body?.classList.contains("admin-user-view"));
@@ -461,14 +520,33 @@
       if (restoreNotice && !loading) notice.textContent = `${restoreNotice} ${notice.textContent}`;
       const automatic = catalog?.refreshStatus;
       refreshNotice.hidden = !allowed() || !automatic;
-      const historicalOnly = automatic?.status === "needs_verification" && !automatic.hasRuntimeError && !automatic.cleanupNeedsVerification
-        && automatic.started && automatic.currentVersionCounts?.needs_verification === 0 && automatic.historicalNeedsVerification > 0;
-      refreshNotice.textContent = historicalOnly
-        ? `이전 갱신 검수 이력 ${number(automatic.historicalNeedsVerification)}건 보존 · 현재 갱신 작업 처리 ${number(automatic.currentVersionCounts.running)} / 대기 ${number(automatic.currentVersionCounts.queued)} / 이월 ${number(automatic.currentVersionCounts.deferred)}. 선택 자료의 실제 반영 범위는 아래 자료 마감과 출처 근거로 확인하세요. 이전 이력은 삭제하거나 정상 완료로 바꾸지 않습니다.`
-        : automatic ? automatic.status !== "available" || automatic.hasRuntimeError || automatic.cleanupNeedsVerification
-        ? "자동 반영 확인 필요 · 기존 검증 자료를 유지합니다. 수집 재실행이나 보호 해제를 시작하지 않습니다."
-        : automatic.started ? `수집·DB 반영 완료 후 자동 갱신 · 처리 ${number(automatic.counts.running)} / 대기 ${number(automatic.counts.queued)} / 이월 ${number(automatic.counts.deferred)}. 새 자료는 화면 재진입 또는 저장 자료 조회로 확인합니다.`
-          : "자동 반영 실행 상태 미확인 · 아래 자료 마감 시각을 확인하세요." : "";
+      refreshNotice.replaceChildren();
+      if (automatic) {
+        const count = value => refreshCount(value) === null ? "미확인" : number(value), currentCounts = automatic.currentVersionCounts;
+        const historicalDeferred = sumRefreshCounts(automatic.historicalCountsByVersion, "deferred");
+        const historicalNeeds = sumRefreshCounts(automatic.historicalCountsByVersion, "needs_verification") ?? automatic.historicalNeedsVerification;
+        const currentKnown = currentCounts && ["running", "queued", "deferred", "needs_verification"].every(key => currentCounts[key] !== null);
+        const protectedWarning = automatic.hasRuntimeError || automatic.cleanupNeedsVerification || automatic.started !== true
+          || automatic.initialized !== true || automatic.closed !== false || !currentKnown || currentCounts.needs_verification > 0
+          || automatic.status === "unknown" || automatic.status === "needs_verification" && !(historicalNeeds > 0 && currentCounts?.needs_verification === 0);
+        if (protectedWarning) refreshNotice.append(el("p", "kma-refresh-warning", "자동 반영 확인 필요 · 기존 검증 자료를 유지합니다. 실행 상태·현재 미처리·보호 근거를 확인하며 수집 재실행이나 보호 해제를 시작하지 않습니다."));
+        refreshNotice.append(el("p", "kma-refresh-current", `현재 갱신 작업 · 처리 ${count(currentCounts?.running)} / 대기 ${count(currentCounts?.queued)} / 이월 ${count(currentCounts?.deferred)} / 검수 필요 ${count(currentCounts?.needs_verification)}.`));
+        refreshNotice.append(el("p", "kma-refresh-historical", `이전 버전 기록 · 이월 ${count(historicalDeferred)} / 검수 필요 ${count(historicalNeeds)}. 원기록을 보존하며 재실행하지 않습니다.`));
+        refreshDetails.replaceChildren(el("summary", "", "이전 기록 분류와 완료 근거"));
+        const review = automatic.historicalReview;
+        if (review?.allRowsCoverage) refreshDetails.append(el("p", "", `이전 실행·보류·검수 기록 ${count(review.reviewedRows)}건을 확인했습니다. 같은 입력의 후속 완료 기록 ${count(review.sameEventLaterCompleted)} / 기존 완료 기록 ${count(review.priorExactComplete)} / 대응 완료 없음 ${count(review.notCovered)} / 근거 미확인 ${count(review.unknown)}.`));
+        else refreshDetails.append(el("p", "", "이전 기록의 사유별 분류 근거가 전체 원장을 포함하는지 미확인입니다. 확인하지 못한 건수를 0으로 표시하지 않습니다."));
+        const stateLabel = state => ({ queued: "대기", deferred: "이월", running: "실행 기록", needs_verification: "검수 필요" })[state] || "완료";
+        const list = el("ul");
+        for (const row of automatic.currentVersionReasonCounts || []) if (row.status !== "complete") list.append(el("li", "", `현재 ${stateLabel(row.status)} ${count(row.count)}건 · ${refreshReasonLabel(row.reasonCode)}${row.reasonCode ? ` (${row.reasonCode})` : ""}`));
+        for (const row of review?.groups || []) {
+          const version = row.version.match(/-v(\d+)$/)?.[1];
+          list.append(el("li", "", `이전${version ? ` v${version}` : " 버전"} ${stateLabel(row.status)} ${count(row.count)}건 · ${refreshReasonLabel(row.reasonCode)}${row.reasonCode ? ` (${row.reasonCode})` : ""}. 같은 입력 후속 완료 ${count(row.sameEventLaterCompleted)} / 기존 완료 ${count(row.priorExactComplete)} / 대응 없음 ${count(row.notCovered)} / 미확인 ${count(row.unknown)}.`));
+        }
+        if (list.children.length) refreshDetails.append(list);
+        refreshDetails.append(el("p", "", "같은 입력의 완료 기록과 현재 선택 자료의 최신 반영 여부는 별개입니다. 선택 자료의 실제 반영 범위는 아래 자료 마감과 출처 근거로 확인하세요. 이전 이력은 삭제하거나 정상 완료로 바꾸지 않습니다."));
+        refreshNotice.append(refreshDetails);
+      }
       errors.hidden = !error; errors.textContent = error; errors.dataset.errorCode = errorCode;
       if (!allowed() || paused || !payload || (loading || error) && !candidate?.usable) { if (!loading && !error && catalog && !catalog.keywords.length) section("조회할 저장 자료가 없습니다.", "검색어와 숙박월을 확인할 수 있는 근거가 없습니다. 누락을 정상 0건으로 표시하지 않습니다."); return; }
       const view = candidate || buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7));

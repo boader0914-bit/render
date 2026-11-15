@@ -16,6 +16,7 @@ const samePath = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(k => a[k] === b[k]);
 const clone = v => JSON.parse(JSON.stringify(v));
 const operatorRetry = require("./keyword_monthly_failed_retry_authorization.cjs");
+const { reviewHistoricalJobs } = require("./keyword_monthly_historical_review.cjs");
 const safeCode = error => /^[A-Z][A-Z0-9_]{1,119}$/.test(error?.code || "") ? error.code : "KEYWORD_REFRESH_UNAVAILABLE";
 const iso = v => typeof v === "string" && /^20\d\d-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
 const integer = (v, fallback, min, max) => { v ??= fallback; if (!Number.isSafeInteger(v) || v < min || v > max) throw TypeError("Invalid refresh bound"); return v; };
@@ -287,6 +288,7 @@ function createKeywordMonthlyRefresh(options = {}) {
         if (!historical.has(row.intent.refreshVersion)) historical.set(row.intent.refreshVersion, []);
         historical.get(row.intent.refreshVersion).push(row);
       }
+      const historicalReview = reviewHistoricalJobs(rows, refreshVersion, { allRowsCoverage: true });
       return { schemaVersion: 1, status: storeError || lastWorkerError || lastEnqueueError || unresolved.length ? "needs_verification" : "available", readOnly: true,
         initialized, started, closed, activeJobId, refreshVersion, activatedAt: admissionAt, errorCode: storeError || lastWorkerError || lastEnqueueError,
         unresolvedNeedsVerification: unresolved.length,
@@ -294,10 +296,12 @@ function createKeywordMonthlyRefresh(options = {}) {
         historicalNeedsVerification: unresolved.filter(row => row.intent.refreshVersion !== refreshVersion).length,
         currentVersionCounts: countStates(currentRows),
         historicalCountsByVersion: Object.fromEntries([...historical].sort(([a], [b]) => a.localeCompare(b)).map(([version, values]) => [version, countStates(values)])),
+        currentVersionReasonCounts: historicalReview.currentVersionReasonCounts, historicalReview,
         journalBytes: view.bytes, maxJournalBytes, maxRecords, counts: countStates(rows),
         items: rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.jobId.localeCompare(a.jobId)).slice(0, limit).map(publicRow) };
     } catch (e) { return { schemaVersion: 1, status: "needs_verification", readOnly: true, errorCode: safeCode(e), refreshVersion, items: null, counts: null,
-      currentVersionCounts: null, historicalCountsByVersion: null, currentVersionNeedsVerification: null, historicalNeedsVerification: null }; }
+      currentVersionCounts: null, historicalCountsByVersion: null, currentVersionNeedsVerification: null, historicalNeedsVerification: null,
+      currentVersionReasonCounts: null, historicalReview: null }; }
   }
   return Object.freeze({ enqueue, runOnce, start, close, status, directory, refreshVersion });
 }
