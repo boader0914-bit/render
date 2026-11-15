@@ -11,7 +11,74 @@
 .keyword-monthly-analysis{--kma-green:#55a77f;--kma-purple:#a47cc4}.keyword-monthly-analysis .mr-intro{margin-bottom:4px}.keyword-monthly-analysis .kma-dashboard-title{font-size:clamp(22px,2.2vw,32px);line-height:1.3;letter-spacing:-.04em}.keyword-monthly-analysis .mr-intro p{max-width:850px}.keyword-monthly-analysis .kma-filters{grid-template-columns:minmax(0,1.2fr) minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) auto;border-radius:14px}.kma-dashboard-summary{border-radius:14px}.kma-dashboard-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;margin-top:24px}.kma-dashboard-metrics .kma-metric{border-left:1px solid var(--kma-border);padding-left:20px}.kma-dashboard-metrics .kma-metric:first-child{border:0;padding-left:0}.kma-dashboard-metrics .kma-metric>strong{font-size:clamp(27px,2.4vw,38px);line-height:1.25;letter-spacing:-.045em}.kma-dashboard-metrics .kma-accent-selected>strong{color:var(--kma-green)}.kma-dashboard-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start;min-width:0}.kma-dashboard-grid>.kma-panel{margin:0;border-radius:14px;overflow:hidden}.kma-dashboard-grid h3{font-size:17px;letter-spacing:-.025em}.kma-chart{width:100%;min-width:0;margin-top:16px;overflow-x:auto;overscroll-behavior-x:contain}.kma-chart>[data-keyword-monthly-chart]{display:block;width:100%;min-width:480px;--font-sans:inherit}.kma-flow-coverage{font-size:12px;line-height:1.7;border-top:1px solid var(--kma-border);margin-top:18px;padding-top:18px;color:var(--kma-muted)}.kma-chart-loading,.kma-chart-error,.kma-unknown-companies{font-size:12px;color:var(--kma-muted);padding:14px 0;line-height:1.8}.kma-chart-data{border-top:1px solid var(--kma-border);margin-top:20px;padding-top:14px;min-width:0}.kma-chart-data>summary{font-size:12px;font-weight:600;cursor:pointer;line-height:1.7;color:var(--kma-muted)}.kma-chart-data summary:focus-visible{outline:3px solid var(--accent,#3e7565);outline-offset:4px}.kma-chart-data .kma-table{min-width:520px}.keyword-monthly-analysis .kma-refresh-status{padding:10px 14px;border:1px solid var(--kma-border);border-radius:9px;font-size:11px;margin:0 0 8px}.kma-results>.kma-panel{border-radius:14px}
 @media(max-width:1150px){.keyword-monthly-analysis .kma-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.kma-filters button{justify-self:start}.kma-dashboard-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:640px){.keyword-monthly-analysis .kma-filters{grid-template-columns:minmax(0,1fr)}.kma-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 14px}.kma-dashboard-metrics .kma-metric,.kma-dashboard-metrics .kma-metric:first-child{border:0;padding-left:0}.kma-dashboard-metrics .kma-metric>strong{font-size:27px}.kma-dashboard-grid{gap:14px}.kma-chart{margin-top:12px}.kma-chart>[data-keyword-monthly-chart]{min-width:500px}.keyword-monthly-analysis .kma-dashboard-title{overflow-wrap:anywhere}.kma-dashboard-grid>.kma-panel{padding:14px}}
-.kma-calendar{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:4px;margin-top:12px;font-size:12px}.kma-calendar caption{text-align:left;font-size:12px;font-weight:650;padding:0 4px 8px;color:var(--text-primary,#172235)}.kma-calendar th{padding:5px 0;font-size:11px;font-weight:500;color:var(--kma-muted)}.kma-calendar td{vertical-align:top;height:100px;padding:8px;border:1px solid var(--kma-border);border-radius:8px;background:var(--kma-surface);overflow-wrap:anywhere}.kma-calendar .kma-calendar-outside{border:0;background:transparent}.kma-calendar .kma-calendar-missing{background:var(--kma-control);color:var(--kma-muted)}.kma-calendar-day{display:block;font-size:11px;font-variant-numeric:tabular-nums}.kma-calendar-rate{display:block;margin-top:7px;font-size:16px;font-weight:650;font-variant-numeric:tabular-nums}.kma-calendar-coverage,.kma-calendar-state{display:block;margin-top:4px;font-size:10px;line-height:1.4;color:var(--kma-muted)}
-@media(max-width:640px){.kma-calendar{border-spacing:2px}.kma-calendar td{height:91px;padding:5px 3px;border-radius:5px}.kma-calendar-day{font-size:10px}.kma-calendar-rate{font-size:12px;margin-top:6px}.kma-calendar-coverage,.kma-calendar-state{font-size:9px}.kma-calendar th{font-size:10px}}
+.kma-calendar{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:4px;margin-top:12px;font-size:12px}.kma-calendar caption{text-align:left;font-size:12px;font-weight:650;padding:0 4px 8px;color:var(--text-primary,#172235)}.kma-calendar th{padding:5px 0;font-size:11px;font-weight:500;color:var(--kma-muted)}.kma-calendar td{vertical-align:top;height:100px;padding:8px;border:1px solid var(--kma-border);border-radius:8px;background:var(--kma-surface);overflow-wrap:anywhere}.kma-calendar .kma-calendar-outside{border:0;background:transparent}.kma-calendar .kma-calendar-missing{background:var(--kma-control);color:var(--kma-muted)}.kma-calendar-day{display:block;font-size:11px;font-variant-numeric:tabular-nums}.kma-calendar-rate{display:block;margin-top:7px;font-size:16px;font-weight:650;font-variant-numeric:tabular-nums}.kma-calendar-coverage,.kma-calendar-state{display:block;margin-top:4px;font-size:11px;line-height:1.4;color:var(--kma-muted)}
+@media(max-width:640px){.kma-calendar{border-spacing:2px}.kma-calendar td{height:91px;padding:5px 3px;border-radius:5px}.kma-calendar-day{font-size:11px}.kma-calendar-rate{font-size:12px;margin-top:6px}.kma-calendar-coverage,.kma-calendar-state{font-size:11px}.kma-calendar th{font-size:11px}}
 .kma-flow-chart>[data-keyword-monthly-chart]{min-width:0}.kma-supporting-details{border:1px solid var(--kma-border);border-radius:14px;min-width:0;background:var(--kma-surface)}.kma-supporting-details>summary{padding:18px 20px;cursor:pointer;font-size:14px;font-weight:650}.kma-supporting-details>.kma-panel{border:0;margin:0}.kma-supporting-details>summary:focus-visible{outline:3px solid var(--accent,#3e7565);outline-offset:3px}
 .kma-warnings{overflow-wrap:anywhere}
+
+/* List/detail workspace: presentation only; the saved snapshot owns all values. */
+.keyword-monthly-analysis :is(h2,h3,h4,p,small,strong,label){overflow-wrap:anywhere}
+.keyword-monthly-analysis button{white-space:normal}
+.keyword-monthly-analysis :is(button,input,select,summary):focus-visible{outline:3px solid var(--accent,#3e7565);outline-offset:3px}
+.keyword-monthly-analysis .kma-condition-summary{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:0;border:1px solid var(--kma-border);border-radius:10px;padding:12px 16px;background:var(--kma-surface);color:var(--kma-muted);font-size:12px;line-height:1.7}
+.keyword-monthly-analysis .kma-workspace{display:grid;grid-template-columns:minmax(230px,280px) minmax(0,1fr);gap:18px;align-items:start;min-width:0}
+.keyword-monthly-analysis .kma-company-list-panel{position:sticky;top:16px;display:flex;flex-direction:column;gap:14px;min-width:0;max-height:calc(100dvh - 32px);margin:0;padding:18px;border:1px solid var(--kma-border);border-radius:14px;background:var(--kma-surface)}
+.keyword-monthly-analysis .kma-company-list-panel h3{margin:0;font-size:16px}
+.keyword-monthly-analysis .kma-company-search{display:grid;gap:6px;min-width:0;margin:0;color:var(--kma-muted);font-size:12px}
+.keyword-monthly-analysis .kma-company-search input{width:100%;max-width:100%;min-width:0;min-height:44px;border:1px solid var(--kma-border);border-radius:8px;padding:9px 10px;background:var(--kma-control);color:var(--text-primary,#172235);font:inherit}
+.keyword-monthly-analysis .kma-company-list{display:grid;align-content:start;flex:1 1 auto;gap:7px;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-gutter:stable;padding:3px;margin:-3px}
+.keyword-monthly-analysis .kma-company-list-panel>:not(.kma-company-list){flex-shrink:0}
+.keyword-monthly-analysis .kma-company-row{display:grid;gap:6px;width:100%;min-width:0;min-height:64px;border:1px solid var(--kma-border);border-radius:9px;padding:11px 12px;background:var(--kma-surface);color:var(--text-primary,#172235);text-align:left;font:inherit;cursor:pointer}
+.keyword-monthly-analysis .kma-company-row>:is(strong,span,small){min-width:0;overflow-wrap:anywhere}
+.keyword-monthly-analysis .kma-company-row>strong{font-size:13px;font-weight:650;line-height:1.5}
+.keyword-monthly-analysis .kma-company-row[aria-pressed=true]{border-color:var(--accent,#3e7565);background:var(--surface-selected,#eaf1ed);box-shadow:inset 3px 0 0 var(--accent,#3e7565)}
+.keyword-monthly-analysis .kma-company-state{color:var(--kma-muted);font-size:11px;line-height:1.6}
+.keyword-monthly-analysis .kma-company-rate{font-size:18px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.4}
+.keyword-monthly-analysis .kma-company-list-count{margin:0;color:var(--kma-muted);font-size:11px;line-height:1.6}
+.keyword-monthly-analysis .kma-company-pagination{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;min-width:0;padding-top:12px;border-top:1px solid var(--kma-border);color:var(--kma-muted);font-size:11px}
+.keyword-monthly-analysis .kma-company-pagination button{min-width:58px;min-height:40px;padding:8px 10px;font:inherit;font-size:12px}
+.keyword-monthly-analysis .kma-detail-panel{display:grid;gap:16px;min-width:0}
+.keyword-monthly-analysis .kma-detail-panel>*{min-width:0;margin:0}
+.keyword-monthly-analysis .kma-detail-panel .kma-dashboard-grid{grid-template-columns:minmax(0,1fr)}
+.keyword-monthly-analysis .kma-detail-panel .kma-dashboard-grid>.kma-panel{overflow:visible}
+.keyword-monthly-analysis .kma-detail-panel .kma-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:18px}
+.keyword-monthly-analysis .kma-detail-panel .kma-dashboard-metrics .kma-metric{border:0;padding-left:0}
+.keyword-monthly-analysis .kma-detail-panel .kma-dashboard-metrics .kma-metric>strong{font-size:clamp(24px,2.4vw,32px)}
+.keyword-monthly-analysis :is(.kma-back-to-list,[data-kma-action=back-to-list]){display:none}
+.keyword-monthly-analysis .kma-selection-unavailable{margin:0;border:1px solid var(--kma-border);border-radius:10px;padding:14px 16px;background:var(--kma-control);color:var(--kma-muted);font-size:12px;line-height:1.75}
+.keyword-monthly-analysis .kma-chart{max-width:100%}
+.keyword-monthly-analysis .kma-table-wrap{min-width:0}
+/* Small annotations remain legible at every supported viewport. */
+.keyword-monthly-analysis :is(.kma-calendar-day,.kma-calendar-coverage,.kma-calendar-state,.kma-calendar th){font-size:11px}
+@media(max-width:1150px){
+  .keyword-monthly-analysis .kma-workspace{grid-template-columns:230px minmax(0,1fr);gap:16px}
+  .keyword-monthly-analysis .kma-company-list-panel{padding:15px}
+}
+@media(max-width:1000px){
+  .keyword-monthly-analysis .kma-calendar{border-spacing:2px}
+  .keyword-monthly-analysis .kma-calendar td{padding:6px 3px}
+  .keyword-monthly-analysis .kma-calendar-rate{font-size:13px}
+}
+@media(max-width:767px){
+  .keyword-monthly-analysis .kma-workspace{grid-template-columns:minmax(0,1fr)}
+  .keyword-monthly-analysis .kma-company-list-panel{position:static;max-height:none}
+  .keyword-monthly-analysis .kma-company-list{overflow:visible;max-height:none;flex:none;scrollbar-gutter:auto}
+  .keyword-monthly-analysis .kma-workspace[data-kma-mobile-view=list]>.kma-detail-panel,
+  .keyword-monthly-analysis [data-kma-mobile-view=list]>.kma-detail-panel,
+  .keyword-monthly-analysis[data-kma-mobile-view=list] .kma-workspace>.kma-detail-panel{display:none}
+  .keyword-monthly-analysis .kma-workspace[data-kma-mobile-view=detail]>.kma-company-list-panel,
+  .keyword-monthly-analysis [data-kma-mobile-view=detail]>.kma-company-list-panel,
+  .keyword-monthly-analysis[data-kma-mobile-view=detail] .kma-workspace>.kma-company-list-panel{display:none}
+  .keyword-monthly-analysis :is(.kma-back-to-list,[data-kma-action=back-to-list]){display:inline-flex;align-items:center;justify-content:center;justify-self:start;min-height:44px;max-width:100%}
+}
+@media(max-width:640px){
+  .keyword-monthly-analysis .kma-company-search input{font-size:16px}
+  .keyword-monthly-analysis .kma-condition-summary{padding:12px 14px;gap:5px 10px}
+  .keyword-monthly-analysis .kma-calendar td{height:98px;padding:5px 2px;border-radius:5px}
+  .keyword-monthly-analysis .kma-calendar-rate{font-size:12px}
+  .keyword-monthly-analysis .kma-flow-chart>[data-keyword-monthly-chart]{min-width:0}
+}
+@media(max-width:360px){
+  .keyword-monthly-analysis .kma-detail-panel .kma-dashboard-metrics{gap:16px 12px}
+  .keyword-monthly-analysis .kma-detail-panel .kma-dashboard-metrics .kma-metric>strong{font-size:23px}
+}

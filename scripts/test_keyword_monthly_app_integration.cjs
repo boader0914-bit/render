@@ -53,6 +53,7 @@ test("keyword monthly is an independent administrator-only analysis destination"
   assert.equal(api.roleAllowsTab("keywordMonthly"), false);
   assert.match(html, /id="keywordMonthlyPanel"[^>]*data-panel="keywordMonthly"/);
   assert.ok(html.indexOf('/keyword-monthly-analysis.js') < html.indexOf('/app.js'));
+  assert.ok(html.indexOf('/admin-view-state.js') < html.indexOf('/keyword-monthly-analysis.js'));
 });
 test("entry cannot resume an old crawl or rebuild unrelated hidden views", () => {
   const { context, state, calls } = fixture();
@@ -79,6 +80,24 @@ test("leaving pauses the keyword controller and preserves the existing report de
   assert.equal(calls.some(call => call[0] === "show"), false);
 });
 
+test("search-demand round trip restores the full monthly context only for the same exact keyword", () => {
+  const { context, state } = fixture();
+  const monthly = { keyword: "경남글램핑", month: "2026-10", cutoffDate: "2026-10-30", product: "dayuse", benchmarkCompanyId: "company_b", listPage: 2, listQuery: "글램핑", expanded: { "chart:daily": true } };
+  let incomingKeyword = monthly.keyword, returned;
+  context.fetchJson = async () => ({});
+  context.window.KeywordMonthlyAnalysis.getSelection = () => ({ ...monthly });
+  context.window.KeywordMonthlyAnalysis.show = (_host, value) => { returned = value; };
+  context.window.SearchDemandAnalysis = { pause() {}, show() {}, getSelection: () => ({ keyword: incomingKeyword }) };
+  state.activeTab = "keywordMonthly";
+  context.navigate("searchDemand");
+  context.navigate("keywordMonthly");
+  assert.deepEqual(JSON.parse(JSON.stringify(returned)), monthly);
+  context.navigate("searchDemand");
+  incomingKeyword = "경남 글램핑";
+  context.navigate("keywordMonthly");
+  assert.deepEqual(JSON.parse(JSON.stringify(returned)), { keyword: "경남 글램핑" });
+});
+
 test("keyword view suppresses hidden KOSIS status, region reads and late paints", async () => {
   const state = { activeTab: "keywordMonthly" };
   const context = vm.createContext({ state });
@@ -102,13 +121,15 @@ test("production prepared reads own the existing analytical lease until the full
   const query = { keyword: "가평글램핑", month: "2026-10" }; assert.equal(await service.analyze(query), query); assert.equal(leased, false);
   assert.deepEqual(calls, ["keyword_monthly_options", "keyword_monthly_analysis"]);
 });
-test("Git-normalized collection, pacing, protection and KOSIS runtime sources remain unchanged", () => {
+test("Git-normalized collection, pacing, protection and held runtime sources remain at approved release", () => {
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",
     "scripts/keyword_worker_scheduler.cjs", "scripts/collector_broker.cjs", "scripts/collector_dispatch.cjs",
     "scripts/operating_web_collector.cjs", "scripts/lib/kosis.cjs", "scripts/lib/regional_market_bootstrap.cjs",
-    "scripts/lib/regional_market_missing_weekly.cjs"];
+    "scripts/lib/regional_market_missing_weekly.cjs", "scripts/naver_request_pacing.cjs", "scripts/collector_requests.cjs",
+    "scripts/lib/keyword_monthly_refresh.cjs", "scripts/lib/monthly_reports.cjs",
+    "web/keyword-monthly-dashboard-model.js", "web/keyword-monthly-benchmark.js"];
   for (const file of protectedFiles) {
-    const baseline = execFileSync("git", ["show", `17920e862251e06136cd4c84525d608a72a7b334:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+    const baseline = execFileSync("git", ["show", `c29bf467999ae7d7643e42f7d8506972590494da:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
     const normalizedHash = bytes => createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
     assert.equal(normalizedHash(fs.readFileSync(path.join(root, file))), normalizedHash(baseline), file);
   }

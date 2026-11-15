@@ -38105,7 +38105,10 @@ function setActiveTab(tab, options = {}) {
   }
   if (isAdminRole() && previousTab === "searchDemand" && tab === "keywordMonthly") {
     const selected = window.SearchDemandAnalysis?.getSelection?.(document.getElementById("searchDemandDashboard"));
-    if (selected?.keyword) options = { ...options, keywordMonthlyContext: { ...(state.keywordMonthlySearchReturnContext || {}), keyword: selected.keyword } };
+    if (selected?.keyword) {
+      const previous = state.keywordMonthlySearchReturnContext;
+      options = { ...options, keywordMonthlyContext: { ...(previous?.keyword === selected.keyword ? previous : {}), keyword: selected.keyword } };
+    }
   }
   state.analysisNavigationSequence = (state.analysisNavigationSequence || 0) + 1;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();

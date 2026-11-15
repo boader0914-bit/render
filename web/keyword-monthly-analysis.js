@@ -98,7 +98,14 @@
     if (!parent || typeof document === "undefined") return null;
     if (instances.has(parent)) return instances.get(parent);
     const doc = parent.ownerDocument || document, win = options.window || root, request = options.fetch || win.fetch.bind(win), now = options.now || Date.now;
+    const stateHelper = win.AdminViewState || root.AdminViewState;
+    if (typeof stateHelper?.create !== "function") { const note = doc.createElement("p"); note.textContent = "조회 조건 보존 모듈을 확인하지 못했습니다. 화면을 다시 열어 주세요."; note.setAttribute("role", "alert"); parent.append(note); return null; }
+    const initialView = { selection: { keyword: "", month: "", cutoffDate: "" }, draft: { keyword: "", month: "", cutoffDate: "" }, applied: null,
+      cutoffMode: "auto", draftCutoffMode: "auto", product: "lodging", companyId: "", listQuery: "", listPage: 1, mobileView: "list", expanded: {}, scopes: [] };
+    const viewState = stateHelper.create(initialView);
     let sequence = 0, active = null, destroyed = false, paused = false, loading = false, phase = "", error = "", catalog = null, payload = null, keyword = "", month = "", cutoffDate = "", product = "lodging", benchmarkCompanyId = "", pendingContext = null, companyChoices = [], chartRevision = 0;
+    let draft = { ...initialView.draft }, appliedSelection = null, draftRevision = 0, cutoffMode = "auto", draftCutoffMode = "auto", listQuery = "", listPage = 1, mobileView = "list", expanded = {}, scopes = [], resultTarget = null, workspace = null, listPanel = null, detailPanel = null;
+    const PAGE_SIZE = 20;
     const chartRoots = new Set();
     const el = (tag, cls = "", text = "") => { const node = doc.createElement(tag); node.className = cls; node.textContent = text; return node; };
     const button = (label, handler, cls = "secondary-button") => { const node = el("button", cls, label); node.type = "button"; node.addEventListener("click", handler); return node; };
@@ -111,10 +118,11 @@
     const keywordInput = field("검색어 · 정확한 키워드", "select", "keyword"), companyInput = field("비교할 업체", "select", "benchmarkCompany"), monthInput = field("숙박월 · 관측 자료가 있는 월", "select", "month"), cutoffInput = field("관측 마감일 · 한국시간", "input", "cutoffDate"); cutoffInput.type = "date";
     companyInput.setAttribute("aria-label", "비교할 업체");
     const cutoffNote = el("small", "kma-cutoff-note"); cutoffInput.parentNode.append(cutoffNote);
-    const readButton = button("저장 자료 조회", () => { const context = { keyword, month }; catalog = null; void load(context); }, "primary-button"); filters.append(readButton); panel.append(filters);
+    const readButton = button("저장 자료 조회", () => { void applyDraft(true); }, "primary-button"); filters.append(readButton); panel.append(filters);
+    const conditionSummary = el("p", "kma-condition-summary"); conditionSummary.setAttribute("role", "status"); panel.append(conditionSummary);
     const productTabs = el("div", "kma-product-tabs"); productTabs.setAttribute("role", "group"); productTabs.setAttribute("aria-label", "상품 유형");
     const productButtons = {};
-    for (const [key, info] of Object.entries(PRODUCTS)) { const node = button(info.label, () => { product = key; render(); }, "kma-product-button"); productButtons[key] = node; productTabs.append(node); }
+    for (const [key, info] of Object.entries(PRODUCTS)) { const node = button(info.label, () => { product = key; rememberScope(); render(); }, "kma-product-button"); productButtons[key] = node; productTabs.append(node); }
     panel.append(productTabs);
     const notice = el("p", "mr-notice kma-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite"); panel.append(notice);
     const refreshNotice = el("p", "kma-note kma-refresh-status"); refreshNotice.hidden = true; panel.append(refreshNotice);
@@ -124,24 +132,46 @@
     const visible = () => !paused && allowed() && !doc.hidden && panel.getClientRects().length > 0;
     const current = token => !destroyed && token === sequence && allowed() && visible();
     const selected = () => ({ keyword, month, cutoffDate });
+    const scopeKey = (word = keyword, stayMonth = month) => JSON.stringify([word, stayMonth]);
+    const draftHasChanges = () => Object.keys(draft).some(key => draft[key] !== selected()[key]) || draftCutoffMode !== cutoffMode;
+    function persistView() { viewState.update({ selection: selected(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, draftCutoffMode, product, companyId: benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, scopes }); }
+    function rememberScope() {
+      if (keyword && month) { const key = scopeKey(); scopes = [...scopes.filter(row => row.key !== key), { key, cutoffDate, cutoffMode, product, companyId: benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded } }].slice(-24); }
+      persistView();
+    }
+    function changeScope(word, stayMonth) {
+      if (keyword === word && month === stayMonth) return;
+      const carriedCompanyId = word === keyword ? benchmarkCompanyId : "";
+      rememberScope(); const saved = scopes.find(row => row.key === scopeKey(word, stayMonth));
+      keyword = word; month = stayMonth; cutoffDate = saved?.cutoffDate || ""; cutoffMode = saved?.cutoffMode || "auto";
+      product = saved?.product || product; benchmarkCompanyId = saved ? saved.companyId : carriedCompanyId; listQuery = saved?.listQuery || ""; listPage = saved?.listPage || 1; mobileView = saved?.mobileView || "list"; expanded = { ...(saved?.expanded || {}) }; companyChoices = [];
+    }
+    function disclose(details, key) {
+      details.open = expanded[key] === true;
+      details.addEventListener("toggle", () => { if (!allowed() || destroyed || paused) return; expanded = { ...expanded, [key]: details.open === true }; rememberScope(); });
+      return details;
+    }
+    function externalSelection() { return { ...selected(), cutoffMode, product, benchmarkCompanyId, companyId: benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded } }; }
     function choices(input, rows, value, blank) { input.replaceChildren(); if (!rows.length) { const option = el("option", "", blank); option.value = ""; input.append(option); } else for (const row of rows) { const option = el("option", "", row.label); option.value = row.value; input.append(option); } input.value = value; }
     function renderControls(dashboard) {
-      choices(keywordInput, (catalog?.keywords || []).map(row => ({ value: row.keyword, label: row.keyword })), keyword, "선택 가능한 저장 검색어 없음");
-      const months = catalog?.keywords.find(row => row.keyword === keyword)?.stayMonths || [];
-      choices(monthInput, months.map(value => ({ value, label: `${value}${value > catalog.currentMonth ? " · 사전 관측" : value === catalog.currentMonth ? " · 누적 중" : ""}` })), month, "관측된 숙박월 없음");
-      choices(companyInput, companyChoices.map(company => ({ value: company.companyId, label: `${company.name}${company.quantityKnown ? "" : " · 수량 미관측"}` })), benchmarkCompanyId, "선택 가능한 업체 없음");
-      const supported = catalog?.keywords.find(row => row.keyword === keyword)?.supportedCutoffs?.[month];
-      cutoffInput.value = cutoffDate; cutoffInput.min = supported || ""; cutoffInput.max = supported || [catalog?.currentDay || kstDay(now()), catalog ? dataThroughDay(catalog) : kstDay(now())].sort()[0]; cutoffInput.readOnly = Boolean(supported);
+      choices(keywordInput, (catalog?.keywords || []).map(row => ({ value: row.keyword, label: row.keyword })), draft.keyword, "선택 가능한 저장 검색어 없음");
+      const months = catalog?.keywords.find(row => row.keyword === draft.keyword)?.stayMonths || [];
+      choices(monthInput, months.map(value => ({ value, label: `${value}${value > catalog.currentMonth ? " · 사전 관측" : value === catalog.currentMonth ? " · 누적 중" : ""}` })), draft.month, "관측된 숙박월 없음");
+      const companyOptions = companyChoices.map(company => ({ value: company.companyId, label: `${company.name}${company.quantityKnown ? "" : " · 수량 미관측"}` }));
+      if (benchmarkCompanyId && !companyChoices.some(company => company.companyId === benchmarkCompanyId)) companyOptions.unshift({ value: benchmarkCompanyId, label: `선택 업체 미확보 · ${benchmarkCompanyId}` });
+      choices(companyInput, companyOptions, benchmarkCompanyId, "선택 가능한 업체 없음");
+      const supported = catalog?.keywords.find(row => row.keyword === draft.keyword)?.supportedCutoffs?.[draft.month];
+      cutoffInput.value = draft.cutoffDate; cutoffInput.min = supported || ""; cutoffInput.max = supported || [catalog?.currentDay || kstDay(now()), catalog ? dataThroughDay(catalog, draft.keyword, draft.month) : kstDay(now())].sort()[0]; cutoffInput.readOnly = Boolean(supported);
       cutoffNote.textContent = supported ? `선택 관측 사본 · ${supported} 마감만 지원` : catalog?.provenance?.dataThrough ? `저장 근거 마감 ${dataThroughDay(catalog)}` : "저장된 관측 근거 범위에서 조회";
       keywordInput.disabled = paused || !catalog?.keywords.length || !allowed() || phase === "options";
       monthInput.disabled = paused || !months.length || !allowed() || phase === "options"; cutoffInput.disabled = paused || !month || !allowed() || phase === "options";
-      readButton.disabled = paused || !allowed() || !keyword || !month || !dateValid(cutoffDate) || phase === "options";
+      readButton.disabled = paused || !allowed() || !draft.keyword || !draft.month || phase === "options";
       companyInput.disabled = paused || !allowed() || loading || !dashboard || dashboard.status === "needs_verification" || !companyChoices.length;
       for (const key of Object.keys(PRODUCTS)) productButtons[key].setAttribute("aria-pressed", String(product === key));
     }
     function card(label, value, detail = "", cls = "") { const node = el("div", `kma-metric ${cls}`); node.append(el("span", "", label), el("strong", "", value)); if (detail) node.append(el("small", "", detail)); return node; }
     function section(label, note = "", collapsible = false) { const node = el("section", "mr-card kma-panel"), head = el("div", "mr-section-title"); head.append(el("h3", "", label)); node.append(head); if (note) node.append(el("p", "kma-note", note));
-      if (collapsible) { const details = el("details", "kma-chart-data kma-supporting-details"); details.append(el("summary", "", label), node); results.append(details); } else results.append(node); return node; }
+      if (collapsible) { const details = disclose(el("details", "kma-chart-data kma-supporting-details"), `support:${label}`); details.append(el("summary", "", label), node); (resultTarget || results).append(details); } else (resultTarget || results).append(node); return node; }
     function table(parentNode, headers, rows, caption) { const wrap = el("div", "kma-table-wrap"), node = el("table", "kma-table"), head = el("thead"), line = el("tr"), body = el("tbody"); node.append(el("caption", "", caption)); for (const name of headers) { const cell = el("th", "", name); cell.scope = "col"; line.append(cell); } head.append(line); for (const row of rows) { const tr = el("tr"); row.forEach((value, index) => { const cell = el(index ? "td" : "th", "", value); if (!index) cell.scope = "row"; tr.append(cell); }); body.append(tr); } node.append(head, body); wrap.append(node); parentNode.append(wrap); return node; }
     function calendar(parentNode, rows, info) {
       const node = el("table", "kma-calendar"), head = el("thead"), headerRow = el("tr"), body = el("tbody");
@@ -184,6 +214,61 @@
         }).catch(failed);
       } catch { failed(); }
     }
+    function chooseCompany(companyId) {
+      if (!allowed() || paused || loading || !companyChoices.some(company => company.companyId === companyId)) return;
+      benchmarkCompanyId = companyId; mobileView = "detail"; rememberScope(); render(); detailPanel?.focus?.({ preventScroll: true });
+      if (win.matchMedia?.("(max-width: 767px)")?.matches) detailPanel?.scrollIntoView?.({ block: "start", behavior: "instant" });
+    }
+    function displayedDashboard(model) {
+      if (!model || model.status === "needs_verification") return model;
+      if (!benchmarkCompanyId) benchmarkCompanyId = model.selectedCompanyId || "";
+      companyChoices = model.companies;
+      // The pure model intentionally chooses a default for an unknown ID. A
+      // remembered UI selection must not silently turn into another company.
+      if (!benchmarkCompanyId || model.selectedCompanyId === benchmarkCompanyId) return model;
+      return { ...model, selectedCompanyId: benchmarkCompanyId, selectionUnavailable: true,
+        companies: model.companies.map(company => ({ ...company, selected: false })), monthly: { ...model.monthly, selected: null },
+        daily: model.daily.map(day => ({ ...day, selectedRate: null, selectedPublicRate: null, selectedPhoneRate: null, selectedObserved: false,
+          selectedSupply: null, selectedSold: null, selectedPublicBookings: null, selectedPhoneBookings: null, difference: null, peerDifference: null, canCompare: false, canComparePeers: false })) };
+    }
+    function renderCompanyWorkspace(model) {
+      workspace = el("div", "kma-workspace"); workspace.dataset.kmaMobileView = mobileView; panel.dataset.kmaMobileView = mobileView;
+      listPanel = el("aside", "mr-card kma-company-list-panel"); listPanel.setAttribute("aria-label", "비교 업체 목록");
+      detailPanel = el("div", "kma-detail-panel"); detailPanel.tabIndex = -1; detailPanel.setAttribute("aria-label", "선택 업체와 전체 표본 상세");
+      const back = button("업체 목록으로", () => {
+        mobileView = "list"; workspace.dataset.kmaMobileView = mobileView; panel.dataset.kmaMobileView = mobileView; rememberScope();
+        const target = rowNodes.get(benchmarkCompanyId) || search; target.focus?.({ preventScroll: true });
+        if (win.matchMedia?.("(max-width: 767px)")?.matches) target.scrollIntoView?.({ block: "center", behavior: "instant" });
+      }, "secondary-button kma-back-to-list");
+      back.setAttribute("data-kma-action", "back-to-list"); detailPanel.append(back); workspace.append(listPanel, detailPanel); results.append(workspace);
+      listPanel.append(el("h3", "", "비교할 업체"));
+      const searchLabel = el("label", "kma-company-search"), search = el("input"); search.type = "search"; search.name = "companySearch"; search.value = listQuery; search.maxLength = 200;
+      search.placeholder = "현재 키워드의 업체 찾기"; searchLabel.append(el("span", "", "업체명 · 고유번호 검색"), search); listPanel.append(searchLabel);
+      const scopeNote = el("p", "kma-note", "목록 검색·페이지는 업체 선택만 돕습니다. 전체 평균·전체선·전체 업체 막대의 모집단은 바뀌지 않습니다."); listPanel.append(scopeNote);
+      const countLabel = el("p", "kma-company-list-count"), rowsRoot = el("div", "kma-company-list"), pages = el("div", "kma-company-pagination"); listPanel.append(countLabel, rowsRoot, pages);
+      const rowNodes = new Map(), all = model?.status !== "needs_verification" && Array.isArray(model?.companies) ? model.companies : [];
+      const normalized = value => String(value).normalize("NFKC").toLocaleLowerCase("ko-KR");
+      function listRows() {
+        rowNodes.clear(); rowsRoot.replaceChildren(); pages.replaceChildren();
+        const query = normalized(listQuery.trim()), matches = all.filter(company => !query || normalized(`${company.name} ${company.companyId}`).includes(query));
+        const pageCount = Math.max(1, Math.ceil(matches.length / PAGE_SIZE)); listPage = Math.min(Math.max(1, listPage), pageCount);
+        const offset = (listPage - 1) * PAGE_SIZE;
+        countLabel.textContent = `목록 전체 ${number(all.length)}곳 · 검색 ${number(matches.length)}곳 · ${listPage}/${pageCount}페이지`;
+        for (const company of matches.slice(offset, offset + PAGE_SIZE)) {
+          const row = button("", () => chooseCompany(company.companyId), "kma-company-row"); row.dataset.companyId = company.companyId;
+          row.setAttribute("aria-pressed", String(company.companyId === benchmarkCompanyId)); row.setAttribute("aria-label", `${company.name} · 예약 추정률 ${rate(company.totalRate)} · ${company.quantityKnown ? "수량 관측" : "수량 미관측"}`);
+          row.append(el("strong", "", company.name), el("span", "kma-company-rate", rate(company.totalRate)), el("small", "kma-company-state", company.quantityKnown ? known(company.totalRate) ? "수량 관측" : "공급 근거 확인 필요" : "수량 미관측"));
+          rowsRoot.append(row); rowNodes.set(company.companyId, row);
+        }
+        if (!matches.length) rowsRoot.append(el("p", "kma-note", all.length ? "검색 조건에 맞는 업체가 없습니다. 선택 업체와 전체 평균은 유지합니다." : "비교할 업체의 저장 근거를 확인하지 못했습니다."));
+        if (benchmarkCompanyId && !matches.some(company => company.companyId === benchmarkCompanyId)) rowsRoot.append(el("p", "kma-note", all.some(company => company.companyId === benchmarkCompanyId) ? "현재 선택 업체는 목록 검색 범위 밖입니다. 상세 비교는 같은 업체를 유지합니다." : "현재 선택 업체는 이 조회 범위에서 미확보입니다. 다른 업체로 바꾸지 않습니다."));
+        const previous = button("이전 업체", () => { listPage--; listRows(); rememberScope(); }, "secondary-button"), next = button("다음 업체", () => { listPage++; listRows(); rememberScope(); }, "secondary-button");
+        previous.disabled = listPage <= 1; next.disabled = listPage >= pageCount; pages.append(previous, el("span", "", `${offset + (matches.length ? 1 : 0)}–${Math.min(offset + PAGE_SIZE, matches.length)} / ${matches.length}곳`), next);
+        persistView();
+      }
+      search.addEventListener("input", () => { listQuery = search.value.slice(0, 200); listPage = 1; listRows(); rememberScope(); });
+      listRows(); resultTarget = detailPanel;
+    }
     function renderDashboard(model, info) {
       if (!model || model.status === "needs_verification") { section("비교 대시보드 확인 필요", "유효 관측의 업체·수량 근거를 확인하지 못했습니다. 기존 상세 표에서 저장 근거를 확인할 수 있습니다."); return; }
       const chosen = model.monthly.selected, whole = model.monthly.whole;
@@ -191,7 +276,7 @@
       const summary = section("선택 업체와 전체 비교", `${keyword} · ${month} · ${info.label} · 전체 평균은 선택 업체를 포함한 공급 가중 값입니다.`); summary.className += " kma-dashboard-summary";
       const metrics = el("div", "kma-dashboard-metrics"); metrics.append(card(`${chosen?.name || "선택 업체"} 예약 추정률`, rate(chosen?.totalRate), "유효 관측 공급 기준", "kma-accent-selected"), card("전체 표본 예약 추정률", rate(whole.totalRate), `유효 ${number(whole.companyCount)} / 목록 ${number(model.companies.length)}곳`), card("선택 업체 − 전체", known(gap) ? `${gap > 0 ? "+" : ""}${number(gap * 100)}%p` : "—", "반올림 전 원값의 차이"), card("선택 업체 자료 충족률", rate(chosen?.coverageRate), `유효 관측 ${number(chosen?.observedCompanyDays)} 업체·일`)); summary.append(metrics);
       const grid = el("div", "kma-dashboard-grid"), companyPanel = el("section", "mr-card kma-panel kma-company-chart-panel"), flowPanel = el("section", "mr-card kma-panel kma-flow-chart-panel");
-      grid.append(companyPanel, flowPanel); results.append(grid);
+      grid.append(companyPanel, flowPanel); (resultTarget || results).append(grid);
       companyPanel.append(el("h3", "", "업체별 예약 추정률"), el("p", "kma-note", "공개 예약과 방막기·타채널 추정을 같은 유효 공급으로 나눕니다. 선택 업체와 관계없이 전체 업체를 표시합니다."));
       const nameCounts = new Map(); for (const company of model.companies) nameCounts.set(company.name, (nameCounts.get(company.name) || 0) + 1);
       const sameNames = new Map(), validCompanies = model.companies.filter(company => known(company.publicRate) && known(company.phoneRate));
@@ -204,7 +289,7 @@
       const unknown = model.companies.filter(company => !known(company.publicRate) || !known(company.phoneRate));
       if (unknown.length) companyPanel.append(el("p", "kma-unknown-companies", `비율 미확인 ${number(unknown.length)}곳 · ${unknown.map(company => company.name).join(", ")}. 미관측 또는 공급 근거 부족을 0% 막대로 표시하지 않습니다.`));
       if (!barRows.length) companyPanel.append(el("p", "kma-note", "표시할 유효 비율이 없습니다. 미관측은 0%가 아닙니다."));
-      const companyData = el("details", "kma-chart-data"); companyData.append(el("summary", "", `전체 ${number(model.companies.length)}개 업체의 저장 수치 보기`));
+      const companyData = disclose(el("details", "kma-chart-data"), "chart:companies"); companyData.append(el("summary", "", `전체 ${number(model.companies.length)}개 업체의 저장 수치 보기`));
       table(companyData, ["업체", "공개 예약", "방막기·타채널 추정", "전체 예약 추정률", "공급", "예약 추정", "자료 충족률"], model.companies.map(company => [`${company.name}${company.selected ? " · 선택" : ""}`, rate(company.publicRate), rate(company.phoneRate), rate(company.totalRate), number(company.supply), number(company.sold), rate(company.coverageRate)]), "상위 업체 수로 자르지 않은 전체 목록 · 비율 미확인 업체 포함"); companyPanel.append(companyData);
       flowPanel.append(el("h3", "", "선택 업체와 전체의 일별 흐름"), el("p", "kma-note", "숙박일별 유효 표본의 공급 가중 비율입니다. 전체에는 선택 업체를 포함하며 관측 날짜·선행일수가 다른 표본일 수 있습니다."));
       const wholeLabel = "전체 표본 · 선택 업체 포함", selectedLabel = chosen?.name === wholeLabel ? `${chosen.name} · 선택` : chosen?.name || "선택 업체";
@@ -212,7 +297,7 @@
         spec: { type: "line", x: "date", y: [selectedLabel, wholeLabel], yDomain: [0, 1], colors: { [selectedLabel]: "#70bd9a", [wholeLabel]: "#b68ade" }, valueFormat: { style: "percent", maximumFractionDigits: 1 } },
         rows: model.daily.map(day => ({ date: day.date, [selectedLabel]: day.selectedRate, [wholeLabel]: day.wholeRate })) }, "kma-flow-chart");
       flowPanel.append(el("p", "kma-note kma-flow-coverage", `전체 목록 ${number(model.companies.length)}곳 중 날짜별 유효 업체 수가 달라집니다. 미관측일은 선을 연결하거나 0으로 채우지 않습니다. 같은 선행일수·재고 기준 비교는 아래 상세 비교에서 확인하세요.`));
-      const flowData = el("details", "kma-chart-data"); flowData.append(el("summary", "", "일별 수치와 관측 업체 수 보기"));
+      const flowData = disclose(el("details", "kma-chart-data"), "chart:daily"); flowData.append(el("summary", "", "일별 수치와 관측 업체 수 보기"));
       table(flowData, ["숙박일", selectedLabel, wholeLabel, "선택 업체 − 전체", "전체 유효 / 목록 업체"], model.daily.map(day => [day.date, rate(day.selectedRate), rate(day.wholeRate), known(day.difference) ? `${day.difference > 0 ? "+" : ""}${number(day.difference * 100)}%p` : "—", `${number(day.wholeCompanyCount)} / ${number(day.rosterCompanyCount)}`]), "월 전체 날짜 표시 · 미관측은 — · 수치가 없는 날짜를 연결하지 않음"); flowPanel.append(flowData);
     }
     function renderBenchmark(snapshot, info) {
@@ -222,7 +307,7 @@
       if (typeof calculate !== "function") { block.append(el("p", "kma-note", "업체 평균 계산 모듈을 확인하지 못했습니다. 미확인 평균을 0으로 표시하지 않습니다.")); return; }
       const value = calculate(snapshot, { productType: product, companyId: benchmarkCompanyId });
       if (value.status === "needs_verification") { block.append(el("p", "kma-note", "비교할 저장 관측의 업체 고유번호·수량·중복 근거를 확인해야 합니다. 정상 평균이나 0으로 대신 계산하지 않습니다.")); return; }
-      benchmarkCompanyId = value.selectedCompanyId || "";
+      if (benchmarkCompanyId && value.selectedCompanyId !== benchmarkCompanyId) { block.append(el("p", "kma-selection-unavailable", "선택 업체를 이 범위에서 확보하지 못해 선택 제외·동일 관측일 비교는 표시하지 않습니다. 전체 표본 비교선과 막대는 기존 전체 범위를 유지합니다.")); return; }
       const selectedCompany = value.selected, all = value.monthly.all, peers = value.monthly.peers, fair = value.sameDates;
       const bars = el("div", "kma-benchmark-bars");
       for (const [name, item, cls] of [[selectedCompany?.name || "선택 업체", selectedCompany, "kma-benchmark-selected"], ["전체 표본 · 선택 업체 포함", all, "kma-benchmark-all"], ["다른 표본 · 선택 업체 제외", peers, "kma-benchmark-peers"]]) {
@@ -259,13 +344,15 @@
       block.append(el("p", "kma-note", "완전 가격 관측 평균에는 별도 부분 응답 금액을 넣지 않습니다. 업체 규모와 자료 충족률이 다르므로 평균 차이를 성과 우열이나 가격 조정의 근거로 단정하지 않습니다."));
     }
     function render() {
-      clearCharts();
+      clearCharts(); resultTarget = results; workspace = listPanel = detailPanel = null;
       const candidate = allowed() && !loading && !error && payload ? buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)) : null;
       const calculateDashboard = (root.KeywordMonthlyDashboardModel || dashboardModule)?.buildKeywordMonthlyDashboardModel;
-      const dashboard = candidate?.usable && typeof calculateDashboard === "function" ? calculateDashboard(candidate.snapshot, { productType: product, companyId: benchmarkCompanyId }) : null;
-      if (dashboard && dashboard.status !== "needs_verification") { benchmarkCompanyId = dashboard.selectedCompanyId || ""; companyChoices = dashboard.companies; }
-      dashboardTitle.textContent = dashboard?.monthly?.selected ? `${keyword} · ${dashboard.monthly.selected.name} 비교` : "키워드 월별 누적 분석";
+      const dashboard = displayedDashboard(candidate?.usable && typeof calculateDashboard === "function" ? calculateDashboard(candidate.snapshot, { productType: product, companyId: benchmarkCompanyId }) : null);
+      const chosenName = dashboard?.monthly?.selected?.name || companyChoices.find(company => company.companyId === benchmarkCompanyId)?.name;
+      dashboardTitle.textContent = keyword ? `${keyword} · ${month || "숙박월 선택"}${dashboard?.selectionUnavailable ? " · 선택 업체 미확보" : chosenName ? ` · ${chosenName} 비교` : " · 월별 누적 분석"}` : "키워드 월별 누적 분석";
+      conditionSummary.textContent = keyword ? `현재 조회 기준 · ${keyword} / 숙박월 ${month} / 관측 마감 ${cutoffDate} (${cutoffMode === "explicit" ? "사용자 선택" : "최신 근거 자동"}) / ${PRODUCTS[product].label}${draftHasChanges() ? " · 입력 초안이 다릅니다. 현재 자료는 위 조회 기준입니다." : ""}` : "저장된 키워드와 실제 숙박월을 선택하세요.";
       renderControls(dashboard); panel.setAttribute("aria-busy", String(loading)); results.replaceChildren();
+      persistView();
       notice.textContent = loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
       const automatic = catalog?.refreshStatus;
       refreshNotice.hidden = !allowed() || !automatic;
@@ -277,9 +364,11 @@
       if (!allowed() || loading || error || !payload) { if (!loading && !error && catalog && !catalog.keywords.length) section("조회할 저장 자료가 없습니다.", "검색어와 숙박월을 확인할 수 있는 근거가 없습니다. 누락을 정상 0건으로 표시하지 않습니다."); return; }
       const view = candidate || buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7));
       if (catalog?.diagnostics.length) { const evidence = section("저장 자료 목록 확인사항", "일부 키워드·월의 준비 상태와 현재 선택한 집계 상태는 따로 확인합니다."); warnings(evidence, catalog.diagnostics); }
-      if (!view.usable) { const labels = { missing: "조회용 저장 집계가 준비되지 않았습니다.", stale: "저장 집계의 갱신 확인이 필요합니다.", needs_verification: "자료 검수가 필요합니다." }; const label = hasDiagnostic(view.diagnostics, "CUTOFF_NOT_RECONSTRUCTIBLE") ? "선택한 마감일의 과거 상태를 재구성할 수 없습니다." : hasDiagnostic(view.diagnostics, "CUTOFF_AFTER_DATA_THROUGH") ? "관측 마감일이 사본의 자료 마감보다 늦습니다." : labels[view.status] || "집계 상태를 확인해야 합니다."; const block = section(label, "이전 저장값을 현재 정상 수치나 0으로 대신 표시하지 않습니다."); warnings(block, view.diagnostics); if (view.supportedCutoffDate) { block.append(el("p", "kma-note", `이 선택 관측 사본은 ${view.supportedCutoffDate} 마감만 확인할 수 있습니다.`)); if (view.supportedCutoffDate !== cutoffDate) block.append(button(`${view.supportedCutoffDate} 근거로 조회`, () => { cutoffDate = view.supportedCutoffDate; void load(); })); } if (view.provenance) block.append(el("p", "kma-note", `집계 생성 ${timeLabel(view.provenance.materializedAt)} · 자료 마감 ${timeLabel(view.provenance.dataThrough)}`)); return; }
+      if (!view.usable) { const labels = { missing: "조회용 저장 집계가 준비되지 않았습니다.", stale: "저장 집계의 갱신 확인이 필요합니다.", needs_verification: "자료 검수가 필요합니다." }; const label = hasDiagnostic(view.diagnostics, "CUTOFF_NOT_RECONSTRUCTIBLE") ? "선택한 마감일의 과거 상태를 재구성할 수 없습니다." : hasDiagnostic(view.diagnostics, "CUTOFF_AFTER_DATA_THROUGH") ? "관측 마감일이 사본의 자료 마감보다 늦습니다." : labels[view.status] || "집계 상태를 확인해야 합니다."; const block = section(label, "이전 저장값을 현재 정상 수치나 0으로 대신 표시하지 않습니다."); warnings(block, view.diagnostics); if (view.supportedCutoffDate) { block.append(el("p", "kma-note", `이 선택 관측 사본은 ${view.supportedCutoffDate} 마감만 확인할 수 있습니다.`)); if (view.supportedCutoffDate !== cutoffDate) block.append(button(`${view.supportedCutoffDate} 근거로 조회`, () => { cutoffDate = view.supportedCutoffDate; cutoffMode = draftCutoffMode = "explicit"; draft = selected(); draftRevision++; rememberScope(); void load(); })); } if (view.provenance) block.append(el("p", "kma-note", `집계 생성 ${timeLabel(view.provenance.materializedAt)} · 자료 마감 ${timeLabel(view.provenance.dataThrough)}`)); return; }
       const snapshot = view.snapshot, info = PRODUCTS[product], metric = view.summary[product];
       if (view.historicalSnapshot) section("과거 저장근거 · 갱신 확인 필요", `집계 생성 ${timeLabel(view.provenance?.materializedAt)} · 자료 마감 ${timeLabel(view.provenance?.dataThrough)}. 아래 값은 이 저장 범위의 과거 집계이며 이후 수집 반영이나 현재 최신 상태를 확인한 값이 아닙니다.`);
+      renderCompanyWorkspace(dashboard);
+      if (dashboard?.selectionUnavailable) { const unavailable = section("선택 업체 미확보", `기억한 업체 ${benchmarkCompanyId}는 이 키워드·숙박월의 현재 목록에 없습니다. 다른 업체의 수치로 대체하지 않습니다. 전체 평균·전체선은 전체 저장 표본을 유지합니다.`); unavailable.className += " kma-selection-unavailable"; }
       renderDashboard(dashboard, info);
       const heading = section(`${keyword} · ${month} · ${view.phase}`, `숙박일 기준 · 관측 마감 ${cutoffDate} (KST) · ${info.label}. ${view.phase === "사전 관측" ? "미래 숙박일을 미리 관측한 자료이며 최종 예약·매출이 아닙니다." : "월의 종료와 자료 충족도는 별도입니다."}`);
       const metrics = el("div", "kma-metrics"); metrics.append(card("월 표본 업체", `${number(snapshot.companies?.length)}곳`), card(`예약 추정 / 공급 (${info.unit})`, `${number(metric.sold)} / ${number(metric.supply)}`), card("관측 예약 추정률", rate(metric.reservationRate)), card(metric.revenuePartial ? "가격 확인 부분 소계" : "추정 매출", money(metric.estimatedRevenue), "실제 결제 매출과 다름"), card("자료 충족률", rate(metric.coverageRate), `유효 관측 ${number(metric.coveredCompanyDays)} / 기대 ${number(metric.expectedCompanyDays)} 업체·일`)); heading.append(metrics);
@@ -344,7 +433,10 @@
       warnings(sources, (snapshot.sources?.excludedRuns || []).map(row => ({ message: `${row.id || "수집 기록"} · ${row.reason || row.status || "제외 사유 미확인"}` })));
     }
     function cancel() { sequence++; active?.abort(); active = null; loading = false; phase = ""; }
-    function clearPrivate(reason = "관리자 로그인이 필요합니다.") { cancel(); paused = true; catalog = null; payload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null; error = reason; render(); }
+    function clearPrivate(reason = "관리자 로그인이 필요합니다.") {
+      cancel(); paused = true; catalog = null; payload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null;
+      product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; viewState.clear(); error = reason; render();
+    }
     async function get(url, token) {
       const response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, ...(active ? { signal: active.signal } : {}) });
       if (!current(token)) return null;
@@ -353,50 +445,85 @@
       if (!response.ok && !["missing", "stale", "needs_verification"].includes(value?.status)) throw new Error(`저장 자료를 확인하지 못했습니다 (${response.status}).`);
       return value;
     }
-    function applyCatalog(value, context) {
+    function applyCatalog(value, context, editRevision, overwriteDraft) {
       catalog = normalizeOptions(value, kstDay(now()));
       if (catalog.status !== "available" && !(catalog.status === "stale" && (hasDiagnostic(catalog.diagnostics, "PROJECTION_EXPIRED") || hasDiagnostic(catalog.diagnostics, "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT")))) { error = [...catalog.diagnostics.map(message), "저장된 검색어·숙박월 목록을 확인하지 못했습니다."].join(" "); catalog = null; return false; }
       const requested = context || {};
-      keyword = typeof requested.keyword === "string" ? requested.keyword : catalog.keywords.some(row => row.keyword === keyword) ? keyword : catalog.keywords[0]?.keyword || "";
-      const row = catalog.keywords.find(item => item.keyword === keyword);
-      if (!row) { if (catalog.keywords.length) error = "저장 목록에 있는 정확한 검색어를 선택하세요."; keyword = month = cutoffDate = ""; return false; }
-      month = typeof requested.month === "string" ? requested.month : row.stayMonths.includes(month) ? month : row.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row.stayMonths[0] || "";
-      if (!row.stayMonths.includes(month)) { error = "선택한 검색어에 실제 숙박 관측이 있는 월을 선택하세요."; month = cutoffDate = ""; return false; }
-      cutoffDate = requested.cutoffDate || cutoffFor(catalog, keyword, month); return true;
+      if (typeof requested.keyword === "string" && requested.keyword.length > 300 || typeof requested.month === "string" && requested.month.length > 7 || typeof requested.cutoffDate === "string" && requested.cutoffDate.length > 10) { error = "전달된 검색어·숙박월·관측 마감 조건을 확인해 주세요."; return false; }
+      const word = typeof requested.keyword === "string" ? requested.keyword : keyword || catalog.keywords[0]?.keyword || "";
+      const row = catalog.keywords.find(item => item.keyword === word);
+      if (!row) { if (catalog.keywords.length) error = "저장 목록에 있는 정확한 검색어를 선택하세요."; return false; }
+      const stayMonth = typeof requested.month === "string" ? requested.month : word === keyword && month ? month : row.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row.stayMonths[0] || "";
+      changeScope(word, stayMonth);
+      if (Object.hasOwn(PRODUCTS, requested.product)) product = requested.product;
+      const companyId = typeof requested.benchmarkCompanyId === "string" ? requested.benchmarkCompanyId : requested.companyId;
+      if (typeof companyId === "string" && companyId.length <= 300 && !/[\u0000-\u001f\u007f]/.test(companyId)) benchmarkCompanyId = companyId;
+      if (typeof requested.listQuery === "string") listQuery = requested.listQuery.slice(0, 200);
+      if (Number.isSafeInteger(requested.listPage) && requested.listPage > 0) listPage = Math.min(requested.listPage, 10000);
+      if (["list", "detail"].includes(requested.mobileView)) mobileView = requested.mobileView;
+      if (requested.expanded && typeof requested.expanded === "object" && !Array.isArray(requested.expanded)) {
+        const values = {};
+        for (const key of Object.keys(requested.expanded).slice(0, 32)) { const prop = Object.getOwnPropertyDescriptor(requested.expanded, key); if (key.length <= 200 && /^(chart|support):/.test(key) && typeof prop?.value === "boolean") values[key] = prop.value; }
+        expanded = values;
+      }
+      if (["auto", "explicit"].includes(requested.cutoffMode)) cutoffMode = requested.cutoffMode;
+      if (typeof requested.cutoffDate === "string" && requested.cutoffMode !== "auto") { cutoffMode = "explicit"; cutoffDate = requested.cutoffDate; }
+      if (!row.stayMonths.includes(month)) { error = "선택한 검색어에 실제 숙박 관측이 있는 월을 선택하세요."; return false; }
+      if (cutoffMode === "auto" || !cutoffDate) cutoffDate = cutoffFor(catalog, keyword, month);
+      if (editRevision === draftRevision && overwriteDraft) { draft = selected(); draftCutoffMode = cutoffMode; }
+      persistView(); return true;
     }
-    async function load(context) {
+    async function load(context, { applyInput = false } = {}) {
       if (destroyed || !visible()) return;
+      const editRevision = draftRevision, changesSelection = context && ["keyword", "month", "cutoffDate"].some(key => Object.hasOwn(context, key) && context[key] !== selected()[key]);
+      const overwriteDraft = applyInput || !draftHasChanges() || changesSelection;
       cancel(); payload = null; error = ""; loading = true; phase = "data"; active = typeof AbortController === "function" ? new AbortController() : null; const token = sequence;
       try {
-        if (!catalog) { phase = "options"; render(); const value = await get("/api/keyword-monthly/options", token); if (!value || !current(token)) return; if (!applyCatalog(value, context || pendingContext)) return; }
-        else if (context && !applyCatalog(catalog, context)) return;
+        if (!catalog) { phase = "options"; render(); const value = await get("/api/keyword-monthly/options", token); if (!value || !current(token)) return; if (!applyCatalog(value, context || pendingContext, editRevision, overwriteDraft)) return; }
+        else if (!applyCatalog(catalog, context, editRevision, overwriteDraft)) return;
+        pendingContext = null;
         if (!keyword || !month) return;
         if (!catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month))) throw new Error("저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요.");
         if (!dateValid(cutoffDate) || cutoffDate > catalog.currentDay) throw new Error("관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요.");
-        phase = "data"; render();
-        const params = new URLSearchParams({ keyword, month, cutoffDate }); const value = await get(`/api/keyword-monthly?${params}`, token);
+        appliedSelection = selected(); phase = "data"; rememberScope(); render();
+        const params = new URLSearchParams(appliedSelection); const value = await get(`/api/keyword-monthly?${params}`, token);
         if (value && current(token)) payload = value;
       } catch (failure) { if (current(token)) error = failure.name === "AbortError" ? "조회가 취소됐습니다." : failure.message || "저장 자료를 확인하지 못했습니다."; }
       finally { if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; render(); } }
     }
     async function open(context = null) { paused = false; pendingContext = context; catalog = null; return load(context); }
-    keywordInput.addEventListener("change", () => { keyword = keywordInput.value; const row = catalog?.keywords.find(item => item.keyword === keyword); month = row?.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row?.stayMonths[0] || ""; cutoffDate = month ? cutoffFor(catalog, keyword, month) : ""; pendingContext = null; void load(); });
-    monthInput.addEventListener("change", () => { month = monthInput.value; cutoffDate = cutoffFor(catalog, keyword, month); pendingContext = null; void load(); });
-    companyInput.addEventListener("change", () => { benchmarkCompanyId = companyInput.value; render(); });
-    cutoffInput.addEventListener("change", () => { cutoffDate = cutoffInput.value; pendingContext = null; void load(); });
-    filters.addEventListener("submit", event => { event.preventDefault(); void load(); });
+    function editDraft(name, value) { draft = { ...draft, [name]: String(value).slice(0, name === "keyword" ? 300 : name === "month" ? 7 : 10) }; if (name === "cutoffDate") draftCutoffMode = "explicit"; draftRevision++; persistView(); }
+    async function applyDraft(renewCatalog = false) {
+      if (catalog && !catalog.keywords.some(row => row.keyword === draft.keyword && row.stayMonths.includes(draft.month))) { cancel(); payload = null; error = "저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요."; render(); return; }
+      if (!dateValid(draft.cutoffDate) || draft.cutoffDate > (catalog?.currentDay || kstDay(now()))) { cancel(); payload = null; error = "관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요."; render(); return; }
+      const context = { ...draft, cutoffMode: draftCutoffMode }; if (renewCatalog) catalog = null; pendingContext = null;
+      return load(context, { applyInput: true });
+    }
+    for (const [name, input] of [["keyword", keywordInput], ["month", monthInput], ["cutoffDate", cutoffInput]]) input.addEventListener("input", () => editDraft(name, input.value));
+    keywordInput.addEventListener("change", () => {
+      const word = keywordInput.value, row = catalog?.keywords.find(item => item.keyword === word), stayMonth = row?.stayMonths.includes(catalog.currentMonth) ? catalog.currentMonth : row?.stayMonths[0] || "";
+      const saved = scopes.find(item => item.key === scopeKey(word, stayMonth)); draftCutoffMode = saved?.cutoffMode || "auto";
+      draft = { keyword: word, month: stayMonth, cutoffDate: draftCutoffMode === "explicit" ? saved.cutoffDate : stayMonth ? cutoffFor(catalog, word, stayMonth) : "" }; draftRevision++; persistView(); render();
+    });
+    monthInput.addEventListener("change", () => {
+      const stayMonth = monthInput.value, word = draft.keyword, saved = scopes.find(item => item.key === scopeKey(word, stayMonth)); draftCutoffMode = saved?.cutoffMode || "auto";
+      draft = { keyword: word, month: stayMonth, cutoffDate: draftCutoffMode === "explicit" ? saved.cutoffDate : MONTH.test(stayMonth) && catalog ? cutoffFor(catalog, word, stayMonth) : "" }; draftRevision++; persistView(); render();
+    });
+    companyInput.addEventListener("change", () => chooseCompany(companyInput.value));
+    cutoffInput.addEventListener("change", () => { editDraft("cutoffDate", cutoffInput.value); render(); });
+    filters.addEventListener("submit", event => { event.preventDefault(); void applyDraft(true); });
     const onVisibility = () => { if (!visible()) { if (loading) { cancel(); render(); } } else if (!loading && (!catalog || !payload)) { if (catalog) void load(); else void open(pendingContext); } };
     const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (visible() && !catalog && !loading) void open(pendingContext); }) : null;
     observer?.observe(doc.body, { attributes: true, attributeFilter: ["class"] }); doc.addEventListener("visibilitychange", onVisibility);
-    const controller = { open, refresh: () => load(), pause() { cancel(); paused = true; payload = null; render(); }, clear: clearPrivate,
-      state: () => ({ selection: selected(), product, benchmarkCompanyId, loading, paused, status: payload?.status || null }),
+    const controller = { open, refresh: () => load(), pause() { rememberScope(); cancel(); paused = true; payload = null; render(); }, clear: clearPrivate,
+      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null }),
       destroy() { if (destroyed) return; clearPrivate(""); destroyed = true; observer?.disconnect(); doc.removeEventListener("visibilitychange", onVisibility); panel.replaceChildren(); controllers.delete(controller); instances.delete(parent); } };
     controllers.add(controller); instances.set(parent, controller);
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;
   }
   const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel,
     getSelection(parent) { return instances.get(parent)?.state().selection || null; },
-    show(parent, context) { if (!parent) return null; const controller = instances.get(parent) || mount(parent, { autoStart: false }); return controller.open(context); },
+    show(parent, context) { if (!parent) return null; const controller = instances.get(parent) || mount(parent, { autoStart: false }); return controller?.open(context) || null; },
     pause(parent) { if (parent) instances.get(parent)?.pause(); else for (const controller of controllers) controller.pause(); },
     clear() { for (const controller of controllers) controller.clear(); } };
   root.KeywordMonthlyAnalysis = api;

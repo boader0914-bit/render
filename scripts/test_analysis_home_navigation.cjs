@@ -20,7 +20,7 @@ const declarations = constants.map((name) => {
 })).join("\n");
 
 function fixture(role = "admin") {
-  const calls = { industry: 0, region: 0, report: 0, scrollTop: 0, requests: [], startupReadiness: [] };
+  const calls = { industry: 0, region: 0, report: 0, scrollTop: 0, requests: [], startupReadiness: [], catchmentSync: 0 };
   const region = { regionKey: "kr_gyeonggi_pocheon", name: "포천시", fullName: "경기도 포천시" };
   const state = {
     session: { role, username: "navigation-fixture" }, activeTab: "admin", adminPanelSection: "overview",
@@ -56,6 +56,9 @@ function fixture(role = "admin") {
     // of the selected analysis screen. Keep this dependency observable without
     // importing the unrelated full administrator dashboard into the fixture.
     renderAdminStartupReadiness() { calls.startupReadiness.push(state.adminRunCatalogReadiness?.status || "missing"); },
+    // Saved catchment is an independent regional module. Navigation invokes
+    // its synchronizer without needing its dataset or implementation here.
+    syncSavedRegionalCatchment() { calls.catchmentSync++; },
     adminDbCompanyIdFromRoute: () => "", handleAdminDbCompanyHash() {},
     escapeHtml: (value) => String(value ?? "")
   };
@@ -103,11 +106,16 @@ async function main() {
   assert.equal(f.els.regionAnalysisShell.hidden, true);
   f.api.activateAdminMobileNav("analysis");
   assert.equal(f.state.activeTab, "industryHome");
+  const compactAnalysisTabs = ["industryHome", "keywordMonthly", "searchDemand", "regionHome"];
+  assert.deepEqual(Array.from(f.api.ADMIN_COMPACT_SECTIONS.analysis.items, item => item.tab), compactAnalysisTabs,
+    "The existing compact analysis menu exposes both starts and the two saved keyword views");
   for (const item of f.api.ADMIN_COMPACT_SECTIONS.analysis.items) {
     f.api.activateAdminMobileNav("analysis", item.tab);
     assert.equal(f.state.activeTab, item.tab);
-    assert.ok(["industryHome", "regionHome"].includes(item.tab));
+    assert.equal(f.els.pageTitle.textContent, { industryHome: "업종분석", keywordMonthly: "키워드 월별", searchDemand: "검색 수요 분석", regionHome: "지역분석" }[item.tab]);
+    assert.equal(f.els.regionAnalysisShell.hidden, true, "Starts and saved keyword views do not show a selected regional-detail shell");
   }
+  assert.ok(f.calls.catchmentSync > 0, "Navigation still synchronizes the independent saved regional module");
   f.api.openAdminHomeRoute("industry");
   assert.equal(f.state.activeTab, "industryHome");
   f.api.openAdminHomeRoute("region");
