@@ -548,14 +548,37 @@
       product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; restoreAttempted = false; restoreNotice = ""; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
     }
     const failure = (code, status = 0, details = []) => Object.assign(new Error(code), { code, status, details });
-    const safeCodes = value => (Array.isArray(value?.diagnostics) ? value.diagnostics : []).map(row => typeof row === "string" ? row : row?.code)
-      .filter(code => typeof code === "string" && /^(?:KEYWORD_|ANALYTICAL_|MONTHLY_|COMPANY_)[A-Z0-9_]{1,75}$/.test(code)).slice(0, 4);
+    const safeCodes = value => {
+      // JSON error bodies use both top-level codes and diagnostics. Only the
+      // bounded code vocabulary is displayable; raw errors/messages are not.
+      const candidates = [value?.code, value?.errorCode, ...(Array.isArray(value?.diagnostics) ? value.diagnostics.slice(0, 32) : [])
+        .map(row => typeof row === "string" ? row : row?.code)], codes = [];
+      for (const code of candidates) {
+        if (typeof code === "string" && code.length <= 100 && /^(?:KEYWORD_|ANALYTICAL_|MONTHLY_|COMPANY_)[A-Z0-9_]+$/.test(code) && !codes.includes(code)) codes.push(code);
+        if (codes.length === 4) break;
+      }
+      return codes;
+    };
+    const failureReasons = {
+      KEYWORD_MONTHLY_MEMORY_DEFERRED: "메모리 보호로 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      ANALYTICAL_MEMORY_BUSY: "메모리 보호로 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      KEYWORD_MONTHLY_MEMORY_UNAVAILABLE: "서버 메모리 상태를 확인하지 못해 저장 자료 조회를 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      ANALYTICAL_MEMORY_UNAVAILABLE: "서버 메모리 상태를 확인하지 못해 저장 자료 조회를 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      KEYWORD_MONTHLY_QUERY_TIMEOUT: "저장 자료 조회 대기 시간이 초과됐습니다. 잠시 후 다시 조회해 주세요.",
+      KEYWORD_MONTHLY_QUERY_BUSY: "진행 중인 조회·응답이 많아 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      KEYWORD_MONTHLY_RESPONSE_BUSY: "진행 중인 조회·응답이 많아 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
+      KEYWORD_MONTHLY_RESPONSE_TOO_LARGE: "저장 자료 응답 크기가 한도를 넘어 조회를 완료하지 못했습니다.",
+      COMPANY_RESPONSE_TOO_LARGE: "저장 자료 응답 크기가 한도를 넘어 조회를 완료하지 못했습니다."
+    };
     function failureLabel(value) {
-      const suffix = [value?.status ? `HTTP ${value.status}` : "", value?.code, ...(value?.details || [])].filter(Boolean).join(" · ");
+      const details = safeCodes({ diagnostics: value?.details }), codes = [...new Set([value?.code, ...details].filter(Boolean))];
+      const suffix = [value?.status ? `HTTP ${value.status}` : "", ...codes].filter(Boolean).join(" · ");
+      const reason = codes.find(code => Object.hasOwn(failureReasons, code));
       const label = value?.code === "KEYWORD_MONTHLY_TIMEOUT" ? "저장 자료 조회 시간이 초과됐습니다. 잠시 후 저장 자료 조회를 다시 눌러 주세요."
         : value?.code === "KEYWORD_MONTHLY_INVALID_JSON" || value?.code === "KEYWORD_MONTHLY_RESPONSE_NOT_JSON" ? "서버가 올바른 저장 자료 응답을 보내지 못했습니다. 잠시 후 다시 조회해 주세요."
         : value?.code === "KEYWORD_MONTHLY_NETWORK_ERROR" ? "서버 연결을 확인하지 못했습니다. 잠시 후 다시 조회해 주세요."
-        : value?.details?.length ? "저장 자료의 최신 상태를 확인하지 못해 자료 검수가 필요합니다."
+        : reason ? failureReasons[reason]
+        : details.length ? "저장 자료의 최신 상태를 확인하지 못해 자료 검수가 필요합니다."
         : "저장 자료를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.";
       return `${label}${suffix ? ` (${suffix})` : ""}`;
     }

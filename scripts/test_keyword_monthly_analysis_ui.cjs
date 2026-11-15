@@ -546,6 +546,82 @@ test("HTML 502 and JSON 503 preserve only the same-condition normal snapshot and
   response = null; await ui.controller.refresh(); assert.equal(ui.controller.state().showingStored, false); assert.equal(ui.controller.state().errorCode, "");
 });
 
+test("503 displays bounded distinct top-level reason codes before diagnostics without exposing raw errors", async () => {
+  const value = { code: "KEYWORD_MONTHLY_MEMORY_DEFERRED", errorCode: "KEYWORD_MONTHLY_QUERY_TIMEOUT", error: "SECRET_RAW_ERROR",
+    message: "SECRET_RAW_MESSAGE", stack: "/var/data/SECRET_INTERNAL_PATH", diagnostics: ["KEYWORD_MONTHLY_MEMORY_DEFERRED",
+      { code: "KEYWORD_MONTHLY_RESPONSE_BUSY", message: "SECRET_DIAGNOSTIC_MESSAGE" }, { code: "KEYWORD_MONTHLY_RESPONSE_TOO_LARGE" },
+      { code: "KEYWORD_MONTHLY_EVIDENCE_CHANGED" }, { code: "<script>SECRET_HTML</script>" }] };
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : jsonResponse(value, 503) });
+  await ui.controller.open();
+  const error = ui.find("kma-error")[0].textContent;
+  assert.match(error, /메모리 보호/); assert.match(error, /HTTP 503/);
+  assert.match(error, /KEYWORD_MONTHLY_HTTP_503.*KEYWORD_MONTHLY_MEMORY_DEFERRED.*KEYWORD_MONTHLY_QUERY_TIMEOUT.*KEYWORD_MONTHLY_RESPONSE_BUSY.*KEYWORD_MONTHLY_RESPONSE_TOO_LARGE/);
+  for (const code of [value.code, value.errorCode, "KEYWORD_MONTHLY_RESPONSE_BUSY", "KEYWORD_MONTHLY_RESPONSE_TOO_LARGE"]) assert.equal(error.split(code).length - 1, 1);
+  assert.doesNotMatch(error, /SECRET_|script|\/var\/data|KEYWORD_MONTHLY_EVIDENCE_CHANGED/);
+  assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.equal(ui.find("kma-metric").length, 0);
+});
+
+test("reason codes reject malformed or overlong values and retain a safe 100-character code", async () => {
+  const boundary = "KEYWORD_MONTHLY_" + "X".repeat(100 - "KEYWORD_MONTHLY_".length), tooLong = boundary + "Y";
+  const value = { code: { code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, errorCode: "KEYWORD_MONTHLY_BAD\nSECRET_CONTROL",
+    error: "SECRET_ERROR", diagnostics: [tooLong, "keyword_monthly_lowercase", "KEYWORD_MONTHLY_BAD/path", "KEYWORD_MONTHLY_BAD:SECRET",
+      { code: ["KEYWORD_MONTHLY_ARRAY"] }, { error: "SECRET_NO_CODE" }, boundary, { code: "COMPANY_EVIDENCE_UNAVAILABLE" }] };
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : jsonResponse(value, 503) });
+  await ui.controller.open(); const error = ui.find("kma-error")[0].textContent;
+  assert.match(error, /자료 검수가 필요/); assert.ok(error.includes(boundary)); assert.equal(error.includes(tooLong), false);
+  assert.match(error, /COMPANY_EVIDENCE_UNAVAILABLE/); assert.doesNotMatch(error, /SECRET|lowercase|BAD\/path|ARRAY|\[object Object\]|MEMORY_DEFERRED/);
+});
+
+test("safe server errorCode values explain resource holds and leave unknown reasons as verification", async () => {
+  for (const [code, label] of [["KEYWORD_MONTHLY_MEMORY_DEFERRED", /메모리 보호/], ["KEYWORD_MONTHLY_MEMORY_UNAVAILABLE", /메모리 상태를 확인하지 못/],
+    ["KEYWORD_MONTHLY_QUERY_TIMEOUT", /조회 대기 시간이 초과/], ["KEYWORD_MONTHLY_QUERY_BUSY", /진행 중인 조회/],
+    ["KEYWORD_MONTHLY_RESPONSE_BUSY", /진행 중인 조회/], ["KEYWORD_MONTHLY_RESPONSE_TOO_LARGE", /응답 크기가 한도/],
+    ["KEYWORD_MONTHLY_EVIDENCE_CHANGED", /자료 검수가 필요/]]) {
+    const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : jsonResponse({ errorCode: code }, 503) });
+    await ui.controller.open(); const error = ui.find("kma-error")[0].textContent;
+    assert.match(error, label, code); assert.ok(error.includes(code)); assert.match(error, /HTTP 503/);
+    assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503");
+  }
+});
+
+test("HTML 503 keeps a generic HTTP failure without parsing or inventing a resource reason", async () => {
+  let response = null, bodyReads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : response || jsonResponse(payloadFixture()) });
+  await ui.controller.open(); response = { ...htmlFailure(503), json: async () => { bodyReads++; throw Error("SECRET_HTML_BODY"); } };
+  await ui.controller.refresh(); const error = ui.find("kma-error")[0].textContent;
+  assert.equal(bodyReads, 0); assert.match(error, /HTTP 503.*KEYWORD_MONTHLY_HTTP_503/); assert.doesNotMatch(error, /SECRET|메모리|포화|조회 대기/);
+  assert.equal(ui.controller.state().showingStored, true); assert.match(ui.text(), /400원/);
+});
+
+test("a top-level resource hold retains the same applied scope draft company page product and last valid data", async () => {
+  const value = dashboardPayload(43); let failed = false;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : failed ? jsonResponse({ code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, 503) : jsonResponse(value) });
+  await ui.controller.open(); ui.field("companySearch").value = "비교"; await ui.field("companySearch").fire("input");
+  await ui.button("다음 업체").fire("click"); await ui.find("kma-company-row")[5].fire("click"); await ui.button("데이유즈").fire("click");
+  const before = clone(ui.controller.state()); failed = true; await ui.controller.refresh(); const after = clone(ui.controller.state());
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.showingStored, true); assert.equal(after.benchmarkCompanyId, "company-25"); assert.equal(after.listPage, 2);
+  assert.ok(ui.find("kma-metric").length > 0); assert.match(ui.text(), /메모리 보호/); assert.match(ui.text(), /같은 조회 조건의 마지막 정상 저장 자료/);
+});
+
+test("a late 503 reason cannot replace a newer result and auth errors clear before reason parsing", async () => {
+  const gate = deferred(); let reads = 0;
+  const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++reads === 2 ? gate.promise
+    : jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) });
+  await ui.controller.open(); const pending = ui.controller.refresh(); await settle();
+  ui.field("keyword").value = OTHER; await ui.field("keyword").fire("change"); await ui.apply();
+  gate.resolve(jsonResponse({ code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, 503)); await pending;
+  assert.equal(ui.controller.state().selection.keyword, OTHER); assert.equal(ui.controller.state().errorCode, ""); assert.doesNotMatch(ui.text(), /메모리 보호|MEMORY_DEFERRED/);
+  for (const status of [401, 403]) {
+    let auth = false, parsed = 0;
+    const next = mockUi({ request: async url => auth ? { ...jsonResponse({ code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, status), json: async () => { parsed++; throw Error("SECRET_AUTH_BODY"); } }
+      : jsonResponse(url.endsWith("/options") ? optionsFixture() : payloadFixture()) });
+    await next.controller.open(); auth = true; await next.controller.refresh();
+    assert.equal(parsed, 0); assert.equal(next.controller.state().paused, true); assert.equal(next.field("keyword").value, "");
+    assert.equal(next.controller.state().errorCode, "KEYWORD_MONTHLY_AUTH_REQUIRED"); assert.doesNotMatch(next.text(), /MEMORY_DEFERRED|SECRET_AUTH_BODY/);
+  }
+});
+
 test("invalid JSON, unexpected content type and network exceptions never expose parser or transport messages", async () => {
   let response = null;
   const ui = mockUi({ request: async url => {
