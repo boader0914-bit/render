@@ -91,7 +91,7 @@ async function trustedClockTicks() {
   const after = await executablePin(systemGetconf); need(after.file === pin.file && after.sha256 === pin.sha256 && same(after.stat, pin.stat), "KEYWORD_INCREMENTAL_LOCK_BIRTH_PROOF_UNKNOWN");
   return { ticksPerSecond: output.trim(), getconfSha256: pin.sha256, getconfIdentity: smallStat(pin.stat) };
 }
-function createLinuxProcessReader() {
+function createLinuxProcessReader(options = {}) {
   need(process.platform === "linux", "KEYWORD_INCREMENTAL_PROCESS_PROOF_UNAVAILABLE");
   async function context() {
     const bootId = (await pseudo("/proc/sys/kernel/random/boot_id", 128)).trim(), pidNamespace = await fs.readlink("/proc/self/ns/pid");
@@ -112,15 +112,22 @@ function createLinuxProcessReader() {
     } catch (e) { if (["ENOENT", "ESRCH"].includes(e.code)) return null; throw e; }
   }
   async function peers(exclude = []) {
-    const entries = await fs.readdir("/proc", { withFileTypes: true }); need(entries.length <= 8192, "KEYWORD_INCREMENTAL_PROCESS_INVENTORY_BOUND"); const found = [];
+    const guard = options.providerPeerProof ? require("./keyword_monthly_provider_peer.cjs").createReviewedProviderPeerGuard({ proof: options.providerPeerProof,
+      readContext: context, readServer: processAt, expectedServerPid: options.expectedServerPid, expectedJobId: options.expectedJobId, expectedLockSha256: options.expectedLockSha256 }) : null;
+    if (guard) { need(!exclude.includes(guard.pid), "KEYWORD_INCREMENTAL_PROVIDER_PEER_UNVERIFIED"); await guard.verify(); }
+    const entries = await fs.readdir("/proc", { withFileTypes: true }); need(entries.length <= 8192, "KEYWORD_INCREMENTAL_PROCESS_INVENTORY_BOUND"); const found = []; let reviewedSeen = false;
     for (const e of entries) if (/^\d+$/.test(e.name)) {
       const pid = Number(e.name); if (exclude.includes(pid)) continue;
       let s; try { s = await fs.lstat("/proc/" + pid); } catch (x) { if (x.code === "ENOENT") continue; throw x; }
       if (s.uid !== process.getuid()) continue;
-      let exe; try { exe = path.basename(await fs.readlink("/proc/" + pid + "/exe")); } catch (x) { if (["ENOENT", "ESRCH"].includes(x.code)) continue; throw fault("KEYWORD_INCREMENTAL_PROCESS_UNKNOWN"); }
+      let exe; try { exe = path.basename(await fs.readlink("/proc/" + pid + "/exe")); } catch (x) {
+        if (["ENOENT", "ESRCH"].includes(x.code)) continue;
+        if (await require("./keyword_monthly_provider_peer.cjs").reviewedPeerReadFailure(guard, pid, x.code)) { reviewedSeen = true; continue; }
+        throw fault("KEYWORD_INCREMENTAL_PROCESS_UNKNOWN");
+      }
       if (/^(?:node(?:js)?|python(?:\d+(?:\.\d+)*)?)(?: \(deleted\))?$/.test(exe)) { const p = await processAt(pid); if (p) found.push({ pid: p.pid, ppid: p.ppid, startTicks: p.startTicks, kind: exe.startsWith("python") ? "python" : "node" }); }
     }
-    return found;
+    if (guard) { need(reviewedSeen, "KEYWORD_INCREMENTAL_PROVIDER_PEER_CHANGED"); await guard.verify(); } return found;
   }
   async function clockBasis(startTicks) {
     const ticks = await trustedClockTicks(), ns = await fs.readlink("/proc/self/ns/time"), before = Date.now();
@@ -144,7 +151,7 @@ function reader(options) {
     const c = { bootId: "00000000-0000-4000-8000-000000000000", pidNamespace: "fixture", hostId: "f".repeat(64) }, startTicks = "1";
     return { context: async () => c, process: async pid => pid === process.pid ? { pid, ppid: 1, startTicks } : null, peers: async () => [] };
   }
-  return createLinuxProcessReader();
+  return createLinuxProcessReader({ providerPeerProof: options.providerPeerProof, expectedServerPid: options.serverPid, expectedJobId: options.targetJobId, expectedLockSha256: options.expectedLockSha256 });
 }
 async function acquireWorkerLock(options) {
   const { directory, sourceKey, version, now = () => new Date() } = options; need(SHA.test(sourceKey || "") && VERSIONS.has(version)); const parent = await checked(directory, true);
@@ -256,6 +263,13 @@ async function inspectWorkerLockInstanceContext(options) {
     sourceKey: l.sourceKey, lockJobId: l.jobId, version: l.version, createdAt: l.createdAt, ownerContextSha256, currentContextSha256,
     expectedServiceId: CENTRAL_SERVICE, expectedDiskMount: "/var/data", providerRetirementVerified: false, changed: false };
 }
+async function inspectWorkerLockProviderPeers(options) {
+  need(path.isAbsolute(options.dataDir) && (options.fixture === true || options.dataDir === "/var/data") && SHA.test(options.targetJobId || "") && Number.isSafeInteger(options.serverPid) && options.serverPid > 0);
+  const lock = await read(path.join(options.dataDir, "keyword_monthly_incremental", LOCK), 16384), proc = createLinuxProcessReader();
+  const result = await require("./keyword_monthly_provider_peer.cjs").inspectProviderPeerCandidates({ readContext: proc.context, readServer: proc.process, serverPid: options.serverPid });
+  const fresh = await read(lock.file, 16384); need(fresh.sha256 === lock.sha256 && same(fresh.stat, lock.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
+  return { ...result, serviceId: CENTRAL_SERVICE, targetJobId: options.targetJobId, lockSha256: lock.sha256 };
+}
 async function legacyReuseCandidate(proc, owner, chain) {
   const current = chain.find(p => p.pid === owner.pid);
   need(current && JSON.stringify(ownerIdentity(owner)) === JSON.stringify(current), "KEYWORD_INCREMENTAL_LOCK_OWNER_ACTIVE");
@@ -288,7 +302,7 @@ async function inspectInternal(options) {
   need(q.value.jobId === targetJobId && i && VERSIONS.has(i.refreshVersion) && q.value.status === "needs_verification");
   need(hash(jsonBytes([i.refreshVersion, i.runId, i.manifestSha256, i.keyword, i.scope, i.scheduleOccurrenceId])) === targetJobId);
   need(hash(jsonBytes([i.refreshVersion, i.runId, i.manifestSha256, i.keyword])) === l.sourceKey, "KEYWORD_INCREMENTAL_LOCK_SOURCE_MISMATCH");
-  const proc = reader(options), context = await proc.context(); let retiredInstance = null;
+  const proc = reader({ ...options, expectedLockSha256: r.sha256 }), context = await proc.context(); let retiredInstance = null;
   if (l.schemaVersion === 2) {
     need(l.version === i.refreshVersion && l.owner && /^\d+$/.test(l.owner.startTicks || ""), "KEYWORD_INCREMENTAL_LOCK_CONTEXT_UNKNOWN");
     const sameContext = contextFingerprint(l.owner) === contextFingerprint(context);
@@ -357,7 +371,8 @@ async function inspectInternal(options) {
     && (await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
   const fresh = await read(r.file, 16384); need(fresh.sha256 === r.sha256 && same(fresh.stat, r.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
   const snapshot = { schemaVersion: 1, targetJobId, lockSha256: r.sha256, lockStat: smallStat(r.stat), lockSchemaVersion: l.schemaVersion, ownerPid: l.pid, sourceKey: l.sourceKey, createdAt: l.createdAt,
-    processContext: context, serverChain: chain, ownerReuse, ...(retiredInstance ? { retiredInstance } : {}), childPid: p.pid, childProofSha256: proof.sha256,
+    processContext: context, serverChain: chain, ownerReuse, ...(retiredInstance ? { retiredInstance } : {}),
+    ...(options.providerPeerProof ? { providerPeerProofSha256: hash(jsonBytes(options.providerPeerProof)) } : {}), childPid: p.pid, childProofSha256: proof.sha256,
     jobInputSha256: input.sha256, jobOwnerRecordSha256: ownerRecord.sha256, sourceManifestSha256: manifest.sha256, dbReceiptSha256: db.sha256,
     preparationSha256: preparation?.sha256 || null, sourcePointerSha256: source.sha256, sourceStateSha256: s.stateSha256,
     publicPointerSha256: pub.sha256, catalogSha256: catalog.sha256, publicationReceiptSha256: published.sha256, lastCompleteSha256: completed.sha256, queueSha256, collectionSha256 };
@@ -417,7 +432,8 @@ async function recoverWorkerLock(options) {
       && (await current.processes.peers([process.pid, ...current.snapshot.serverChain.map(p => p.pid)])).length === 0, "KEYWORD_INCREMENTAL_LOCK_POST_ARCHIVE_HOLD");
     const receipt = await writeNew(path.join(destination, "recovery-complete.json"), { schemaVersion: 1, recoveryId: id, action: "archived_verified_dead_worker_lock", lockSha256: preserved.sha256,
       snapshotSha256: current.snapshotSha256, preflightSha256: planned.sha256, sourcePointerSha256: current.snapshot.sourcePointerSha256, publicPointerSha256: current.snapshot.publicPointerSha256,
-      atomicArchive, ...(current.snapshot.retiredInstance ? { retiredInstance: current.snapshot.retiredInstance } : {}), originalBytesAndModePreserved: true, originalLedgersChanged: false, activeLockPathAbsent: true, completedAt: new Date().toISOString() });
+      atomicArchive, ...(current.snapshot.retiredInstance ? { retiredInstance: current.snapshot.retiredInstance } : {}),
+      ...(current.snapshot.providerPeerProofSha256 ? { providerPeerProofSha256: current.snapshot.providerPeerProofSha256 } : {}), originalBytesAndModePreserved: true, originalLedgersChanged: false, activeLockPathAbsent: true, completedAt: new Date().toISOString() });
     completed = true; return { status: "recovered", recoveryId: id, receiptSha256: receipt.sha256, lockSha256: preserved.sha256, originalBytesAndModePreserved: true, activeLockPathAbsent: receipt.value.activeLockPathAbsent };
   } finally {
     // An incomplete/ambiguous recovery leaves its claim and immutable evidence.
@@ -426,9 +442,14 @@ async function recoverWorkerLock(options) {
   }
 }
 async function cli(argv) {
-  const flags = new Map(); for (let n = 0; n < argv.length; n++) { const k = argv[n]; need(["--inspect-context", "--inspect", "--dry-run", "--commit", "--job-id", "--server-pid", "--reviewed-proof", "--proof-sha", "--retired-instance-proof", "--retired-instance-proof-sha"].includes(k) && !flags.has(k)); flags.set(k, ["--inspect-context", "--inspect", "--dry-run", "--commit"].includes(k) ? true : argv[++n]); }
-  need(["--inspect-context", "--inspect", "--dry-run", "--commit"].filter(k => flags.has(k)).length === 1); const dataDir = "/var/data", base = { dataDir, targetJobId: flags.get("--job-id"), serverPid: Number(flags.get("--server-pid")) };
+  const flags = new Map(); for (let n = 0; n < argv.length; n++) { const k = argv[n]; need(["--inspect-context", "--inspect-provider-peers", "--inspect", "--dry-run", "--commit", "--job-id", "--server-pid", "--reviewed-proof", "--proof-sha", "--retired-instance-proof", "--retired-instance-proof-sha", "--provider-peer-proof", "--provider-peer-proof-sha"].includes(k) && !flags.has(k)); flags.set(k, ["--inspect-context", "--inspect-provider-peers", "--inspect", "--dry-run", "--commit"].includes(k) ? true : argv[++n]); }
+  need(["--inspect-context", "--inspect-provider-peers", "--inspect", "--dry-run", "--commit"].filter(k => flags.has(k)).length === 1); const dataDir = "/var/data", base = { dataDir, targetJobId: flags.get("--job-id"), serverPid: Number(flags.get("--server-pid")) };
   if (flags.has("--inspect-context")) { need(flags.size === 1); return inspectWorkerLockInstanceContext(base); }
+  if (flags.has("--inspect-provider-peers")) { need(flags.size === 3 && flags.has("--job-id") && flags.has("--server-pid")); return inspectWorkerLockProviderPeers(base); }
+  if (flags.has("--provider-peer-proof") || flags.has("--provider-peer-proof-sha")) {
+    const file = flags.get("--provider-peer-proof"); need(typeof file === "string" && path.isAbsolute(file) && inside(path.join(dataDir, "operations"), file) && SHA.test(flags.get("--provider-peer-proof-sha") || ""));
+    const proof = await read(file, 65536); need(proof.value && typeof proof.value === "object" && !Array.isArray(proof.value) && proof.sha256 === flags.get("--provider-peer-proof-sha") && (proof.stat.mode & 0o777n) === 0o600n && proof.stat.uid === BigInt(process.getuid())); base.providerPeerProof = proof.value;
+  }
   if (flags.has("--retired-instance-proof") || flags.has("--retired-instance-proof-sha")) {
     const file = flags.get("--retired-instance-proof"); need(typeof file === "string" && path.isAbsolute(file) && inside(path.join(dataDir, "operations"), file) && SHA.test(flags.get("--retired-instance-proof-sha") || ""));
     const proof = await read(file, 65536); need(proof.sha256 === flags.get("--retired-instance-proof-sha") && (proof.stat.mode & 0o777n) === 0o600n && proof.stat.uid === BigInt(process.getuid())); base.retiredInstanceProof = proof.value;
@@ -439,4 +460,4 @@ async function cli(argv) {
   return recoverWorkerLock({ ...base, reviewedProof: p.value, dryRun: !flags.has("--commit") });
 }
 if (require.main === module) cli(process.argv.slice(2)).then(r => process.stdout.write(JSON.stringify(r) + "\n")).catch(e => { process.stdout.write(JSON.stringify({ status: "hold", code: /^KEYWORD_INCREMENTAL_[A-Z0-9_]{1,120}$/.test(e.code || "") ? e.code : "KEYWORD_INCREMENTAL_LOCK_RECOVERY_HOLD" }) + "\n"); process.exitCode = 1; });
-module.exports = { acquireWorkerLock, inspectWorkerLockRecovery, inspectWorkerLockInstanceContext, recoverWorkerLock, createLinuxProcessReader, ATOMIC_ARCHIVE_PROGRAM };
+module.exports = { acquireWorkerLock, inspectWorkerLockRecovery, inspectWorkerLockInstanceContext, inspectWorkerLockProviderPeers, recoverWorkerLock, createLinuxProcessReader, ATOMIC_ARCHIVE_PROGRAM };

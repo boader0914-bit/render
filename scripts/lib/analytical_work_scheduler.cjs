@@ -37,7 +37,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
   let checkpointReader = null;
   let active = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
-  let externalChecking = false, externalCancel = null;
+  let externalChecking = false, externalCancel = null, lastExternalAttemptAt = null;
   const maintenance = { enabled: externalAdmission !== null, checking: false, paused: false, reasonCode: null,
     checks: 0, held: 0, failures: 0 };
   let lastAttemptAt = null, sampleSequence = 0, admittedSampleSequence = 0;
@@ -127,10 +127,14 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const memoryStatus = () => ({ ...memory, highWatermark, lowWatermark, resumeSamples });
   function settleIdle() { if (!active) for (const resolve of idleWaiters.splice(0)) resolve(); }
   function clearPoll() { if (timer !== null) clearTimeoutImpl(timer); timer = null; }
+  const activeMaintenancePoll = () => externalAdmission !== null && Boolean(active?.cooperative);
+  const maintenanceIntervalMs = Math.min(sampleIntervalMs, 1000);
   function poll() {
     if (closed || timer !== null || !(sampleMemory && background.length
-      || maintenance.paused && (foreground.length || background.length || checkpointReads.length))) return;
-    timer = setTimeoutImpl(() => { timer = null; pump(); }, sampleIntervalMs);
+      || maintenance.paused && (foreground.length || background.length || checkpointReads.length)
+      || activeMaintenancePoll())) return;
+    const delay = activeMaintenancePoll() ? Math.max(1, maintenanceIntervalMs - Math.max(0, timestamp() - (lastExternalAttemptAt ?? timestamp()))) : sampleIntervalMs;
+    timer = setTimeoutImpl(() => { timer = null; pump(); }, delay);
     timer?.unref?.();
   }
   function pause(reason, code = null) {
@@ -233,6 +237,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       },
       shouldYield() {
         if (!eligible) return false;
+        // A conversion must release an existing large source graph before it
+        // can become idle. A known maintenance hold is stronger than the
+        // ordinary replay/fairness fence; work cannot restart while held.
+        if (maintenance.paused) return true;
         const highWater = task.progressHighWater || { phaseIndex: 0, unitIndex: 0, checkpoints: 0 }, stage = highWater.stageIndex || 0;
         const advancesUnit = this.stageIndex > stage || this.stageIndex === stage && (this.phaseIndex > highWater.phaseIndex
           || this.phaseIndex === highWater.phaseIndex && this.unitIndex > highWater.unitIndex);
@@ -245,6 +253,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     };
     const cooperative = eligible ? checkpointScope : null;
     token.checkpointScope = checkpointScope; token.cooperative = cooperative; task.cooperative = cooperative;
+    if (eligible && externalAdmission) poll();
     if (task.priority === "foreground") consecutiveForeground++;
     else { consecutiveForeground = 0; admittedSampleSequence = sampleSequence; }
     const info = { signal: controller.signal, priority: task.priority, kind: task.kind,
@@ -270,8 +279,14 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       recordTask(task, error, finishedAt, didFail);
       if (requestedYield && !closed && !task.signal?.aborted) {
         task.checkpointHighWater = Math.max(task.checkpointHighWater || 0, cooperative.checkpoints);
-        task.progressHighWater = { ...(cooperative.stageIndex ? { stageIndex: cooperative.stageIndex } : {}),
+        const progress = { ...(cooperative.stageIndex ? { stageIndex: cooperative.stageIndex } : {}),
           phaseIndex: cooperative.phaseIndex, unitIndex: cooperative.unitIndex, checkpoints: cooperative.unitCheckpoints };
+        const prior = task.progressHighWater, position = value => [value.stageIndex || 0, value.phaseIndex, value.unitIndex, value.checkpoints];
+        const previousPosition = prior && position(prior), currentPosition = position(progress);
+        // Maintenance can interrupt below a prior attempt's replay fence. Keep
+        // the greatest fence so later foreground fairness does not regress.
+        const difference = prior ? currentPosition.findIndex((value, index) => value !== previousPosition[index]) : -1;
+        if (!prior || difference >= 0 && currentPosition[difference] > previousPosition[difference]) task.progressHighWater = progress;
         // The original caller keeps one pending promise. Retry only its small
         // operation closure; do not retain an allocation/result from the old
         // attempt, and do not mark the durable industry job as failed/complete.
@@ -290,11 +305,11 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   function dispatch(queue) { accountWaiting(); return launch(queue.shift()); }
   async function drainCheckpointReads(owner) {
-    if (checkpointReader || closed || active !== owner || !owner.active || owner.checkpointScope?.nonInterruptibleDepth !== 0) return;
+    if (checkpointReader || closed || maintenance.paused || active !== owner || !owner.active || owner.checkpointScope?.nonInterruptibleDepth !== 0) return;
     // At most four small callbacks per boundary. Even a continuous stream of
     // proof readers must let the background operation advance to its next
     // checkpoint; no replay, callback restart or high-water reset is needed.
-    for (let count = 0; count < 4 && checkpointReads.length && !closed && active === owner && owner.active; count++) {
+    for (let count = 0; count < 4 && checkpointReads.length && !closed && !maintenance.paused && active === owner && owner.active; count++) {
       const task = checkpointReads.shift(); task.cleanup();
       if (task.signal?.aborted) { const error = aborted(); recordTask(task, error, accountWaiting()); task.reject(error); continue; }
       const controller = new AbortController(), onAbort = () => controller.abort(task.signal?.reason), onOwnerAbort = () => controller.abort(owner.controller.signal.reason);
@@ -339,10 +354,12 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     poll();
   }
   function pump() {
-    if (closed || active) return;
+    if (closed || active && !activeMaintenancePoll()) return;
     if (!externalAdmission) return pumpOwned();
-    if (externalChecking || !(foreground.length || background.length || checkpointReads.length)) return;
+    if (externalChecking || !(activeMaintenancePoll() || foreground.length || background.length || checkpointReads.length)) return;
+    if (activeMaintenancePoll() && lastExternalAttemptAt !== null && timestamp() - lastExternalAttemptAt < maintenanceIntervalMs) { poll(); return; }
     externalChecking = true; maintenance.checking = true; maintenance.checks++;
+    lastExternalAttemptAt = timestamp();
     let deadline = null, expired = false, finished = false;
     const deny = () => { maintenance.paused = true; maintenance.reasonCode = "ANALYTICAL_MAINTENANCE_UNVERIFIED"; maintenance.failures++; };
     const finish = (value, failed) => {
@@ -350,7 +367,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       try { if (deadline !== null) clearTimeoutImpl(deadline); } catch {}
       externalChecking = false; maintenance.checking = false;
       externalCancel = null;
-      if (closed || active) return;
+      if (closed) return;
       if (expired) { poll(); return; }
       if (failed) deny(); else {
         maintenance.paused = value?.allowed !== true;
@@ -361,7 +378,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       // No async boundary between clearing 'checking' and dispatch. An idle
       // reader cannot observe a false idle while an old allow check can still
       // launch work after a maintenance marker was acquired.
-      if (maintenance.paused) poll(); else pumpOwned();
+      if (active || maintenance.paused) poll(); else pumpOwned();
     };
     externalCancel = () => finish(null, true);
     try {

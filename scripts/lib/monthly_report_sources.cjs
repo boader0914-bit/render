@@ -17,6 +17,14 @@ const { createIndustrySourceCandidateCache, witnessInputsMatch } = require("./in
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
+function compactMonthlySelectorCompany(company) {
+  // Selector output uses only identity, display name and the existing region
+  // resolution inputs. Drop product/daily/history graphs as EACH company leaves
+  // the validated stream, before retaining the next company. The broad source
+  // and target catalogs still use the original complete company projection.
+  return Object.fromEntries(["companyId", "primaryName", "addresses", "regions", "manualCorrection", "deletedAt", "mergedIntoCompanyId"]
+    .filter(key => Object.hasOwn(company, key)).map(key => [key, company[key]]));
+}
 async function readJson(file, fallback, checkpoint = async () => {}) {
   try {
     const text = await fsp.readFile(file, "utf8");
@@ -89,7 +97,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const companyFile = path.join(dataDir, "company_master", "companies.json");
   const historyFile = path.join(dataDir, "history", "observations.jsonl");
   let catalogInFlight = null, targetCatalogInFlight = null, optionsInFlight = null;
-  const sourceMetrics = { catalogFullReads: 0, catalogFullBytes: 0, capacityPreparations: 0, sourceReads: 0, companyProjectionReads: 0,
+  const sourceMetrics = { catalogFullReads: 0, catalogFullBytes: 0, selectorProjectionReads: 0, capacityPreparations: 0, sourceReads: 0, companyProjectionReads: 0,
     preparedCatalogReads: 0, preparedCatalogReadsByScope: { company: 0, region: 0, keyword: 0, industry: 0, other: 0 } };
   const sourceReadScheduler = createSourceReadScheduler();
   const industryCandidates = industrySourceCandidateCacheEnabled ? createIndustrySourceCandidateCache({
@@ -109,7 +117,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename))
         .update(fs.readFileSync(require.resolve("./company_address_basis.cjs"))).digest("hex"),
       loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null);
-  async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
+  async function readCatalog({ prepareCapacity = true, selectorOnly = false, checkpoint = async () => {} } = {}) {
     if (preparedCatalogProvider) return preparedCatalogProvider.readCatalog({ prepareCapacity, checkpoint });
     await checkpoint();
     // Validate the complete document, retaining one parsed company at a time.
@@ -117,7 +125,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     let master;
     try { await fsp.access(companyFile); const size = (await fsp.stat(companyFile)).size;
       sourceMetrics.catalogFullReads++; sourceMetrics.catalogFullBytes += size;
-      master = await readCompanyMasterProjection(companyFile, { checkpoint }); }
+      if (selectorOnly) sourceMetrics.selectorProjectionReads++;
+      master = await readCompanyMasterProjection(companyFile, { checkpoint,
+        ...(selectorOnly ? { projectCompany: compactMonthlySelectorCompany } : {}) }); }
     catch (error) { if (error.code === "ENOENT") master = { companies: {} }; else throw sourceError(); }
     const [regionMaster, runs] = await Promise.all([readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
@@ -175,7 +185,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   async function optionCatalog(checkpoint) {
     // Selectors do not need capacity preparation, a second history pass or a
     // cloned full inventory. Only cold builds enter the shared raw-read queue.
-    const data = await readCatalog({ prepareCapacity: false, checkpoint });
+    const data = await readCatalog({ prepareCapacity: false, selectorOnly: true, checkpoint });
     // Only these compact selector fields may survive the history scan below.
     // Do not retain a complete rawCompanies inventory merely to list months.
     return {
@@ -592,4 +602,4 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       companySourceCandidates: companyCandidates?.stats() || null }) };
 }
 
-module.exports = { createMonthlyReportSources, projectMonthlyCatalog };
+module.exports = { createMonthlyReportSources, projectMonthlyCatalog, compactMonthlySelectorCompany };
