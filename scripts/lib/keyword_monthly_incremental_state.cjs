@@ -187,7 +187,7 @@ function createStore({ dataDir, directory = path.join(dataDir, "keyword_monthly_
         try {
           await checkBudget(); need(raw?.companyId === key, "KEYWORD_INCREMENTAL_COMPANY_KEY_MISMATCH"); const stored = await putCompany(raw); companies.push({ companyId: key, orderIndex: companies.length, ...stored, compact: await projectCompany(raw) });
           if (companies.length % 16 === 0) { await checkpoint(); await checkBudget(); }
-        } catch (error) { if (/^KEYWORD_INCREMENTAL_/.test(error?.code || "")) bootstrapPolicyError = error; throw error; }
+        } catch (error) { bootstrapPolicyError = error; throw error; }
       } });
     } catch (error) { throw bootstrapPolicyError || error; }
     need(measured.company.ended && measured.company.bytes === Number(sourceStamps.company.size), "KEYWORD_INCREMENTAL_BOOTSTRAP_SOURCE_CHANGED"); await checkBudget();

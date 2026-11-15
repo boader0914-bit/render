@@ -70,7 +70,10 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       const result = { ...intent, ...publication, status: "published", mode: "live", finishedAt: clock(), recoveredAfterPromotion: true, repeatedSource: false, operatingPointerChanged: false, providerCalls: 0, sourceWrites: 0 };
       delete result.expectedCatalogSha256; await H.writeNew(completeFile, result); return result;
     }
-    const free = await fs.statfs(dataDir, { bigint: true }); H.need(free.bavail * free.bsize >= 512n * 1024n * 1024n, "KEYWORD_INCREMENTAL_DISK_RESERVE");
+    const free = await fs.statfs(dataDir, { bigint: true }); H.need(free.bavail * free.bsize >= 512n * 1024n * 1024n + BigInt(H.LIMITS.scratchBytes) + 64n * 1024n * 1024n, "KEYWORD_INCREMENTAL_DISK_RESERVE");
+    const scratchParent = path.resolve(options.scratchParent || require("node:os").tmpdir()); await H.checked(scratchParent, true);
+    const foreignPreparations = (await fs.readdir(scratchParent, { withFileTypes: true })).filter(e => e.name.startsWith("keyword-monthly-source-") || e.name.startsWith("refresh-copy-"));
+    H.need(foreignPreparations.length === 0, "KEYWORD_INCREMENTAL_OTHER_PREPARATION_PRESENT");
     await prep.treeBytes(store.directory, 960 * 1024 ** 2); await prep.treeBytes(liveDir, H.LIMITS.bundleNamespaceBytes - H.LIMITS.generationBytes - 128 * 1024 ** 2);
     const outbox = createKeywordMonthlySourceDelta({ dataDir }), inventory = await events(outbox), current = await store.load(), applied = new Set(current?.state.appliedEvents || []), admittedRunIds = new Set(), admittedEvidence = new Map();
     for (const descriptor of inventory.descriptors) if (!applied.has(descriptor.eventId) && descriptor.kind === "history") {

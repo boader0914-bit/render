@@ -56,7 +56,7 @@ async function run(values) {
   const core = [path.join(dataDir, "company_master/companies.json"), path.join(dataDir, "history/observations.jsonl")];
   const guards = installGuards(namespace, { codeRoot, originalOutputs: before.outputs,
     readOnlyRoots: [path.join(dataDir, "keyword_monthly_source_delta"), ...["company_integrated/capacity-bases.json", "history/special_days", "history/saved_product_recoveries"].map(p => path.join(dataDir, p)), ...(bootstrap ? core : [])], metadataOnlyFiles: bootstrap ? [] : core });
-  const outputView = installReadOnlyOutputs(before.outputs), scratch = installScratchBudget(jobRoot);
+  const outputView = installReadOnlyOutputs(before.outputs), scratch = installScratchBudget(jobRoot, undefined, { externalWriteRoots: [namespace] });
   const started = Date.now(), admission = async () => H.need(Date.now() - started < 55 * 60000, "KEYWORD_INCREMENTAL_TIME_BOUND");
   try {
     // readCatalog metadata is acquired from the application's inert run catalog.
@@ -67,6 +67,8 @@ async function run(values) {
     const runs = await initial.listRuns(), regions = JSON.parse(await fs.readFile(path.join(codeRoot, "web/data/region_master.json"), "utf8")).units || [];
     const context = await createContext({ dataDir, codeRoot, workDataDir, capturedAt: job.capturedAt, outputs: before.outputs, runs, regions, admission,
       expectedOutboxInventorySha256: job.outboxInventorySha256, admittedRunIds: job.admittedRunIds });
+    const available = await fs.statfs(dataDir, { bigint: true });
+    H.need(available.bavail * available.bsize >= 512n * 1024n * 1024n + BigInt(H.LIMITS.scratchBytes) + 64n * 1024n * 1024n, "KEYWORD_INCREMENTAL_JOB_DISK_RESERVE");
     const inputsFingerprint = H.hash(JSON.stringify([seeded.sourceInventorySha256, context.wiring.bindings.codeFingerprint, H.hash(JSON.stringify(regions))]));
     const plan = planScopes({ state: context.state, catalog: job.catalog, evidence, range: job.range, capturedAt: job.capturedAt, inputsFingerprint });
     const parts = [], inputs = [];
