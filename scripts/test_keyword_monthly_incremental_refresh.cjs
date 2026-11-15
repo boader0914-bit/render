@@ -67,13 +67,20 @@ async function fixture(t, variant = {}) {
       inputs: [{ directory, exposeScopes: [{ keyword: A, month: "2026-11" }] }], parts: scopes, plan: { scopes }, metrics: { fixtureOnly: true },
       isolation: { pid: variant.wrongPreparedPid ? pid + 1 : pid, proofSha256: variant.wrongProofSha ? "0".repeat(64) : H.hash(Buffer.from(JSON.stringify(proof))) },
       sourceMetadata: before, staticDependencies: seeded, providerCalls: 0, sourceWrites: 0, appEntryExecutions: 0, kosisReadOrChanged: false };
+    if (!variant.missingPrevalidation) {
+      prepared.initialBundle = variant.wrongInitialBundle ? { ...job.initialBundle, pointerSha256: "0".repeat(64) } : job.initialBundle;
+      prepared.publicationPreparation = await B.prepareKeywordMonthlyBundle({ inputs: H.mergeInputs(await B.loadBundle(liveDir), prepared.inputs), now: NOW, maxTotalBytes: H.LIMITS.generationBytes });
+      if (variant.wrongPrevalidationClock) prepared.publicationPreparation.fixedValidationClock = "2026-11-14T00:00:00.000Z";
+      if (variant.changedPrevalidationFileDigest) prepared.publicationPreparation.parts[0].files[0].sha256 = "0".repeat(64);
+      prepared.publicationPreparationSha256 = variant.wrongPrevalidationSha ? "0".repeat(64) : H.hash(JSON.stringify(prepared.publicationPreparation));
+    }
     const bytes = Buffer.from(JSON.stringify(prepared));
     if (!variant.missingPreparation) await fs.writeFile(path.join(jobRoot, "preparation-complete.json"), bytes);
     if (variant.mutateSource) await fs.appendFile(path.join(dataDir, "history/observations.jsonl"), "{}\n");
     return { exitCode: 0, stderrBytes: variant.pipedProtocol ? 0 : null, pid, receiptOnly: !variant.pipedProtocol,
       stdout: variant.pipedProtocol || variant.unexpectedStdout ? { status: "complete", isolationVerified: true, resultSha256: H.hash(bytes) } : null };
   };
-  const deps = { fixture: true, execute, publish: async input => { publications++; return B.publishKeywordMonthlyBundle(input); } };
+  const deps = { fixture: true, execute, publish: async input => { publications++; return B.publishPrevalidatedKeywordMonthlyBundle(input); } };
   const call = { dataDir, codeRoot, evidence, mode: "live", now: () => NOW, canPublish: async () => true,
     readDeltaEvidence: async runId => ({ ...evidence, runId }) };
   return { root, dataDir, codeRoot, liveDir, manifestFile, evidence, call, deps, store, lockFile,
@@ -147,7 +154,7 @@ test("a second delta DB completion tuple is rechecked again at the final before-
     assert.equal(runId, secondary.evidence.runId); evidenceReads++;
     return { ...secondary.evidence, ...(changed ? { finishedAt: "2026-11-14T00:02:00.000Z" } : {}) };
   } };
-  const deps = { ...f.deps, publish: async input => { changed = true; return B.publishKeywordMonthlyBundle(input); } };
+  const deps = { ...f.deps, publish: async input => { changed = true; return B.publishPrevalidatedKeywordMonthlyBundle(input); } };
   await assert.rejects(R.refreshKeywordMonthlyIncremental(call, deps), { code: "KEYWORD_INCREMENTAL_DELTA_DB_CHANGED" });
   assert.equal(evidenceReads, 3); assert.deepEqual(await f.pointer(), pointer); await absent(f.lockFile);
   await absent(path.join(f.liveDir, "refresh-receipts", "intent-" + R.keyFor(f.evidence) + ".json"));
@@ -180,7 +187,7 @@ test("the final before-promote gate catches a source change after preparation va
   const f = await fixture(t), pointer = await f.pointer();
   const deps = { ...f.deps, publish: async input => {
     await fs.appendFile(path.join(f.dataDir, "history/observations.jsonl"), "{}\n");
-    return B.publishKeywordMonthlyBundle(input);
+    return B.publishPrevalidatedKeywordMonthlyBundle(input);
   } };
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, deps), { code: "KEYWORD_INCREMENTAL_INPUTS_CHANGED" });
   assert.deepEqual(await f.pointer(), pointer); await absent(f.lockFile);
@@ -204,7 +211,7 @@ test("an old completion receipt cannot replace a subsequently published current 
 
 test("a crash after real pointer promotion recovers by exact catalog readback without double calculation", async t => {
   const f = await fixture(t), deps = { ...f.deps, publish: async input => {
-    await B.publishKeywordMonthlyBundle(input); throw Object.assign(new Error("fixture crash after promotion"), { code: "KEYWORD_MONTHLY_BUNDLE_PUBLICATION_NEEDS_READBACK" });
+    await B.publishPrevalidatedKeywordMonthlyBundle(input); throw Object.assign(new Error("fixture crash after promotion"), { code: "KEYWORD_MONTHLY_BUNDLE_PUBLICATION_NEEDS_READBACK" });
   } };
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, deps), { code: "KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK" });
   const pointer = await f.pointer(); await absent(f.lockFile);
@@ -217,7 +224,7 @@ test("a crash after real pointer promotion recovers by exact catalog readback wi
 for (const variant of ["tamperedCompressedEvidence", "wrongRawEvidenceHash", "missingHistoricalCheckpoint"]) test(`recovery holds on ${variant} without recalculation or another promotion`, async t => {
   const f = await fixture(t); let publishCalls = 0;
   const deps = { ...f.deps, publish: async input => {
-    publishCalls++; await B.publishKeywordMonthlyBundle(input);
+    publishCalls++; await B.publishPrevalidatedKeywordMonthlyBundle(input);
     throw Object.assign(new Error("fixture crash after promotion"), { code: "KEYWORD_MONTHLY_BUNDLE_PUBLICATION_NEEDS_READBACK" });
   } };
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, deps), { code: "KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK" });
@@ -236,7 +243,7 @@ for (const variant of ["tamperedCompressedEvidence", "wrongRawEvidenceHash", "mi
   await absent(path.join(receiptDir, "complete-" + R.keyFor(f.evidence) + ".json"));
 });
 
-for (const variant of ["pipedProtocol", "unexpectedStdout", "missingPreparation", "wrongCapturedAt", "wrongPreparedPid", "missingProof", "wrongProofPid", "wrongProofSha", "wrongGuardPin", "wrongNodePin"]) test(`${variant} never promotes`, async t => {
+for (const variant of ["pipedProtocol", "unexpectedStdout", "missingPreparation", "wrongCapturedAt", "wrongPreparedPid", "missingProof", "wrongProofPid", "wrongProofSha", "wrongGuardPin", "wrongNodePin", "missingPrevalidation", "wrongInitialBundle", "wrongPrevalidationClock", "wrongPrevalidationSha"]) test(`${variant} never promotes`, async t => {
   const f = await fixture(t, { [variant]: true }), pointer = await f.pointer();
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, f.deps));
   assert.equal(f.executions(), 1, "the proof/result gate is reached before this rejection");
@@ -250,4 +257,10 @@ test("a malformed historical completion receipt is not accepted as a published c
     status: "published", stateSha256: "d".repeat(64), incrementalValidated: true });
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, f.deps), { code: "KEYWORD_INCREMENTAL_COMPLETE_INVALID" });
   assert.equal(f.executions(), 0);
+});
+test("a self-consistent child descriptor cannot substitute files checked by the parent", async t => {
+  const f = await fixture(t, { changedPrevalidationFileDigest: true }), pointer = await f.pointer();
+  await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, f.deps), { code: "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID" });
+  assert.equal(f.executions(), 1); assert.equal(f.publications(), 1); assert.deepEqual(await f.pointer(), pointer); await absent(f.lockFile);
+  await absent(path.join(f.liveDir, "refresh-receipts", "intent-" + R.keyFor(f.evidence) + ".json"));
 });
