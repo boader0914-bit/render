@@ -233,7 +233,7 @@ test("stage pre-intent abort also cleans owned scratch and leaves compact eviden
 });
 test("abort after a durable promotion intent retains proof and is a readback hold without deferred retry", async t => {
   const f = await fixture(t, { mode: "live" }), controller = new AbortController(), oldPointer = (await B.loadBundle(f.liveDir)).pointerRead.sha256;
-  const publish = async input => { await input.beforePromote(); controller.abort(); throw Object.assign(Error("aborted after intent"), { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true }); };
+  const publish = input => B.publishKeywordMonthlyBundle({ ...input, beforePromote: async candidate => { await input.beforePromote(candidate); controller.abort(); throw Object.assign(Error("aborted after intent"), { code: "KEYWORD_PREP_CHILD_ABORTED", deferred: true }); } });
   let failure; try { await R.refreshKeywordMonthlyFromCompletedRun({ ...f.call, signal: controller.signal }, { ...f.deps, publish }); } catch (e) { failure = e; }
   assert.equal(failure.code, "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK"); assert.equal(failure.deferred, undefined); assert.equal(failure.publicationState, "pointer_was_promoted_verify_current");
   assert.equal((await B.loadBundle(f.liveDir)).pointerRead.sha256, oldPointer); assert.equal((await fs.readdir(f.scratchParent)).filter(n => n.startsWith("refresh-copy-")).length, 1);

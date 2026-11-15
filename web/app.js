@@ -39769,7 +39769,7 @@ function openAdminUserView(event) {
 async function loadSession() {
   let session;
   try { session = await fetchJson("/api/session"); }
-  catch (error) { window.AdminCompanyPreviewCache?.configure(null); throw error; }
+  catch (error) { window.AdminCompanyPreviewCache?.configure(null); void window.KeywordMonthlyAnalysis?.configure(null); throw error; }
   const previewRequested = adminUserViewRequested();
   state.session = {
     authenticated: Boolean(session.authenticated),
@@ -39787,6 +39787,7 @@ async function loadSession() {
   state.session.sessionCreatedAt = session.sessionCreatedAt || "";
   state.session.expiresAt = session.expiresAt || "";
   window.AdminCompanyPreviewCache?.configure({ ...state.session, role: session.role }, { customerView: state.adminUserViewMode });
+  await window.KeywordMonthlyAnalysis?.configure({ ...state.session, role: session.role }, { customerView: state.adminUserViewMode });
   if (state.session.role === "admin" && state.session.roleLabel !== "마스터") state.session.roleLabel = "마스터";
   if (location.pathname === "/b2b" && (state.session.role === "b2b" || state.adminUserViewMode)) {
     state.activeTab = "report";

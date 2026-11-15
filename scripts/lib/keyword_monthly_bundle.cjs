@@ -7,7 +7,13 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, KEYWORD_MONTHLY_LIMITS: CHILD_LIMITS } = require("./keyword_monthly_analysis.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
-const measureDefault = (phase, metadata, operation) => getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
+const { runKeywordMonthlyMemoryAdmission, keywordMonthlyAllocationCheckpoint } = require("./keyword_monthly_memory_admission.cjs");
+const { calculationFingerprint, queryId, validatePreparedDescriptor, encodePreparedResult, decodePreparedResult,
+  KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS: RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
+const measureDefault = async (phase, metadata, operation) => {
+  await keywordMonthlyAllocationCheckpoint(phase);
+  return getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
+};
 const LIMITS = Object.freeze({ pointerBytes: 16384, catalogBytes: 1024 * 1024, optionsBytes: 2 * 1024 * 1024, partitions: 512, scopes: 4096, defaultTotalBytes: 1024 * 1024 * 1024 });
 const SHA = /^[a-f0-9]{64}$/, GENERATION = /^[a-f0-9]{32}$/, MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -37,7 +43,7 @@ async function readFile(file, maximum) {
     const bytes = Buffer.alloc(before.size + 1); let offset = 0;
     while (offset < bytes.length) { const result = await handle.read(bytes, offset, bytes.length - offset, offset); if (!result.bytesRead) break; offset += result.bytesRead; }
     ensure(offset === before.size && sameStat(before, await handle.stat()) && sameStat(before, await checkPath(file)), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-    const buffer = bytes.subarray(0, offset); return { file, bytes: buffer, size: buffer.length, sha256: hash(buffer) };
+    const buffer = bytes.subarray(0, offset); return { file, bytes: buffer, size: buffer.length, sha256: hash(buffer), stamp: before };
   } finally { await handle.close(); }
 }
 function json(read) { try { return JSON.parse(read.bytes.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_BUNDLE_INVALID_JSON"); } }
@@ -47,7 +53,8 @@ function validatePointer(value) {
   return value;
 }
 function validateCatalog(value) {
-  ensure(exact(value, ["schemaVersion", "kind", "createdAt", "partitions", "scopes"]) && value.schemaVersion === 1 && value.kind === "keyword_monthly_partition_bundle" && iso(value.createdAt)
+  const resultFields = value?.schemaVersion === 2 ? ["preparedResults"] : [];
+  ensure(exact(value, ["schemaVersion", "kind", "createdAt", "partitions", "scopes", ...resultFields]) && [1, 2].includes(value.schemaVersion) && value.kind === "keyword_monthly_partition_bundle" && iso(value.createdAt)
     && Array.isArray(value.partitions) && value.partitions.length > 0 && value.partitions.length <= LIMITS.partitions && Array.isArray(value.scopes) && value.scopes.length > 0 && value.scopes.length <= LIMITS.scopes, "KEYWORD_MONTHLY_BUNDLE_INVALID_CATALOG");
   const partitions = new Set(), scopes = new Set(), used = new Set();
   for (const part of value.partitions) {
@@ -59,7 +66,17 @@ function validateCatalog(value) {
     ensure(exact(scope, ["keyword", "month", "partition"]) && keywordValid(scope.keyword) && MONTH.test(scope.month) && partitions.has(scope.partition) && !scopes.has(id), "KEYWORD_MONTHLY_BUNDLE_SCOPE_CONFLICT");
     scopes.add(id); used.add(scope.partition);
   }
-  ensure(used.size === partitions.size, "KEYWORD_MONTHLY_BUNDLE_UNUSED_PARTITION"); return value;
+  ensure(used.size === partitions.size, "KEYWORD_MONTHLY_BUNDLE_UNUSED_PARTITION");
+  if (value.schemaVersion === 2) {
+    ensure(Array.isArray(value.preparedResults) && value.preparedResults.length > 0 && value.preparedResults.length <= RESULT_LIMITS.results, "KEYWORD_MONTHLY_RESULT_CATALOG_INVALID");
+    const resultIds = new Set();
+    for (const descriptor of value.preparedResults) {
+      validatePreparedDescriptor(descriptor); const id = queryId(descriptor);
+      ensure(!resultIds.has(id) && value.scopes.some(scope => scope.keyword === descriptor.keyword && scope.month === descriptor.month && scope.partition === descriptor.partition), "KEYWORD_MONTHLY_RESULT_SCOPE_CONFLICT");
+      resultIds.add(id);
+    }
+  }
+  return value;
 }
 async function loadBundle(directory) {
   const pointerRead = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes), pointer = validatePointer(json(pointerRead));
@@ -120,8 +137,10 @@ async function partition(bundle, key, now, staleAfterMs, { optionsReader, measur
   return { descriptor, directory, index: { file: index.file, sha256: index.sha256, size: index.size }, service, options: narrowOptions(options, declared) };
 }
 const safeError = error => /^KEYWORD_MONTHLY_[A-Z0-9_]+$/.test(error?.code || "") ? error.code : "KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE";
-function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs, measure = measureDefault } = {}) {
+function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs, measure = measureDefault,
+  runLegacyAnalysis = runKeywordMonthlyMemoryAdmission } = {}) {
   ensure(typeof projectionDir === "string" && path.isAbsolute(projectionDir), "KEYWORD_MONTHLY_BUNDLE_ABSOLUTE_DIRECTORY_REQUIRED");
+  if (typeof runLegacyAnalysis !== "function") throw new TypeError("A guarded legacy analysis callback is required");
   const directory = path.resolve(projectionDir), legacy = createKeywordMonthlyAnalysis({ projectionDir: directory, now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
   const optionsReader = createKeywordMonthlyOptionsIndexReader({ now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
   const optionsFlights = new Map();
@@ -169,27 +188,74 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
       finally { if (optionsFlights.get(key) === pending) optionsFlights.delete(key); }
     } catch (error) { return absent(error); }
   }
-  async function analyze(input) {
+  function validateInput(input) {
     ensure(plain(input) && Object.keys(input).every(key => ["keyword", "month", "cutoffDate"].includes(key)) && keywordValid(input.keyword) && MONTH.test(input.month), "KEYWORD_MONTHLY_INVALID_REQUEST", 400);
     if (input.cutoffDate !== undefined) ensure(typeof input.cutoffDate === "string" && /^20\d{2}-\d\d-\d\d$/.test(input.cutoffDate)
       && Number.isFinite(Date.parse(`${input.cutoffDate}T00:00:00Z`)) && new Date(`${input.cutoffDate}T00:00:00Z`).toISOString().slice(0, 10) === input.cutoffDate
       && input.cutoffDate <= basic().currentDay, "KEYWORD_MONTHLY_INVALID_REQUEST", 400);
+  }
+  const notPrepared = (request, code) => ({ ...basic(), status: "missing", request: { ...request }, snapshot: null,
+    activity: null, latestAttempt: null, lastSuccessfulAttempt: null, provenance: null, diagnostics: [code],
+    preparedResult: { status: "not_prepared", reasonCode: code } });
+  async function readPrepared(input) {
+    validateInput(input);
+    try {
+      return await runKeywordMonthlyMemoryAdmission(async () => {
+      const bundle = await open();
+      if (!bundle) return await legacyRead(() => notPrepared(input, "KEYWORD_MONTHLY_RESULT_NOT_PREPARED"));
+      const scope = bundle.catalog.scopes.find(value => value.keyword === input.keyword && value.month === input.month);
+      if (!scope) { await unchanged(bundle); return { ...basic(), status: "missing", request: { ...input }, snapshot: null, diagnostics: ["KEYWORD_MONTHLY_SCOPE_NOT_PREPARED"], activity: null, latestAttempt: null, lastSuccessfulAttempt: null,
+        provenance: { bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256 } }; }
+      if (bundle.catalog.schemaVersion === 1) { await unchanged(bundle); return notPrepared(input, "KEYWORD_MONTHLY_RESULT_NOT_PREPARED"); }
+      const part = await partition(bundle, scope.partition, now, staleAfterMs, { optionsReader, measure });
+      const option = part.options.keywords.find(row => row.keyword === input.keyword), request = { ...input, cutoffDate: input.cutoffDate || option.defaultCutoffs[input.month] };
+      const descriptor = bundle.catalog.preparedResults.find(value => queryId(value) === queryId(request));
+      if (!descriptor) { await unchanged(bundle, part); return notPrepared(request, "KEYWORD_MONTHLY_CUTOFF_RESULT_NOT_PREPARED"); }
+      const sourceRead = await readFile(part.index.file, CHILD_LIMITS.indexBytes);
+      ensure(sourceRead.sha256 === part.index.sha256 && sourceRead.size === part.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      const sourceIndex = json(sourceRead);
+      const sourceScope = sourceIndex.keywords.find(row => row.keyword === input.keyword)?.scopes.find(row => row.month === input.month);
+      ensure(sourceScope?.sha256 === descriptor.sourceProjectionSha256 && descriptor.partition === part.index.sha256, "KEYWORD_MONTHLY_RESULT_SOURCE_MISMATCH");
+      const preparedFile = path.join(bundle.generationDir, "results", `${descriptor.sha256}.json${descriptor.encoding === "gzip" ? ".gz" : ""}`);
+      const read = await measure("keyword_prepared_result_read", { inputBytes: descriptor.bytes, ...(descriptor.uncompressedBytes ? { uncompressedBytes: descriptor.uncompressedBytes } : {}), readCount: 1 },
+        () => readFile(preparedFile, RESULT_LIMITS.encodedBytes));
+      const current = basic(), result = await measure("keyword_prepared_result_parse", { inputBytes: descriptor.bytes }, () => decodePreparedResult(read, descriptor,
+        { currentDay: current.currentDay, now: new Date(now()).toISOString(), ...(staleAfterMs === undefined ? {} : { staleAfterMs }), sourceProvenance: sourceIndex.provenance }));
+      await unchanged(bundle, part);
+      // Decoding/validation can yield to another writer. The exact artifact
+      // inode, link count and mutation clocks must still be the one read.
+      ensure(sameStat(read.stamp, await checkPath(preparedFile)), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      // Keep pointer selection the final cheap validation after that path read.
+      ensure((await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes)).sha256 === bundle.pointerRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      const resultId = hash(JSON.stringify([bundle.pointerRead.sha256, bundle.catalogRead.sha256, part.index.sha256, result.request]));
+      return { ...result, resultId, provenance: { ...result.provenance, bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256, partitionIndexSha256: part.index.sha256 },
+        bundle: { generation: bundle.pointer.generation, partition: scope.partition, catalogSha256: bundle.catalogRead.sha256 } };
+      });
+    } catch (error) { if (error.statusCode === 400) throw error; return absent(error, input); }
+  }
+  async function analyze(input) {
+    validateInput(input);
     let bundle; try {
-      bundle = await open(); if (!bundle) return await legacyRead(() => legacy.analyze(input));
+      bundle = await open();
+      if (bundle?.catalog.schemaVersion === 2) {
+        const saved = await readPrepared(input);
+        if (saved.preparedResult?.status !== "not_prepared") return saved;
+      }
+      if (!bundle) return await runLegacyAnalysis(() => legacyRead(() => legacy.analyze(input)));
       const scope = bundle.catalog.scopes.find(value => value.keyword === input.keyword && value.month === input.month);
       if (!scope) { await unchanged(bundle); return { ...basic(), status: "missing", request: input, snapshot: null, diagnostics: ["KEYWORD_MONTHLY_SCOPE_NOT_PREPARED"], activity: null, latestAttempt: null, lastSuccessfulAttempt: null, provenance: { bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256 } }; }
-      const part = await partition(bundle, scope.partition, now, staleAfterMs, { optionsReader, measure }), result = await part.service.analyze(input); await unchanged(bundle, part);
+      const part = await partition(bundle, scope.partition, now, staleAfterMs, { optionsReader, measure }), result = await runLegacyAnalysis(() => part.service.analyze(input)); await unchanged(bundle, part);
       const resultId = hash(JSON.stringify([bundle.pointerRead.sha256, bundle.catalogRead.sha256, part.index.sha256, result.request || input]));
       return { ...result, resultId, provenance: result.provenance ? { ...result.provenance, bundleSha256: bundle.catalogRead.sha256, currentPointerSha256: bundle.pointerRead.sha256, partitionIndexSha256: part.index.sha256 } : null,
         bundle: { generation: bundle.pointer.generation, partition: scope.partition, catalogSha256: bundle.catalogRead.sha256 } };
     } catch (error) { if (error.statusCode === 400) throw error; return absent(error, input); }
   }
-  return Object.freeze({ options, analyze });
+  return Object.freeze({ options, readPrepared, analyze });
 }
 async function ensureDirectory(directory) {
   try { await checkPath(directory, true); } catch (error) { if (error.code !== "ENOENT") throw error; await checkPath(path.dirname(directory), true); await fs.mkdir(directory, { mode: 0o700 }); await checkPath(directory, true); }
 }
-async function inputPartition(input, now) {
+async function inputPartition(input, now, { prepareResults = false } = {}) {
   ensure(plain(input) && Object.keys(input).every(key => ["directory", "exposeScopes"].includes(key)) && typeof input.directory === "string" && path.isAbsolute(input.directory), "KEYWORD_MONTHLY_BUNDLE_INPUT_DIRECTORY");
   const directory = path.resolve(input.directory), index = await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes), value = json(index);
   const service = createKeywordMonthlyAnalysis({ projectionDir: directory, now: () => now }), options = await service.options();
@@ -206,7 +272,7 @@ async function inputPartition(input, now) {
     ensure(read.sha256 === scope.sha256 && read.size === scope.bytes, "KEYWORD_MONTHLY_BUNDLE_INPUT_PROJECTION_MISMATCH"); files.push({ name, sha256: read.sha256, bytes: read.size });
   }
   const validation = [];
-  for (const scope of exposed) {
+  for (const scope of prepareResults ? [] : exposed) {
     const item = options.keywords.find(row => row.keyword === scope.keyword), query = { ...scope, cutoffDate: item.defaultCutoffs[scope.month] }, result = await service.analyze(query);
     if (!(["available", "stale"].includes(result.status) && result.snapshot && result.request.keyword === query.keyword && result.request.month === query.month && result.request.cutoffDate === query.cutoffDate && SHA.test(result.snapshot.sources?.digest || ""))) throw Object.assign(fault("KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED"), { scope: query, inputStatus: result.status, diagnostics: result.diagnostics });
     validation.push({ query, status: result.status, selectedDigest: result.snapshot.sources.digest, inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough });
@@ -214,20 +280,33 @@ async function inputPartition(input, now) {
   ensure((await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes)).sha256 === index.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
   return { directory, index: { file: index.file, sha256: index.sha256, size: index.size }, exposed, files, validation, options: narrowOptions(options, exposed) };
 }
-async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCurrentSha256 = null, maxTotalBytes = LIMITS.defaultTotalBytes, beforePromote } = {}) {
+async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCurrentSha256 = null, maxTotalBytes = LIMITS.defaultTotalBytes,
+  beforePromote, prepareResults = false, preparedQueries = [] } = {}) {
   ensure(Array.isArray(inputs) && inputs.length > 0 && inputs.length <= LIMITS.partitions && typeof outputDir === "string" && path.isAbsolute(outputDir) && iso(now), "KEYWORD_MONTHLY_BUNDLE_BUILD_INPUT");
+  ensure(typeof prepareResults === "boolean" && Array.isArray(preparedQueries) && preparedQueries.length <= RESULT_LIMITS.results
+    && (prepareResults || preparedQueries.length === 0), "KEYWORD_MONTHLY_RESULT_BUILD_INVALID");
+  const preparedQueryIds = new Set();
+  for (const query of preparedQueries) {
+    ensure(exact(query, ["keyword", "month", "cutoffDate"]) && keywordValid(query.keyword) && MONTH.test(query.month)
+      && typeof query.cutoffDate === "string" && /^20\d{2}-\d\d-\d\d$/.test(query.cutoffDate)
+      && Number.isFinite(Date.parse(`${query.cutoffDate}T00:00:00Z`)) && new Date(`${query.cutoffDate}T00:00:00Z`).toISOString().slice(0, 10) === query.cutoffDate
+      && !preparedQueryIds.has(queryId(query)), "KEYWORD_MONTHLY_RESULT_QUERY_INVALID");
+    preparedQueryIds.add(queryId(query));
+  }
   ensure(Number.isSafeInteger(maxTotalBytes) && maxTotalBytes > 0 && maxTotalBytes <= 8 * 1024 * 1024 * 1024, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
   ensure(expectedCurrentSha256 === null || SHA.test(expectedCurrentSha256), "KEYWORD_MONTHLY_BUNDLE_EXPECTED_POINTER");
-  const prepared = []; for (const input of inputs) prepared.push(await inputPartition(input, now));
+  const prepared = []; for (const input of inputs) prepared.push(await inputPartition(input, now, { prepareResults }));
   const partitions = new Map(), scopes = [], seen = new Set(); let totalBytes = 0;
   for (const part of prepared) {
     if (!partitions.has(part.index.sha256)) { partitions.set(part.index.sha256, part); totalBytes += part.index.size + part.files.reduce((sum, file) => sum + file.bytes, 0); }
     for (const scope of part.exposed) { const id = scopeId(scope.keyword, scope.month); ensure(!seen.has(id), "KEYWORD_MONTHLY_BUNDLE_SCOPE_CONFLICT"); seen.add(id); scopes.push({ ...scope, partition: part.index.sha256 }); }
   }
   ensure(scopes.length <= LIMITS.scopes && totalBytes <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
-  const catalog = validateCatalog({ schemaVersion: 1, kind: "keyword_monthly_partition_bundle", createdAt: new Date(now).toISOString(),
+  ensure(preparedQueries.every(query => scopes.some(scope => scope.keyword === query.keyword && scope.month === query.month)), "KEYWORD_MONTHLY_RESULT_QUERY_UNEXPOSED");
+  let catalog = validateCatalog({ schemaVersion: 1, kind: "keyword_monthly_partition_bundle", createdAt: new Date(now).toISOString(),
     partitions: [...partitions].map(([key, part]) => ({ key, indexSha256: key, indexBytes: part.index.size })), scopes: scopes.sort((a, b) => scopeId(a.keyword, a.month).localeCompare(scopeId(b.keyword, b.month))) });
-  const catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
+  let catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
+  const scopePlanSha256 = hash(catalogBytes);
   // Recombine a repeated identical input index's explicit subsets before the
   // exact same options-size check used by the runtime reader.
   for (const [key, part] of partitions) {
@@ -246,6 +325,35 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     for (const file of part.files) { const read = await readFile(path.join(part.directory, "projections", file.name), CHILD_LIMITS.projectionBytes); ensure(read.sha256 === file.sha256 && read.size === file.bytes, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); await fs.writeFile(path.join(target, "projections", file.name), read.bytes, { flag: "wx", mode: 0o600 }); const copied = await readFile(path.join(target, "projections", file.name), CHILD_LIMITS.projectionBytes); ensure(copied.sha256 === file.sha256 && copied.size === file.bytes, "KEYWORD_MONTHLY_BUNDLE_COPY_MISMATCH"); }
     const index = await readFile(path.join(part.directory, "index.json"), CHILD_LIMITS.indexBytes); ensure(index.sha256 === key && index.size === part.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); await fs.writeFile(path.join(target, "index.json"), index.bytes, { flag: "wx", mode: 0o600 });
   }
+  if (prepareResults) {
+    const resultDir = path.join(generationDir, "results"); await fs.mkdir(resultDir, { mode: 0o700 });
+    const results = [];
+    // Compute and write one final payload at a time. Do not retain a second
+    // all-scope snapshot graph or an all-scope encoded-result buffer cache.
+    for (const [key, part] of partitions) {
+      const service = createKeywordMonthlyAnalysis({ projectionDir: path.join(generationDir, "partitions", key), now: () => now });
+      const queries = new Map();
+      for (const scope of scopes.filter(scope => scope.partition === key)) {
+        const item = part.options.keywords.find(row => row.keyword === scope.keyword), query = { keyword: scope.keyword, month: scope.month, cutoffDate: item.defaultCutoffs[scope.month] };
+        queries.set(queryId(query), query);
+      }
+      for (const query of preparedQueries.filter(query => scopes.some(scope => scope.partition === key && scope.keyword === query.keyword && scope.month === query.month))) queries.set(queryId(query), query);
+      ensure(results.length + queries.size <= RESULT_LIMITS.results, "KEYWORD_MONTHLY_RESULT_CATALOG_BOUND");
+      for (const query of queries.values()) {
+        const result = await service.analyze(query);
+        if (!(["available", "stale"].includes(result.status) && result.snapshot && queryId(result.request) === queryId(query))) throw Object.assign(fault("KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED"), { scope: query, inputStatus: result.status, diagnostics: result.diagnostics });
+        const saved = encodePreparedResult(result, { partition: key });
+        totalBytes += saved.bytes.length; ensure(totalBytes <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
+        const file = path.join(resultDir, `${saved.descriptor.sha256}.json${saved.descriptor.encoding === "gzip" ? ".gz" : ""}`);
+        await fs.writeFile(file, saved.bytes, { flag: "wx", mode: 0o600 });
+        const copied = await readFile(file, RESULT_LIMITS.encodedBytes); ensure(copied.sha256 === saved.descriptor.sha256 && copied.size === saved.descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
+        results.push(saved.descriptor);
+        part.validation.push({ query, status: result.status, selectedDigest: result.snapshot.sources.digest, inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough });
+      }
+    }
+    catalog = validateCatalog({ ...catalog, schemaVersion: 2, preparedResults: results.sort((a, b) => queryId(a).localeCompare(queryId(b))) });
+    catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
+  }
   await fs.writeFile(path.join(generationDir, "catalog.json"), catalogBytes, { flag: "wx", mode: 0o600 });
   const pointer = { schemaVersion: 1, generation, catalogSha256: hash(catalogBytes), catalogBytes: catalogBytes.length, publishedAt: new Date(now).toISOString() }, pointerBytes = Buffer.from(JSON.stringify(pointer));
   // A cooperative, exclusive lock plus expected old SHA avoids last-writer-wins.
@@ -256,7 +364,20 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     await lock.writeFile(lockBytes); await lock.sync(); lockStamp = await lock.stat();
     let previous = null; try { previous = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes); validatePointer(json(previous)); } catch (error) { if (error.code !== "ENOENT") throw error; }
     ensure(previous ? previous.sha256 === expectedCurrentSha256 : expectedCurrentSha256 === null, "KEYWORD_MONTHLY_BUNDLE_POINTER_CONFLICT");
-    if (beforePromote) await beforePromote();
+    if (beforePromote) await beforePromote(Object.freeze({ schemaVersion: 1, kind: "keyword_monthly_catalog_candidate",
+      generation, catalogSchemaVersion: catalog.schemaVersion, catalogSha256: pointer.catalogSha256, catalogBytes: catalogBytes.length,
+      scopePlanSha256, partitionCount: partitions.size, scopeCount: scopes.length,
+      preparedResultCount: catalog.preparedResults?.length || 0, ...(prepareResults ? { calculationFingerprint: calculationFingerprint() } : {}) }));
+    const finalCatalog = await readFile(path.join(generationDir, "catalog.json"), LIMITS.catalogBytes);
+    ensure(finalCatalog.sha256 === pointer.catalogSha256 && finalCatalog.size === catalogBytes.length, "KEYWORD_MONTHLY_BUNDLE_CHANGED_BEFORE_PROMOTION");
+    for (const [key, part] of partitions) {
+      const finalIndex = await readFile(path.join(generationDir, "partitions", key, "index.json"), CHILD_LIMITS.indexBytes);
+      ensure(finalIndex.sha256 === key && finalIndex.size === part.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_BEFORE_PROMOTION");
+    }
+    if (prepareResults) for (const result of catalog.preparedResults) {
+      const saved = await readFile(path.join(generationDir, "results", `${result.sha256}.json${result.encoding === "gzip" ? ".gz" : ""}`), RESULT_LIMITS.encodedBytes);
+      ensure(saved.sha256 === result.sha256 && saved.size === result.bytes, "KEYWORD_MONTHLY_RESULT_CHANGED_BEFORE_PROMOTION");
+    }
     const temporary = path.join(directory, `.current-${generation}.tmp`), handle = await fs.open(temporary, "wx", 0o600);
     try { await handle.writeFile(pointerBytes); await handle.sync(); } finally { await handle.close(); }
     await fs.rename(temporary, path.join(directory, "current.json"));
@@ -264,6 +385,7 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     const readback = await loadBundle(directory); ensure(readback.pointerRead.sha256 === hash(pointerBytes) && readback.catalogRead.sha256 === pointer.catalogSha256, "KEYWORD_MONTHLY_BUNDLE_PUBLICATION_READBACK");
     const receipt = { schemaVersion: 1, status: "published", generation, bundleDir: directory, totalStoredBytes: totalBytes, pointerSha256: hash(pointerBytes), previousPointerSha256: previous?.sha256 || null,
       catalogSha256: pointer.catalogSha256, partitionCount: partitions.size, scopeCount: scopes.length, fixedValidationClock: new Date(now).toISOString(),
+      ...(prepareResults ? { preparedResultCount: catalog.preparedResults.length, calculationFingerprint: calculationFingerprint() } : {}),
       partitions: prepared.map(part => ({ inputIndexSha256: part.index.sha256, inputIndexBytes: part.index.size, validation: part.validation })),
       sourceProvenancePreserved: true, originalEnvelopesRewritten: false, providerCalls: 0, collectorStarted: false, kosisReadOrChanged: false,
       freshnessPolicy: "Original child materializedAt/dataThrough/status retained; bundle assembly never refreshes historical source provenance." };

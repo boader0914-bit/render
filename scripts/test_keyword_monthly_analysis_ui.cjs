@@ -51,18 +51,19 @@ const descendants = node => [node, ...node.children.flatMap(descendants)];
 const text = node => descendants(node).map(item => item.textContent).join(" ");
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
-function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs } = {}) {
+function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, storage, session, customerView = false } = {}) {
   const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
-  const window = { fetch: request, setTimeout, clearTimeout, AbortController, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
+  const window = { fetch: request, setTimeout, clearTimeout, AbortController, sessionStorage: storage,
+    crypto: require("node:crypto").webcrypto, TextEncoder, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
   vm.runInNewContext(dashboardScript, { window });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
-  const api = window.KeywordMonthlyAnalysis, controller = api.mount(parent, { autoStart: false, fetch: request, requestTimeoutMs, now: () => Date.parse(NOW) });
-  return { api, controller, parent, doc, observers, listeners, calls, chartCalls,
+  const api = window.KeywordMonthlyAnalysis, ready = session ? api.configure(session, { customerView }) : Promise.resolve(false), controller = api.mount(parent, { autoStart: false, fetch: request, requestTimeoutMs, now: () => Date.parse(NOW) });
+  return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls,
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); },
     async apply() { await this.button("저장 자료 조회").fire("click"); await settle(); } };
@@ -703,4 +704,190 @@ test("visibility resume preserves an interrupted options refresh so automatic cu
   assert.equal(new URL(ui.calls.at(-1).url, "https://local.test").searchParams.get("cutoffDate"), "2026-10-31");
   const before = ui.calls.length; gate.resolve(jsonResponse({ ...optionsFixture(), currentDay: "2026-10-30" })); await old;
   ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-31");
+});
+
+function memorySelectionStorage() {
+  const entries = new Map();
+  return { entries, getItem(key) { return entries.get(key) ?? null; }, setItem(key, value) { entries.set(key, String(value)); }, removeItem(key) { entries.delete(key); } };
+}
+const SELECTION_KEY = "staydatalab:keyword-monthly-selection:v1";
+const selectorFixture = () => ({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30", cutoffMode: "explicit", product: "dayuse",
+  companyId: "company-25", listQuery: "비교", listPage: 2, mobileView: "detail", expanded: { "chart:daily": true } });
+const liveSession = (patch = {}) => ({ authenticated: true, role: "admin", username: "private-admin-name", memberId: "member-private",
+  sessionCreatedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString(), ...patch });
+const selectionDigest = async value => require("node:crypto").createHash("sha256").update(value).digest("hex");
+
+test("selection storage keeps only bounded view inputs behind an opaque authenticated session scope", async () => {
+  const storage = memorySelectionStorage(), store = uiModule.createSelectionStorage({ storage, digest: selectionDigest }), session = liveSession();
+  assert.equal(store.write(selectorFixture()), false); assert.equal(store.read(), null);
+  assert.equal(await store.configure(session), true);
+  assert.equal(store.write({ ...selectorFixture(), snapshot: { revenue: 999999 }, token: "must-not-persist", customer: "must-not-persist" }), true);
+  const raw = storage.getItem(SELECTION_KEY), saved = JSON.parse(raw);
+  assert.ok(raw.length < 12 * 1024); assert.match(saved.scope, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(raw, /private-admin-name|member-private|must-not-persist|snapshot|revenue|token|customer/);
+  assert.deepEqual(store.read(), selectorFixture()); const changed = store.read(); changed.expanded["chart:daily"] = false;
+  assert.equal(store.read().expanded["chart:daily"], true);
+  assert.equal(store.matches(session), true); assert.equal(store.matches({ ...session, username: "same-member-name-changed" }), true);
+  assert.equal(await store.configure({ ...session, expiresAt: new Date(Date.now() + 7200000).toISOString() }), true);
+  assert.deepEqual(store.read(), selectorFixture());
+});
+
+test("another account or a newly created session for the same account cannot restore the previous selection", async () => {
+  for (const patch of [{ memberId: "different-member" }, { sessionCreatedAt: new Date(Date.now()).toISOString() }, { role: "b2b" }, { authenticated: false }]) {
+    const storage = memorySelectionStorage(), session = liveSession(), original = uiModule.createSelectionStorage({ storage, digest: selectionDigest });
+    await original.configure(session); original.write(selectorFixture());
+    const restored = uiModule.createSelectionStorage({ storage, digest: selectionDigest }); await restored.configure({ ...session, ...patch });
+    assert.equal(restored.read(), null); assert.equal(storage.getItem(SELECTION_KEY), null);
+  }
+  const storage = memorySelectionStorage(), session = liveSession(), original = uiModule.createSelectionStorage({ storage, digest: selectionDigest });
+  await original.configure(session); original.write(selectorFixture()); await original.configure(session, { customerView: true });
+  assert.equal(original.read(), null); assert.equal(storage.entries.size, 0);
+});
+
+test("expiry revoke and superseded asynchronous authentication cannot resurrect stored selections", async () => {
+  let now = Date.parse(NOW), session = { ...liveSession(), sessionCreatedAt: NOW, expiresAt: new Date(now + 100).toISOString() };
+  const storage = memorySelectionStorage(), store = uiModule.createSelectionStorage({ storage, now: () => now, digest: selectionDigest });
+  await store.configure(session); store.write(selectorFixture()); now += 101;
+  assert.equal(store.read(), null); assert.equal(store.write(selectorFixture()), false); assert.equal(storage.entries.size, 0);
+  const gate = deferred(), racing = uiModule.createSelectionStorage({ storage, digest: () => gate.promise });
+  const old = racing.configure(liveSession()); racing.revoke(); gate.resolve("a".repeat(64));
+  assert.equal(await old, false); assert.equal(racing.write(selectorFixture()), false); assert.equal(storage.entries.size, 0);
+});
+
+test("invalid oversized future foreign or hostile persisted inputs are cache misses without throwing", async () => {
+  const goodStorage = memorySelectionStorage(), session = liveSession(), original = uiModule.createSelectionStorage({ storage: goodStorage, digest: selectionDigest });
+  await original.configure(session); original.write(selectorFixture()); const good = JSON.parse(goodStorage.getItem(SELECTION_KEY));
+  const invalid = ["{broken", "x".repeat(12 * 1024 + 1), JSON.stringify({ ...good, schema: 2 }), JSON.stringify({ ...good, scope: "b".repeat(64) }),
+    JSON.stringify({ ...good, storedAt: Date.now() + 60000 }), JSON.stringify({ ...good, storedAt: Date.now() - 13 * 3600000 }),
+    JSON.stringify({ ...good, snapshot: {} }), JSON.stringify({ ...good, selection: { ...good.selection, month: "2026-13" } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, cutoffDate: "2026-02-30" } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, product: "__proto__" } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, companyId: "<script>" } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, listQuery: "x".repeat(201) } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, listPage: 10001 } }),
+    JSON.stringify({ ...good, selection: { ...good.selection, expanded: { "constructor": true } } }),
+    JSON.stringify({ ...good, selection: JSON.parse(JSON.stringify(good.selection).slice(0, -1) + ',"__proto__":{"polluted":true}}') })];
+  for (const raw of invalid) {
+    const storage = memorySelectionStorage(); storage.setItem(SELECTION_KEY, raw);
+    const store = uiModule.createSelectionStorage({ storage, digest: selectionDigest }); await store.configure(session);
+    assert.equal(store.read(), null); assert.equal(storage.entries.size, 0); assert.equal({}.polluted, undefined);
+  }
+});
+
+test("storage denial and unavailable cryptography preserve ordinary GET behavior without persisting", async () => {
+  const storage = { getItem() { throw Error("disabled"); }, setItem() { throw Error("disabled"); }, removeItem() { throw Error("disabled"); } };
+  const store = uiModule.createSelectionStorage({ storage, digest: selectionDigest }); await store.configure(liveSession());
+  assert.equal(store.read(), null); assert.equal(store.write(selectorFixture()), false);
+  const unsupported = uiModule.createSelectionStorage({ storage: memorySelectionStorage(), digest: async () => { throw Error("unavailable"); } });
+  assert.equal(await unsupported.configure(liveSession()), false); assert.equal(unsupported.write(selectorFixture()), false);
+  const ui = mockUi({ storage, session: liveSession() }); await ui.ready; await ui.controller.open();
+  assert.equal(ui.calls.length, 2); assert.ok(ui.find("kma-metric").length > 0);
+});
+
+test("a stalled scope digest stops waiting promptly without later enabling persistence", async () => {
+  const storage = memorySelectionStorage(), gate = deferred(), store = uiModule.createSelectionStorage({ storage, digest: () => gate.promise, digestTimeoutMs: 10 });
+  assert.equal(await store.configure(liveSession()), false); assert.equal(store.write(selectorFixture()), false);
+  gate.resolve("a".repeat(64)); await settle(); assert.equal(store.write(selectorFixture()), false); assert.equal(storage.entries.size, 0);
+});
+
+test("a full reload restores applied keyword month product company list and disclosure inputs then revalidates through GET", async () => {
+  const storage = memorySelectionStorage(), session = liveSession(), request = dashboardRequest(dashboardPayload(43));
+  const first = mockUi({ storage, session, request }); await first.ready;
+  await first.controller.open({ ...selectorFixture(), benchmarkCompanyId: "company-25" });
+  const before = clone(first.controller.state().selection);
+  first.field("cutoffDate").value = "2026-10-25"; await first.field("cutoffDate").fire("input");
+  // The unsaved draft is not promoted to the applied condition by reload.
+  assert.equal(first.controller.state().draft.cutoffDate, "2026-10-25"); first.controller.destroy();
+  const again = mockUi({ storage, session, request }); await again.ready; await again.controller.open();
+  const after = clone(again.controller.state().selection);
+  assert.deepEqual(after, before); assert.equal(again.controller.state().draft.cutoffDate, "2026-10-30");
+  assert.equal(again.calls.length, 2); assert.ok(again.calls[0].url.endsWith("/options"));
+  assert.equal(new URL(again.calls[1].url, "https://local.test").searchParams.get("month"), "2026-10");
+  assert.match(again.find("kma-dashboard-title")[0].textContent, /비교 업체 25/);
+  const raw = storage.getItem(SELECTION_KEY); assert.doesNotMatch(raw, /snapshot|sources|summary|estimatedRevenue/);
+});
+
+test("explicit navigation context overrides remembered inputs rather than carrying another scope's company or product", async () => {
+  const storage = memorySelectionStorage(), session = liveSession();
+  const first = mockUi({ storage, session }); await first.ready; await first.controller.open(); await first.button("데이유즈").fire("click"); first.controller.destroy();
+  const again = mockUi({ storage, session }); await again.ready;
+  await again.controller.open({ keyword: OTHER, month: "2026-10", product: "lodging" });
+  assert.equal(again.controller.state().selection.keyword, OTHER); assert.equal(again.controller.state().selection.month, "2026-10");
+  assert.equal(again.controller.state().product, "lodging"); assert.match(again.text(), /경남 글램핑 업체/);
+});
+
+test("remembered scopes and fixed cutoffs are checked against fresh options before any detail read", async () => {
+  const session = liveSession();
+  for (const invalidScope of [false, true]) {
+    const storage = memorySelectionStorage(), first = mockUi({ storage, session }); await first.ready;
+    await first.controller.open({ keyword: KEYWORD, month: "2026-09", cutoffDate: "2026-09-20", cutoffMode: "explicit" }); first.controller.destroy();
+    const again = mockUi({ storage, session, request: async url => {
+      const catalog = optionsFixture();
+      if (invalidScope) catalog.keywords = catalog.keywords.filter(x => x.keyword !== KEYWORD);
+      else catalog.keywords[0].supportedCutoffs = { "2026-09": "2026-09-30", "2026-10": "2026-10-30", "2026-11": "2026-10-30" };
+      return jsonResponse(url.endsWith("/options") ? catalog : payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams)));
+    } });
+    await again.ready; await again.controller.open();
+    const q = new URL(again.calls[1].url, "https://local.test").searchParams;
+    assert.equal(q.get("keyword"), invalidScope ? OTHER : KEYWORD); assert.equal(q.get("cutoffDate"), invalidScope ? "2026-10-30" : "2026-09-30");
+    assert.match(again.text(), invalidScope ? /현재 저장 목록에 없어 기본 조건/ : /관측 마감일을 현재 저장 근거에 맞춰 조정/);
+  }
+});
+
+test("a remembered unavailable company remains explicitly missing and is not switched to another company", async () => {
+  const storage = memorySelectionStorage(), session = liveSession(), first = mockUi({ storage, session, request: dashboardRequest(dashboardPayload(43)) });
+  await first.ready; await first.controller.open({ ...selectorFixture(), companyId: "company-25" }); first.controller.destroy();
+  const again = mockUi({ storage, session, request: dashboardRequest(dashboardPayload(2)) }); await again.ready; await again.controller.open();
+  assert.equal(again.controller.state().benchmarkCompanyId, "company-25"); assert.match(again.text(), /선택 업체 미확보/);
+  assert.doesNotMatch(text(again.find("kma-dashboard-metrics")[0]), /비교 업체 0 예약 추정률/);
+});
+
+test("a failed first options read keeps restored-input validation for a manual retry", async () => {
+  const storage = memorySelectionStorage(), session = liveSession(), first = mockUi({ storage, session }); await first.ready;
+  await first.controller.open({ keyword: KEYWORD, month: "2026-09", cutoffDate: "2026-09-20", cutoffMode: "explicit" }); first.controller.destroy();
+  let fail = true;
+  const again = mockUi({ storage, session, request: async url => {
+    if (url.endsWith("/options")) {
+      if (fail) return htmlFailure(502);
+      const catalog = optionsFixture(); catalog.keywords[0].supportedCutoffs = { "2026-09": "2026-09-30" }; return jsonResponse(catalog);
+    }
+    return jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams)));
+  } });
+  await again.ready; await again.controller.open(); assert.equal(again.calls.length, 1); assert.match(again.text(), /HTTP 502/);
+  fail = false; await again.apply();
+  assert.equal(new URL(again.calls.at(-1).url, "https://local.test").searchParams.get("cutoffDate"), "2026-09-30");
+  assert.match(again.text(), /관측 마감일을 현재 저장 근거에 맞춰 조정/); assert.equal(again.controller.state().selection.month, "2026-09");
+});
+
+test("401, role loss and explicit logout erase persisted selections before a new page can restore them", async () => {
+  for (const action of ["401", "403", "role", "logout", "account", "session"]) {
+    const storage = memorySelectionStorage(), session = liveSession(); let code = 200;
+    const ui = mockUi({ storage, session, request: async url => code === 200 ? jsonResponse(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) : htmlFailure(code) });
+    await ui.ready; await ui.controller.open(); await ui.button("데이유즈").fire("click"); assert.ok(storage.getItem(SELECTION_KEY));
+    if (action === "401" || action === "403") { code = Number(action); await ui.controller.refresh(); }
+    else if (action === "role") { ui.doc.body.className = "role-b2b"; ui.observers[0].callback(); }
+    else if (action === "logout") ui.api.clear();
+    else await ui.api.configure({ ...session, ...(action === "account" ? { memberId: "another-member" } : { sessionCreatedAt: new Date(Date.now()).toISOString() }) });
+    assert.equal(storage.getItem(SELECTION_KEY), null); assert.equal(ui.controller.state().benchmarkCompanyId, "");
+    assert.equal(ui.find("kma-metric").length, 0);
+  }
+});
+
+test("verified session configuration is awaited before role UI and failed session loading revokes it", async () => {
+  const app = fs.readFileSync(path.join(__dirname, "../web/app.js"), "utf8");
+  const load = app.match(/^async function loadSession\(\) \{[^]*?^\}/m)?.[0]; assert.ok(load);
+  const gate = deferred(), calls = [], session = liveSession(), state = {};
+  const context = { state, fetchJson: async () => session, adminUserViewRequested: () => false, location: { pathname: "/admin" },
+    window: { AdminCompanyPreviewCache: { configure: value => calls.push(["preview", value]) },
+      KeywordMonthlyAnalysis: { configure(value, flags) { calls.push(["selection", value, flags]); return gate.promise; } } },
+    applyRoleUi() { calls.push(["roles"]); } };
+  vm.createContext(context); vm.runInContext(`${load}\nthis.load=loadSession`, context);
+  const pending = context.load(); await settle();
+  assert.equal(calls.some(x => x[0] === "roles"), false);
+  const configured = calls.find(x => x[0] === "selection"); assert.equal(configured[1].sessionCreatedAt, session.sessionCreatedAt);
+  assert.equal(configured[1].memberId, session.memberId); assert.equal(configured[1].role, "admin"); assert.equal(configured[2].customerView, false);
+  gate.resolve(true); await pending; assert.equal(calls.at(-1)[0], "roles");
+  calls.length = 0; const denied = Error("SESSION_DENIED"); context.fetchJson = async () => { throw denied; };
+  await assert.rejects(context.load(), error => error === denied);
+  assert.ok(calls.some(x => x[0] === "selection" && x[1] === null));
 });

@@ -11,7 +11,11 @@ const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
-const measureDefault = (phase, metadata, operation) => getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
+const { keywordMonthlyAllocationCheckpoint } = require("./keyword_monthly_memory_admission.cjs");
+const measureDefault = async (phase, metadata, operation) => {
+  await keywordMonthlyAllocationCheckpoint(phase);
+  return getAnalyticalPhaseDiagnostics().measure(phase, metadata, operation);
+};
 
 const VERSION = "keyword-monthly-v1";
 const LIMITS = Object.freeze({ indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, decodedProjectionBytes: 64 * 1024 * 1024,

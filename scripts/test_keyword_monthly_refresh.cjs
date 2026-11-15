@@ -5,12 +5,30 @@ const intent = (n = 1, extra = {}) => ({ runId: "fresh_run_" + n, keyword: "ê²½ë
 const proof = i => ({ ...i, status: "complete", quality: "complete", postprocessStatus: "complete" });
 const digest = b => crypto.createHash("sha256").update(b).digest("hex");
 const published = { status: "published", generation: "a".repeat(32), pointerSha256: "b".repeat(64), scopeCount: 3, providerCalls: 0, networkAttempted: false };
+const lockDiagnostic=()=>({schemaVersion:1,reasonCode:"LEGACY_OWNER_UNVERIFIED",ownerSchemaVersion:1,ageMs:1000,sameInstance:null,ownerProcessState:"unverified"});
 async function fixture(t, options = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-refresh-test-")); let time = Date.parse("2026-10-31T01:00:00.000Z");
   const q = createKeywordMonthlyRefresh({ dataDir, readCompletedEvidence: async i => proof(i), refresh: async () => published, now: () => new Date(time), ...options });
   t.after(async () => { await q.close(); await fs.rm(dataDir, { recursive: true, force: true }); });
   return { q, dataDir, advance: ms => { time += ms; }, now: () => new Date(time) };
 }
+
+test("safe worker-lock diagnosis persists and cold readback does not clear or retry the failed job",async t=>{
+  let calls=0;const f=await fixture(t,{refresh:async()=>{calls++;throw Object.assign(Error("private paths/token"),{code:"KEYWORD_INCREMENTAL_WORKER_LOCKED",lockDiagnostic:lockDiagnostic()});}});
+  const job=await f.q.enqueue(intent());const row=await f.q.runOnce();assert.equal(row.status,"needs_verification");assert.deepEqual(row.lockDiagnostic,lockDiagnostic());assert.equal(row.nextAttemptAt,null);
+  await f.q.close();const file=path.join(f.q.directory,"jobs",job.jobId+".json"),before=await fs.readFile(file);
+  const q=createKeywordMonthlyRefresh({dataDir:f.dataDir,readCompletedEvidence:async i=>proof(i),refresh:async()=>{calls++;return published;},now:f.now});
+  t.after(()=>q.close());const status=await q.status();assert.deepEqual(status.items[0].lockDiagnostic,lockDiagnostic());assert.equal(calls,1);assert.deepEqual(await fs.readFile(file),before);assert.ok(!before.toString().includes("private paths/token"));
+});
+test("unexpected lock-detail keys are never copied from an error into the durable journal",async t=>{
+  const f=await fixture(t,{refresh:async()=>{throw Object.assign(Error("private"),{code:"KEYWORD_INCREMENTAL_WORKER_LOCKED",lockDiagnostic:{...lockDiagnostic(),pid:123,token:"private_token",hostname:"private_host"}});}});
+  const job=await f.q.enqueue(intent());const row=await f.q.runOnce();assert.equal(row.reasonCode,"KEYWORD_INCREMENTAL_WORKER_LOCKED");assert.equal(Object.hasOwn(row,"lockDiagnostic"),false);
+  const bytes=await fs.readFile(path.join(f.q.directory,"jobs",job.jobId+".json"),"utf8");for(const secret of ["private_token","private_host"])assert.ok(!bytes.includes(secret));
+});
+test("a later authorized retry/success cannot display an old lock observation as current",async t=>{
+  let calls=0;const f=await fixture(t,{refresh:async()=>{if(++calls===1)throw Object.assign(Error("test retry"),{code:"KEYWORD_INCREMENTAL_WORKER_LOCKED",retryable:true,lockDiagnostic:lockDiagnostic()});return published;}});
+  await f.q.enqueue(intent());assert.ok((await f.q.runOnce()).lockDiagnostic);f.advance(600000);const next=await f.q.runOnce();assert.equal(next.status,"complete");assert.equal(Object.hasOwn(next,"lockDiagnostic"),false);
+});
 
 test("cold GET status does not mkdir, recover, enqueue or start work", async t => {
   let calls = 0; const f = await fixture(t, { readCompletedEvidence: async () => { calls++; }, refresh: async () => { calls++; } });

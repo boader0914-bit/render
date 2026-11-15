@@ -7,6 +7,7 @@ const H = require("./lib/keyword_monthly_refresh_preparation.cjs");
 const prep = require("./prepare_keyword_monthly_release.cjs");
 const capture = require("./lib/keyword_monthly_source_copy.cjs");
 const bundle = require("./lib/keyword_monthly_bundle.cjs");
+const { preparedPublicationCandidate } = require("./lib/keyword_monthly_publication_candidate.cjs");
 const { inspectManifest, allowsDerivedUpdates } = require("./daily_collection_quality.cjs");
 const JOB_MS = 60 * 60 * 1000, RESERVE_BYTES = 128 * 1024 * 1024;
 // Transport compression changes no observation, calculator or source identity.
@@ -231,13 +232,13 @@ async function refreshKeywordMonthlyFromCompletedRun(supplied = {}, dependencies
       jobDir, copyRoot, copyContainer, ownerToken: token, createdAt: currentIso(options.now), strictIsolationVerified: dependencies.fixture !== true, fixtureOnly: dependencies.fixture === true,
       executionBasis: dependencies.fixture === true ? "injected_preparation_fixture_not_fresh_kernel_validation" : "fresh_physical_capture_and_strict_isolated_normalization", providerCalls: 0, sourceWrites: 0 };
     const publish = dependencies.fixture === true && dependencies.publish ? dependencies.publish : bundle.publishKeywordMonthlyBundle;
-    const publication = await publish({ inputs, outputDir, now: prepared.prepDate, expectedCurrentSha256: options.mode === "live" ? initial.pointerRead.sha256 : null, maxTotalBytes: H.LIMITS.generationBytes,
-      beforePromote: async () => { await admission(); await manifestEvidence(options.dataDir, evidence); H.need((await planCatalog(inputs, prepared.prepDate)).sha256 === planned.sha256, "KEYWORD_MONTHLY_REFRESH_PLAN_CHANGED"); H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_MONTHLY_REFRESH_POINTER_CHANGED");
+    const publication = await publish({ inputs, outputDir, now: prepared.prepDate, prepareResults: true, expectedCurrentSha256: options.mode === "live" ? initial.pointerRead.sha256 : null, maxTotalBytes: H.LIMITS.generationBytes,
+      beforePromote: async candidate => { await admission(); await manifestEvidence(options.dataDir, evidence); H.need((await planCatalog(inputs, prepared.prepDate)).sha256 === planned.sha256, "KEYWORD_MONTHLY_REFRESH_PLAN_CHANGED"); H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_MONTHLY_REFRESH_POINTER_CHANGED");
         // Record an uncertain-promotion intent only at the last safe point,
         // after the publisher's expensive input validation and admission check.
-        await admission(); await H.writeNew(intentFile, intent); } });
-    promoted = true; H.need(publication.status === "published" && publication.catalogSha256 === planned.sha256 && publication.providerCalls === 0 && publication.kosisReadOrChanged === false, "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK");
-    const verified = await verifyPublished(outputDir, planned.sha256, expectedScopes, prepared.prepDate);
+        await admission(); Object.assign(intent, preparedPublicationCandidate(candidate, planned));await H.writeNew(intentFile, intent); } });
+    promoted = true; H.need(publication.status === "published" && publication.catalogSha256 === intent.expectedCatalogSha256 && publication.providerCalls === 0 && publication.kosisReadOrChanged === false, "KEYWORD_MONTHLY_REFRESH_PUBLICATION_NEEDS_READBACK");
+    const verified = await verifyPublished(outputDir, intent.expectedCatalogSha256, expectedScopes, prepared.prepDate);
     if (options.mode === "stage") H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_MONTHLY_REFRESH_STAGING_CHANGED_LIVE_POINTER");
     result = { schemaVersion: 1, status: options.mode === "live" ? "published" : "staged", ...source, mode: options.mode, generatedBy: "keyword_monthly_completed_run_refresh", refreshVersion: H.VERSION,
       trigger: "completed_collection_postprocess", jobId: token, ...verified, affectedScopeCount: expectedScopes.length,

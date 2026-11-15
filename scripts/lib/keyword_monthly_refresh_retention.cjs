@@ -3,6 +3,7 @@
 // completed live receipts. No original, manual generation or proof is removed.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const { validateCatalog, validatePointer } = require("./keyword_monthly_bundle.cjs");
+const { KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS: RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
 const SHA = /^[a-f0-9]{64}$/, GEN = /^[a-f0-9]{32}$/, UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const VERSION = "keyword-monthly-completed-run-v1", OWNER = "keyword_monthly_completed_run_refresh";
 const INCREMENTAL_VERSIONS = new Set(["keyword-monthly-incremental-v3", "keyword-monthly-incremental-v4"]), INCREMENTAL_OWNER = "keyword_monthly_incremental_refresh";
@@ -96,6 +97,16 @@ async function auditGeneration(directory, receipt) {
           && scope.bytes <= LIMITS.projectionBytes && [undefined, "gzip"].includes(scope.encoding), "INDEX_INVALID");
         await add(path.join(prefix, "projections", `${scope.scopeKey}.json${scope.encoding === "gzip" ? ".gz" : ""}`), LIMITS.projectionBytes, scope.sha256, scope.bytes);
       }
+    }
+  }
+  if (catalog.schemaVersion === 2) {
+    need(publication.preparedResultCount === catalog.preparedResults.length && SHA.test(publication.calculationFingerprint || "")
+      && catalog.preparedResults.every(result => result.calculationFingerprint === publication.calculationFingerprint), "PREPARED_PUBLICATION_MISMATCH");
+    await dir("results");
+    for (const result of catalog.preparedResults) {
+      // Only exact catalog-committed artifacts of this proved, owned old
+      // generation are admitted. Never glob or follow unknown result files.
+      await add(path.join("results", `${result.sha256}.json${result.encoding === "gzip" ? ".gz" : ""}`), RESULT_LIMITS.encodedBytes, result.sha256, result.bytes);
     }
   }
   async function visit(relative) {

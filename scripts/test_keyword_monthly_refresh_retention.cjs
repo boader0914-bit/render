@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { pruneKeywordMonthlyRefreshGenerations: prune } = require("./lib/keyword_monthly_refresh_retention.cjs");
 const digest = b => crypto.createHash("sha256").update(b).digest("hex"), gen = n => n.toString(16).padStart(32, "0");
 const write = async (file, value) => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value)); await fs.writeFile(file, bytes, { flag: "wx", mode: 0o600 }); return { bytes, sha256: digest(bytes) }; };
-async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [], incrementalVersions = {} } = {}) {
+async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [], incrementalVersions = {}, prepared = [] } = {}) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-retention-test-"));
   // Every recursive test cleanup is confined to the exact verified mkdtemp root.
   const realParent = await fs.realpath(parent); assert.equal(path.resolve(realParent), path.resolve(parent));
@@ -18,11 +18,19 @@ async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [], 
     const indexBytes = Buffer.from(JSON.stringify(index)), key = digest(indexBytes), partition = path.join(directory, "partitions", key); await fs.mkdir(partition); await fs.mkdir(path.join(partition, "projections"));
     await write(path.join(partition, "index.json"), indexBytes); const projectionFile = path.join(partition, "projections", scope + ".json"); await write(projectionFile, projection);
     const catalog = { schemaVersion: 1, kind: "keyword_monthly_partition_bundle", createdAt: at, partitions: [{ key, indexSha256: key, indexBytes: indexBytes.length }], scopes: [{ keyword: "경남글램핑", month: "2026-10", partition: key }] };
+    let resultFile = null;
+    if (prepared.includes(n)) {
+      const resultBytes = Buffer.from(JSON.stringify({ schemaVersion: 1, fixture: "final derived result", generation })), resultHash = digest(resultBytes);
+      await fs.mkdir(path.join(directory, "results")); resultFile = path.join(directory, "results", resultHash + ".json"); await write(resultFile, resultBytes);
+      catalog.schemaVersion = 2; catalog.preparedResults = [{ keyword: "경남글램핑", month: "2026-10", cutoffDate: "2026-10-20", partition: key,
+        sha256: resultHash, bytes: resultBytes.length, sourceProjectionSha256: digest(projection), sourceDigest: digest("source digest" + n), calculationFingerprint: digest("fixture engine") }];
+    }
     const catalogRead = await write(path.join(directory, "catalog.json"), catalog);
     const pointer = { schemaVersion: 1, generation, catalogSha256: catalogRead.sha256, catalogBytes: catalogRead.bytes.length, publishedAt: at }, pointerBytes = Buffer.from(JSON.stringify(pointer));
     const publication = { schemaVersion: 1, status: "published", generation, bundleDir: root, pointerSha256: digest(pointerBytes), catalogSha256: catalogRead.sha256,
       previousPointerSha256: auto.includes(n) ? digest(generations.get(n - 1)?.pointerBytes || Buffer.from("prior")) : null,
-      fixedValidationClock: at, sourceProvenancePreserved: true, originalEnvelopesRewritten: false, providerCalls: 0, collectorStarted: false, kosisReadOrChanged: false };
+      fixedValidationClock: at, sourceProvenancePreserved: true, originalEnvelopesRewritten: false, providerCalls: 0, collectorStarted: false, kosisReadOrChanged: false,
+      ...(prepared.includes(n) ? { preparedResultCount: 1, calculationFingerprint: digest("fixture engine") } : {}) };
     const publicationRead = await write(path.join(directory, "publication-receipt.json"), publication);
     let receiptFile = null;
     if (auto.includes(n)) {
@@ -35,7 +43,7 @@ async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [], 
         ...(newer ? { stateSha256: digest("state-" + n), preparationSha256: digest("preparation-" + n), incrementalValidated: true } : {}),
         generation, pointerSha256: digest(pointerBytes), catalogSha256: catalogRead.sha256, publicationReceiptSha256: publicationRead.sha256, finishedAt: at });
     }
-    generations.set(n, { directory, projectionFile, receiptFile, pointer, pointerBytes, publication });
+    generations.set(n, { directory, projectionFile, resultFile, receiptFile, pointer, pointerBytes, publication });
   }
   const expectedCurrentPointerSha256 = (await write(path.join(root, "current.json"), generations.get(current).pointerBytes)).sha256;
   const call = extra => prune({ projectionDir: root, expectedCurrentPointerSha256, assertLeaseHeld: async () => true, fixture: true, ...extra });
@@ -49,6 +57,25 @@ test("prunes only older own successful auto generations and preserves current, n
   for (const n of [1, 2, 3, 4]) assert.equal(await exists(f.generations.get(n).receiptFile), true);
   assert.deepEqual(await fs.readFile(path.join(f.root, "current.json")), before); assert.equal(result.operatingPointerChanged, false); assert.equal(result.completionProofReceiptsRemoved, 0);
   const repeat = await f.call(); assert.equal(repeat.deleted.length, 0); assert.deepEqual(repeat.alreadyAbsent.sort(), [gen(1), gen(2)]);
+});
+test("v2 final-result files are audited by exact committed hash and removed only with proved old owned generations", async t => {
+  const f = await fixture(t, { prepared: [1, 2, 4] }), currentResult = await fs.readFile(f.generations.get(4).resultFile), before = await fs.readFile(path.join(f.root, "current.json"));
+  const result = await f.call(); assert.equal(result.status, "complete"); assert.deepEqual(result.deleted.map(row => row.generation).sort(), [gen(1), gen(2)]);
+  for (const n of [1, 2]) { assert.equal(await exists(f.generations.get(n).resultFile), false); assert.equal(await exists(f.generations.get(n).receiptFile), true); }
+  assert.deepEqual(await fs.readFile(f.generations.get(4).resultFile), currentResult); assert.deepEqual(await fs.readFile(path.join(f.root, "current.json")), before);
+  assert.equal(await exists(f.generations.get(0).directory), true); assert.equal(await exists(f.generations.get(3).directory), true);
+});
+test("unknown, altered, missing and hardlinked v2 result artifacts hold the full cleanup before any generation removal", async t => {
+  for (const variant of ["unknown", "altered", "missing", "hardlink"]) {
+    const f = await fixture(t, { prepared: [1] }), target = f.generations.get(1);
+    if (variant === "unknown") await write(path.join(target.directory, "results", "unproved.json"), { retain: true });
+    if (variant === "altered") await fs.writeFile(target.resultFile, "changed result");
+    if (variant === "missing") await fs.unlink(target.resultFile);
+    if (variant === "hardlink") await fs.link(target.resultFile, path.join(f.parent, "retained-result-link.json"));
+    await assert.rejects(f.call());
+    assert.equal(await exists(target.directory), true, variant); assert.equal(await exists(f.generations.get(2).directory), true, variant);
+    assert.equal(await exists(f.generations.get(4).directory), true, variant);
+  }
 });
 test("manual current generation does not consume automatic backup retention", async t => {
   const f = await fixture(t, { current: 9 }), result = await f.call();

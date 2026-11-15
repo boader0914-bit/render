@@ -1,11 +1,11 @@
 "use strict";
 const fs = require("node:fs/promises"), path = require("node:path");
 const { publishKeywordMonthlyBundle, readBundleFile, KEYWORD_MONTHLY_BUNDLE_LIMITS } = require("./lib/keyword_monthly_bundle.cjs");
-const USAGE = "node scripts/build_keyword_monthly_bundle.cjs (--input <absolute prepared directory> [--input ...] | --plan <absolute JSON>) --output <absolute bundle directory> --now <fixed ISO> [--expected-current-sha <64hex|absent>] [--max-total-bytes <integer>]";
+const USAGE = "node scripts/build_keyword_monthly_bundle.cjs (--input <absolute prepared directory> [--input ...] | --plan <absolute JSON>) --output <absolute bundle directory> --now <fixed ISO> [--expected-current-sha <64hex|absent>] [--max-total-bytes <integer>] [--prepare-results <0|1>]";
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 function args(values) {
   if (values.length === 1 && values[0] === "--help") return { help: true };
-  const result = { inputs: [] }, allowed = new Set(["input", "plan", "output", "now", "expected-current-sha", "max-total-bytes"]);
+  const result = { inputs: [] }, allowed = new Set(["input", "plan", "output", "now", "expected-current-sha", "max-total-bytes", "prepare-results"]);
   for (let i = 0; i < values.length; i += 2) {
     const key = values[i]?.slice(2), value = values[i + 1];
     if (!values[i]?.startsWith("--") || !allowed.has(key) || !value || value.startsWith("--") || key !== "input" && Object.hasOwn(result, key)) fail("KEYWORD_MONTHLY_BUNDLE_CLI_ARGUMENTS");
@@ -17,6 +17,7 @@ function args(values) {
     || new Date(`${result.now.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) !== result.now.slice(0, 10)) fail("KEYWORD_MONTHLY_BUNDLE_CLI_FIXED_CLOCK_REQUIRED");
   if (result["expected-current-sha"] && result["expected-current-sha"] !== "absent" && !/^[a-f0-9]{64}$/.test(result["expected-current-sha"])) fail("KEYWORD_MONTHLY_BUNDLE_CLI_EXPECTED_POINTER");
   if (result["max-total-bytes"] && (!/^\d+$/.test(result["max-total-bytes"]) || !Number.isSafeInteger(Number(result["max-total-bytes"])))) fail("KEYWORD_MONTHLY_BUNDLE_CLI_TOTAL_BOUND");
+  if (result["prepare-results"] !== undefined && !["0", "1"].includes(result["prepare-results"])) fail("KEYWORD_MONTHLY_BUNDLE_CLI_PREPARE_RESULTS");
   return result;
 }
 function networkGuard() {
@@ -40,6 +41,7 @@ async function run(values) {
     const receipt = await publishKeywordMonthlyBundle({ inputs, outputDir: path.resolve(input.output), now: input.now,
       expectedCurrentSha256: input["expected-current-sha"] && input["expected-current-sha"] !== "absent" ? input["expected-current-sha"] : null,
       maxTotalBytes: input["max-total-bytes"] === undefined ? KEYWORD_MONTHLY_BUNDLE_LIMITS.defaultTotalBytes : Number(input["max-total-bytes"]),
+      prepareResults: input["prepare-results"] === "1",
       beforePromote: async () => {
         if (guard.count()) fail("KEYWORD_MONTHLY_BUNDLE_CLI_NETWORK_BLOCKED");
         if (planRead && (await readBundleFile(input.plan, KEYWORD_MONTHLY_BUNDLE_LIMITS.catalogBytes)).sha256 !== planRead.sha256) fail("KEYWORD_MONTHLY_BUNDLE_CLI_PLAN_CHANGED");

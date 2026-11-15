@@ -18,6 +18,18 @@ const clone = v => JSON.parse(JSON.stringify(v));
 const safeCode = error => /^[A-Z][A-Z0-9_]{1,119}$/.test(error?.code || "") ? error.code : "KEYWORD_REFRESH_UNAVAILABLE";
 const iso = v => typeof v === "string" && /^20\d\d-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
 const integer = (v, fallback, min, max) => { v ??= fallback; if (!Number.isSafeInteger(v) || v < min || v > max) throw TypeError("Invalid refresh bound"); return v; };
+const LOCK_REASONS=new Set(["LOCK_UNVERIFIED","LOCK_MISSING","LOCK_INVALID","LOCK_READ_UNAVAILABLE","LEGACY_OWNER_UNVERIFIED",
+  "OWNER_ACTIVE","OWNER_NOT_RUNNING","OWNER_PID_REUSED","OWNER_OTHER_INSTANCE","OWNER_STATE_UNAVAILABLE","OWNER_IDENTITY_UNAVAILABLE"]);
+function smallLockDiagnostic(value){
+  try{
+    const fields=["schemaVersion","reasonCode","ownerSchemaVersion","ageMs","sameInstance","ownerProcessState"];
+    if(!plain(value)||Object.keys(value).length!==fields.length||!fields.every(k=>Object.hasOwn(value,k))
+      ||value.schemaVersion!==1||!LOCK_REASONS.has(value.reasonCode)||![null,1,2].includes(value.ownerSchemaVersion)
+      ||value.ageMs!==null&&(!Number.isSafeInteger(value.ageMs)||value.ageMs<0)
+      ||![null,true,false].includes(value.sameInstance)||!["unverified","running","not_running","unavailable"].includes(value.ownerProcessState))return null;
+    return Object.fromEntries(fields.map(k=>[k,value[k]]));
+  }catch{return null;}
+}
 
 function createKeywordMonthlyRefresh(options = {}) {
   const { dataDir, readCompletedEvidence, refresh, canProcess = async () => true, now = () => new Date(),
@@ -69,7 +81,7 @@ function createKeywordMonthlyRefresh(options = {}) {
   }
   const idFor = intent => hash(JSON.stringify([intent.refreshVersion, intent.runId, intent.manifestSha256, intent.keyword, intent.scope, intent.scheduleOccurrenceId]));
   function publicRow(row) {
-    return clone(Object.fromEntries(["jobId", "intent", "status", "reasonCode", "createdAt", "updatedAt", "startedAt", "finishedAt", "nextAttemptAt", "recoveredAt", "attempts", "maxAttempts", "result"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]])));
+    return clone(Object.fromEntries(["jobId", "intent", "status", "reasonCode", "createdAt", "updatedAt", "startedAt", "finishedAt", "nextAttemptAt", "recoveredAt", "attempts", "maxAttempts", "result","lockDiagnostic"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]])));
   }
   function validate(row, id) {
     need(plain(row) && row.schemaVersion === 1 && row.jobId === id && SHA.test(id) && STATES.has(row.status), "KEYWORD_REFRESH_RECORD_INVALID");
@@ -81,6 +93,7 @@ function createKeywordMonthlyRefresh(options = {}) {
       && Number.isSafeInteger(row.attempts) && row.attempts >= 0 && Number.isSafeInteger(row.maxAttempts) && row.maxAttempts >= 1 && row.maxAttempts <= 10 && row.attempts <= row.maxAttempts
       && (row.reasonCode === null || /^[A-Z][A-Z0-9_]{1,119}$/.test(row.reasonCode)), "KEYWORD_REFRESH_RECORD_INVALID");
     if (row.result !== null) need(JSON.stringify(smallResult(row.result)) === JSON.stringify(row.result), "KEYWORD_REFRESH_RECORD_INVALID");
+    if(Object.hasOwn(row,"lockDiagnostic"))need(smallLockDiagnostic(row.lockDiagnostic)!==null&&JSON.stringify(smallLockDiagnostic(row.lockDiagnostic))===JSON.stringify(row.lockDiagnostic),"KEYWORD_REFRESH_RECORD_INVALID");
     return row;
   }
   function smallResult(value) {
@@ -219,6 +232,7 @@ function createKeywordMonthlyRefresh(options = {}) {
       if (closed) return null;
       deferredUntil.delete(row.jobId);
       const began = stamp(), running = { ...row, status: "running", reasonCode: null, updatedAt: began, startedAt: began, nextAttemptAt: null, attempts: row.attempts + 1 };
+      delete running.lockDiagnostic;
       await locked(() => writeRecord(running)); activeJobId = row.jobId; controller = new AbortController();
       try {
         const result = smallResult(await refresh(proof.value, clone(row.intent), { jobId: row.jobId, attempt: running.attempts, recoveredAt: row.recoveredAt, signal: controller.signal }));
@@ -235,7 +249,9 @@ function createKeywordMonthlyRefresh(options = {}) {
         }
         const retry = !uncertain && e?.retryable === true && running.attempts < running.maxAttempts;
         const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** (running.attempts - 1));
-        return await locked(() => writeRecord({ ...running, status: retry ? "deferred" : "needs_verification", reasonCode: safeCode(e), updatedAt: end, finishedAt: retry ? null : end, nextAttemptAt: retry ? new Date(Date.parse(end) + delay).toISOString() : null }));
+        let lockDiagnostic=null;try{if(e?.code==="KEYWORD_INCREMENTAL_WORKER_LOCKED")lockDiagnostic=smallLockDiagnostic(e.lockDiagnostic);}catch{}
+        return await locked(() => writeRecord({ ...running, status: retry ? "deferred" : "needs_verification", reasonCode: safeCode(e), updatedAt: end, finishedAt: retry ? null : end, nextAttemptAt: retry ? new Date(Date.parse(end) + delay).toISOString() : null,
+          ...(lockDiagnostic?{lockDiagnostic}:{}) }));
       } finally { activeJobId = null; controller = null; }
     } catch (e) { lastWorkerError = safeCode(e); return { status: "needs_verification", errorCode: lastWorkerError, collectionPostprocessUnaffected: true }; }
   }
