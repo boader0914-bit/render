@@ -83,7 +83,8 @@ for (const target of ["original-job.json", "authorization.json", "reviewed-prefl
   const q = queue(f, async () => assert.fail("changed authorization")); t.after(() => q.close()); assert.equal((await q.runOnce()).status, "needs_verification"); assert.equal((await q.status()).items[0].attempts, 3);
   assert.equal(JSON.parse(await fs.readFile(f.jobFile)).status, "needs_verification"); assert.equal(await q.runOnce(), null);
 });
-for (const changedFile of ["lib/keyword_monthly_incremental_failure.cjs", "lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs"])
+for (const changedFile of ["lib/keyword_monthly_incremental_failure.cjs", "lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs",
+  "lib/keyword_monthly_source_relocation.cjs", "lib/keyword_monthly_incremental_state.cjs", "lib/keyword_monthly_incremental_context.cjs"])
 test(`current deployed ${changedFile} fingerprint change atomically holds queued retry without executing or polling it again`, async t => {
   const f = await fixture(t); await R.retryFailedCalculation(await f.approved(), f.dependencies); const originalRead = fs.readFile;
   const changedPath = path.join(__dirname, ...changedFile.split("/"));
@@ -93,7 +94,8 @@ test(`current deployed ${changedFile} fingerprint change atomically holds queued
 });
 test("authorization code pins are a unique fixed repository whitelist including the normalized-source and response budgets", async () => {
   assert.equal(new Set(A.CODE_FILES).size, A.CODE_FILES.length);
-  for (const file of ["lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs"]) assert.ok(A.CODE_FILES.includes(file));
+  for (const file of ["lib/keyword_monthly_incremental_normalize.cjs", "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs", "lib/keyword_monthly_source_budget.cjs", "lib/keyword_monthly_response_budget.cjs",
+    "lib/keyword_monthly_source_relocation.cjs", "lib/keyword_monthly_incremental_state.cjs", "lib/keyword_monthly_incremental_context.cjs", "refresh_keyword_monthly_incremental.cjs"]) assert.ok(A.CODE_FILES.includes(file));
   const identity = await A.codeIdentity(); assert.deepEqual(identity.pins.map(pin => pin.file), A.CODE_FILES);
   for (const pin of identity.pins) { assert.equal(path.isAbsolute(pin.file), false); assert.equal(pin.file.includes(".."), false); assert.match(pin.sha256, /^[a-f0-9]{64}$/); }
 });

@@ -10,6 +10,7 @@ const CODE_FILES = Object.freeze(["reconstruct_keyword_monthly_incremental.cjs",
   "build_keyword_monthly_projection.cjs", "reconstruct_keyword_monthly_source_copy.cjs",
   ...["keyword_monthly_refresh.cjs", "keyword_monthly_failed_retry_authorization.cjs", "keyword_monthly_incremental_failure.cjs", "keyword_monthly_prepared_results.cjs",
     "keyword_monthly_incremental_normalize.cjs", "keyword_monthly_source_budget.cjs", "keyword_monthly_response_budget.cjs",
+    "keyword_monthly_source_relocation.cjs", "keyword_monthly_incremental_state.cjs", "keyword_monthly_incremental_context.cjs",
     "keyword_monthly_analysis.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs", "monthly_report_insights.cjs", "saved_product_recovery.cjs", "monthly_report_actions.cjs"].map(x => "lib/" + x)]);
 const need = (v, c = "KEYWORD_FAILED_RETRY_AUTHORIZATION_INVALID") => H.need(v, c);
 const exact = (v, keys) => v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));

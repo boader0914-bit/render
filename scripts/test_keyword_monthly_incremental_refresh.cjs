@@ -107,6 +107,18 @@ async function value(f, keyword, month) {
   const service = B.createKeywordMonthlyBundleAnalysis({ projectionDir: f.liveDir, now: () => NOW }), options = await service.options();
   return service.analyze({ keyword, month, cutoffDate: options.keywords.find(item => item.keyword === keyword).defaultCutoffs[month] });
 }
+test("an existing unchanged source checkpoint is checked under the owned host lease and its linkage survives publication", async t => {
+  const f = await fixture(t); await f.store.initialize(); const original = await f.store.bootstrap();
+  const master = await fs.readFile(path.join(f.dataDir, "company_master/companies.json")), history = await fs.readFile(path.join(f.dataDir, "history/observations.jsonl"));
+  const completed = await R.refreshKeywordMonthlyIncremental(f.call, f.deps), proof = f.lastJob().sourceRelocation;
+  assert.equal(proof.status, "unchanged"); assert.equal(proof.previousStateSha256, original.stateSha256); assert.equal(proof.previousPointerSha256, original.pointerSha256);
+  assert.equal(proof.stateSha256, original.stateSha256); assert.equal(proof.pointerSha256, original.pointerSha256); assert.equal(proof.receipt, null);
+  assert.equal(proof.originalBodyReads, 0); assert.equal(proof.reasonCode, "SAME_DEVICE_DELTA_VALIDATION_DEFERRED");
+  assert.equal(f.lastJob().expectedSourceStateSha256, original.stateSha256); assert.deepEqual(completed.sourceRelocation, proof);
+  const saved = JSON.parse(await fs.readFile(path.join(f.liveDir, "refresh-receipts", "complete-" + R.keyFor(f.evidence) + ".json")));
+  assert.deepEqual(saved.sourceRelocation, proof); assert.deepEqual(await fs.readFile(path.join(f.dataDir, "company_master/companies.json")), master);
+  assert.deepEqual(await fs.readFile(path.join(f.dataDir, "history/observations.jsonl")), history); await absent(f.lockFile);
+});
 
 for (const variant of ["valid", "wrongPid", "wrongInput", "privateField", "missing"]) test("failed child diagnostic is bounded and bound before adoption: " + variant, async t => {
   const f = await fixture(t, { childFailure: variant }), pointer = await f.pointer(), source = await fs.readFile(path.join(f.dataDir, "history/observations.jsonl"));
