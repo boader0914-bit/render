@@ -366,7 +366,7 @@
         && automatic.started && automatic.currentVersionCounts?.needs_verification === 0 && automatic.historicalNeedsVerification > 0;
       refreshNotice.textContent = historicalOnly
         ? `이전 갱신 검수 이력 ${number(automatic.historicalNeedsVerification)}건 보존 · 현재 갱신 작업 처리 ${number(automatic.currentVersionCounts.running)} / 대기 ${number(automatic.currentVersionCounts.queued)} / 이월 ${number(automatic.currentVersionCounts.deferred)}. 선택 자료의 실제 반영 범위는 아래 자료 마감과 출처 근거로 확인하세요. 이전 이력은 삭제하거나 정상 완료로 바꾸지 않습니다.`
-        : automatic ? automatic.status === "needs_verification" || automatic.cleanupNeedsVerification
+        : automatic ? automatic.status !== "available" || automatic.hasRuntimeError || automatic.cleanupNeedsVerification
         ? "자동 반영 확인 필요 · 기존 검증 자료를 유지합니다. 수집 재실행이나 보호 해제를 시작하지 않습니다."
         : automatic.started ? `수집·DB 반영 완료 후 자동 갱신 · 처리 ${number(automatic.counts.running)} / 대기 ${number(automatic.counts.queued)} / 이월 ${number(automatic.counts.deferred)}. 새 자료는 화면 재진입 또는 저장 자료 조회로 확인합니다.`
           : "자동 반영 실행 상태 미확인 · 아래 자료 마감 시각을 확인하세요." : "";

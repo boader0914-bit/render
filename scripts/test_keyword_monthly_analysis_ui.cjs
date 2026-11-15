@@ -128,7 +128,7 @@ test("company selection compares whole inclusive and peer means locally without 
 test("saved read renews catalog/cutoff and preserves month/product instead of using a stale in-page list", async () => {
   let day = "2026-10-30";
   const ui = mockUi({ request: async url => {
-    if (url.endsWith("/options")) return { ok: true, status: 200, json: async () => ({ ...optionsFixture(), currentDay: day, refreshStatus: { status: "available", started: true, counts: { running: 0, queued: 1, deferred: 0 } } }) };
+    if (url.endsWith("/options")) return { ok: true, status: 200, json: async () => ({ ...optionsFixture(), currentDay: day, refreshStatus: { status: "available", errorCode: null, started: true, counts: { running: 0, queued: 1, deferred: 0 } } }) };
     const u = new URL(url, "https://local.test"), q = Object.fromEntries(u.searchParams); return { ok: true, status: 200, json: async () => payloadFixture(q) };
   } });
   await ui.controller.open(); await ui.button("데이유즈").fire("click"); day = "2026-10-31";
@@ -149,7 +149,7 @@ test("historical failures stay visible while current-version processing is repor
     ? { ...optionsFixture(), refreshStatus: status } : payloadFixture() }) });
   await ui.controller.open(); assert.match(ui.text(), /이전 갱신 검수 이력 20건 보존/); assert.match(ui.text(), /현재 갱신 작업 처리 0 \/ 대기 1 \/ 이월 0/);
   assert.match(ui.text(), /선택 자료의 실제 반영 범위/); assert.doesNotMatch(ui.text(), /최신 반영 완료/); assert.match(ui.text(), /400원/); assert.equal(ui.calls.length, 2);
-  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { errorCode: undefined }, { errorCode: {} }, { cleanup: { status: "needs_verification" } }, { cleanup: { status: "unknown" } }, { currentVersionCounts: { needs_verification: 1 } }, { currentVersionCounts: null }, { currentVersionCounts: { running: -1 } }]) {
+  for (const patch of [{ errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { errorCode: undefined }, { errorCode: {} }, { status: "unexpected", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { status: "available", errorCode: "KEYWORD_REFRESH_UNAVAILABLE" }, { cleanup: { status: "needs_verification" } }, { cleanup: { status: "unknown" } }, { currentVersionCounts: { needs_verification: 1 } }, { currentVersionCounts: null }, { currentVersionCounts: { running: -1 } }]) {
     const blocked = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options")
       ? { ...optionsFixture(), refreshStatus: { ...status, ...patch } } : payloadFixture() }) });
     await blocked.controller.open(); assert.match(blocked.text(), /자동 반영 확인 필요/); assert.doesNotMatch(blocked.text(), /이전 갱신 검수 이력 20건 보존/);
