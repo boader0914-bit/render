@@ -5,6 +5,7 @@
 // have different duplicate-ID, BOM, date and company-identity contracts.
 const fs = require("node:fs/promises"), native = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 const VERSION = "history-observation-index-v1";
 const EMPTY_CHAIN = crypto.createHash("sha256").update(VERSION).digest("hex");
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -36,9 +37,10 @@ function parseLine(line, ordinal, mode) {
 }
 
 function createHistoryObservationIndex({ file, indexFile, checkpoint = async () => {}, fileSystem = fs,
-  maxLineBytes = 32 * 1024 * 1024, onBeforePublish = null, busyTimeoutMs = 1000 } = {}) {
+  maxLineBytes = 32 * 1024 * 1024, onBeforePublish = null, busyTimeoutMs = 1000, integrityCheck = null } = {}) {
   if (typeof file !== "string" || !file || typeof indexFile !== "string" || !indexFile || path.resolve(file) === path.resolve(indexFile)) throw new TypeError("Distinct file and indexFile are required");
   if (typeof checkpoint !== "function" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) throw new TypeError("Invalid index options");
+  if (integrityCheck !== null && typeof integrityCheck !== "function" || fileSystem !== fs && integrityCheck === null) throw new TypeError("Custom index filesystems require an explicit full integrity checker");
   file = path.resolve(file); indexFile = path.resolve(indexFile);
   let db = null, closed = false, serial = Promise.resolve(), last = null;
   const counters = { sourceReads: 0, bytesReadOriginal: 0, rebuilt: 0, incremental: 0, unchanged: 0, rowsRead: 0, headersRead: 0, idLookups: 0,
@@ -66,7 +68,17 @@ function createHistoryObservationIndex({ file, indexFile, checkpoint = async () 
       db = new DatabaseSync(indexFile);
       db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.min(5000, Number(busyTimeoutMs) || 0))}; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA cache_size=-4096; PRAGMA mmap_size=0; PRAGMA temp_store=FILE;`);
       if (existing) {
-        const check = db.prepare("PRAGMA quick_check").get();
+        const before = await fileSystem.lstat(indexFile, { bigint: true });
+        if (!before.isFile() || before.isSymbolicLink() || before.dev !== existing.dev || before.ino !== existing.ino) throw fault("HISTORY_OBSERVATION_INDEX_INTEGRITY_CHANGED");
+        const input = { indexFile, expectedSignature: signature(before), busyTimeoutMs: Math.max(0, Math.min(5000, Number(busyTimeoutMs) || 0)),
+          synchronousCheck: () => db.prepare("PRAGMA quick_check").get() };
+        // Loading a fresh worker is a web-host capability. The private guarded
+        // source-copy factory explicitly injects the same synchronous full
+        // check inside its existing isolated child and never loads this helper.
+        const checker = integrityCheck || (options => require("./history_index_integrity.cjs").checkHistoryIndexIntegrity(options));
+        const check = await getAnalyticalPhaseDiagnostics().measure("history_index_integrity_check", { inputBytes: Number(before.size), readCount: 1 }, () => checker(input));
+        const after = await fileSystem.lstat(indexFile, { bigint: true });
+        if (!after.isFile() || after.isSymbolicLink() || signature(after) !== signature(before)) throw fault("HISTORY_OBSERVATION_INDEX_INTEGRITY_CHANGED");
         if (!check || Object.values(check)[0] !== "ok") throw fault("HISTORY_OBSERVATION_INDEX_INVALID");
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name);
         if (!tables.includes("metadata") || !tables.includes("physical_rows") || !tables.includes("raw_partitions")) throw fault("HISTORY_OBSERVATION_INDEX_INVALID");

@@ -202,3 +202,36 @@ test("copy wiring cannot be pointed at the live production data root", () => {
   for (const directory of [path.parse(path.resolve("fixture")).root, path.resolve("/var/data")])
     assert.throws(() => buildSourceWiring({ codeRoot, copyDataDir: directory, now: "2026-11-15T00:00:00.000Z" }), { code: "KEYWORD_WIRING_PRIVATE_COPY_REQUIRED" });
 });
+
+test("an existing private SQLite index runs the same full quick_check inside the guarded copy", { timeout: 15000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-wiring-integrity-"));
+  t.after(async () => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); await fs.rm(root, { recursive: true, force: true }); });
+  for (const directory of ["company_master", "history", "outputs"]) await fs.mkdir(path.join(root, directory));
+  await fs.writeFile(path.join(root, "company_master/companies.json"), '{"companies":{}}');
+  const file = path.join(root, "history/observations.jsonl"), indexFile = path.join(root, "history/indexes/observations.sqlite");
+  const rows = [{ companyId: "synthetic_integrity", runId: "synthetic_run", stayDate: "2026-11-15", sold: 0 },
+    { companyId: "synthetic_integrity", runId: "synthetic_run", stayDate: "2026-11-16", sold: 1 }];
+  await fs.writeFile(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const module = require("./lib/history_observation_index.cjs"), originalFactory = module.createHistoryObservationIndex;
+  const seed = originalFactory({ file, indexFile }); await seed.ensure(); await seed.close();
+  let captured, checks = 0, actualChecks = 0;
+  module.createHistoryObservationIndex = options => {
+    captured = options.integrityCheck; assert.equal(typeof captured, "function");
+    return originalFactory({ ...options, integrityCheck: details => {
+      checks++; assert.equal(details.indexFile, indexFile); assert.equal(typeof details.synchronousCheck, "function");
+      return captured({ ...details, synchronousCheck: () => { actualChecks++; return details.synchronousCheck(); } });
+    } });
+  };
+  const guard = installGuards(root, { codeRoot }); let wiring;
+  try {
+    wiring = buildSourceWiring({ codeRoot, copyDataDir: root, now: "2026-11-15T00:00:00.000Z" });
+    assert.equal(wiring.bindings.historyIndexIntegrityScope, "same_full_check_inside_isolated_copy");
+    const headers = []; await bounded(wiring.index.readHeaders({ parseMode: "monthly" }, row => { headers.push(row); }));
+    assert.equal(checks, 1); assert.equal(actualChecks, 1, "the injected path must execute the unchanged complete SQLite check");
+    assert.deepEqual(headers.map(row => [row.companyId, row.runId, row.stayDate]), rows.map(row => [row.companyId, row.runId, row.stayDate]));
+    let unsafeCalled = false;
+    assert.throws(() => captured({ indexFile: path.join(root, "outside-index.sqlite"), synchronousCheck: () => { unsafeCalled = true; } }),
+      { code: "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED" }); assert.equal(unsafeCalled, false);
+    for (const key of ["networkAttempts", "childProcessAttempts", "outsideReadAttempts", "outsideCopyWriteAttempts", "appEntryExecutions", "providerFactories"]) assert.equal(guard.metrics[key], 0);
+  } finally { await wiring?.index?.close?.(); await wiring?.scheduler?.close?.(); guard.restore(); module.createHistoryObservationIndex = originalFactory; }
+});

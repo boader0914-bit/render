@@ -65,6 +65,7 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
   need(dataDir !== path.parse(dataDir).root && dataDir !== path.resolve("/var/data"), "KEYWORD_WIRING_PRIVATE_COPY_REQUIRED");
   const I = inspectSource(codeRoot), req = createRequire(I.filename), quiet = () => {};
   const metrics = { sourceReads: 0, savedRunLoads: 0, appEntryExecutions: 0, providerFactories: 0, collectorFactories: 0, deniedRequires: 0 };
+  const privateIndexFile = path.join(dataDir, "history", "indexes", "observations.sqlite");
   let sourceOptions = null;
   const incrementalRevision = async () => {
     need(typeof incremental?.revision === "string" && incremental.revision.length > 0 && incremental.revision.length <= 1024, "KEYWORD_WIRING_INCREMENTAL_REVISION_REQUIRED");
@@ -106,6 +107,17 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
             // Do not evaluate the extracted host callback or import/read its
             // production maintenance ledger inside the restricted VM.
             args[0].externalAdmission = null;
+          }
+          if (to === "createHistoryObservationIndex") {
+            need(path.resolve(args[0].file || "") === path.join(dataDir, "history", "observations.jsonl")
+              && path.resolve(args[0].indexFile || "") === privateIndexFile, "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED");
+            // A Worker has a fresh JS filesystem module and would escape the
+            // private child's main-thread path guards. Keep the SAME complete
+            // SQLite integrity check inside the already isolated copy instead.
+            args[0].integrityCheck = ({ indexFile, synchronousCheck } = {}) => {
+              need(indexFile === privateIndexFile && typeof synchronousCheck === "function", "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED");
+              return synchronousCheck();
+            };
           }
           if (!["createAnalyticalWorkScheduler", "createAnalyticalMemorySampler"].includes(to)) args[0].now = () => new Date(now);
           if (to === "createMonthlyCompanyRecalculation") {
@@ -152,6 +164,8 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
       capacityForCompany: sourceOptions.capacityForCompany, maximumRoomCapacity: vm.runInContext("companyMaximumRoomCapacity", context), sourceOptions },
     scheduler: vm.runInContext("analyticalWork", context), metrics, bindings: { ...I.bindings, ranges, imports: IMPORTS.map(row => row[0]), declarationOrder: BUILD_ORDER,
       schedulerScope: "private_saved_copy_no_host_maintenance", schedulerDataDir: dataDir,
+      historyIndexIntegrityScope: incremental ? "injected_incremental_index" : streamHistoryOnly ? "streaming_without_sqlite"
+        : "same_full_check_inside_isolated_copy",
       observationIndexMode: incremental ? "incremental_saved_deltas" : streamHistoryOnly ? "exact_application_streaming_fallback" : "copied_data_index", originalOutputsReadOnlyReferenced: Boolean(readOnlyOriginalOutputs) },
     assertCodeCurrent() { need(inspectSource(I.root).bindings.codeFingerprint === I.bindings.codeFingerprint, "KEYWORD_WIRING_CODE_CHANGED"); },
     requireAllowlist: [...requireAllowlist] };
