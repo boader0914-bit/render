@@ -194,7 +194,7 @@ async function queueSnapshot(dataDir) {
   need(same(before, await checked(dir, true)), "KEYWORD_INCREMENTAL_LOCK_QUEUE_CHANGED");
   return hash(jsonBytes(pins.sort((a, b) => a[0].localeCompare(b[0]))));
 }
-async function collectionSnapshot(dataDir) {
+async function collectionSnapshot(dataDir, rawAudit = null) {
   const pins = [], day = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
   for (const [rel, max, broker] of [["collector/jobs.json", 16 * 1024 ** 2, true], ["collector-scheduled/jobs.json", 16 * 1024 ** 2, true], ["collector-web/state.json", 1024 ** 2, false]]) {
     const r = await read(path.join(dataDir, rel), max), v = r.value;
@@ -205,12 +205,21 @@ async function collectionSnapshot(dataDir) {
     if (broker) { need(Array.isArray(v.jobs), "KEYWORD_INCREMENTAL_LOCK_COLLECTION_UNKNOWN");
       for (const j of v.jobs) need(["completed", "failed", "cancelled", "interrupted"].includes(j.status) && !(j.leaseHash && !j.leaseReleasedAt), "KEYWORD_INCREMENTAL_LOCK_COLLECTION_BUSY");
     } else need(Object.hasOwn(v, "active") && v.active === null, "KEYWORD_INCREMENTAL_LOCK_COLLECTION_BUSY");
-    pins.push([rel, r.sha256]);
+    if (rawAudit) rawAudit.push({ path: rel, sha256: r.sha256 });
+    if (broker) {
+      // collector_broker.claim() persists this root heartbeat during idle polls.
+      // Active heartbeat also changes job.updatedAt/leaseExpiresAt: every job,
+      // lease, protection, retirement and other root field stays in this pin.
+      const present = Object.hasOwn(v, "workerLastSeenAt");
+      if (present) need(v.workerLastSeenAt === null || iso(v.workerLastSeenAt), "KEYWORD_INCREMENTAL_LOCK_COLLECTION_UNKNOWN");
+      const semantic = { ...v }; delete semantic.workerLastSeenAt;
+      pins.push([rel, hash(jsonBytes({ workerLastSeenAtPresent: present, state: semantic }))]);
+    } else pins.push([rel, r.sha256]);
   }
   const post = await read(path.join(dataDir, "history/collection_postprocess/queue.json"), 2 * 1024 ** 2);
   need(post.value?.version === 1 && post.value.jobs && typeof post.value.jobs === "object" && !Array.isArray(post.value.jobs), "KEYWORD_INCREMENTAL_LOCK_DB_UNKNOWN");
   for (const j of Object.values(post.value.jobs)) need(["held", "complete", "failed"].includes(j.status), "KEYWORD_INCREMENTAL_LOCK_DB_BUSY");
-  pins.push(["history/collection_postprocess/queue.json", post.sha256]); return hash(jsonBytes(pins));
+  pins.push(["history/collection_postprocess/queue.json", post.sha256]); if (rawAudit) rawAudit.push({ path: "history/collection_postprocess/queue.json", sha256: post.sha256 }); return hash(jsonBytes(pins));
 }
 async function serverChain(proc, pid) {
   const rows = [], seen = new Set(); let expectedCwd;
@@ -366,7 +375,7 @@ async function inspectInternal(options) {
   const retained = await gzipJson(path.join(receiptDir, "incremental-evidence-" + last.sourceKey + ".json.gz"), 16 * 1024 ** 2, 16 * 1024 ** 2, c.preparationEvidenceSha256, c.preparationSha256);
   need(retained.value.stateSha256 === c.stateSha256 && retained.value.version === c.refreshVersion && retained.value.status === "complete" && retained.value.providerCalls === 0 && retained.value.sourceWrites === 0);
   await gzipJson(path.join(directory, "states", c.stateSha256 + ".json.gz"), MAX_STATE, MAX_STATE, null, c.stateSha256, false);
-  const queueSha256 = await queueSnapshot(dataDir), collectionSha256 = await collectionSnapshot(dataDir); need(JSON.stringify(await proc.context()) === JSON.stringify(context));
+  const collectionReadAudit = [], queueSha256 = await queueSnapshot(dataDir), collectionSha256 = await collectionSnapshot(dataDir, collectionReadAudit); need(JSON.stringify(await proc.context()) === JSON.stringify(context));
   need(JSON.stringify(await serverChain(proc, serverPid)) === JSON.stringify(chain) && await ownerStillMatches(proc, l.pid, ownerReuse, retiredInstance) && (retiredInstance || !await proc.process(p.pid))
     && (await proc.peers(excluded)).length === 0, "KEYWORD_INCREMENTAL_LOCK_PROCESS_CHANGED");
   const fresh = await read(r.file, 16384); need(fresh.sha256 === r.sha256 && same(fresh.stat, r.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
@@ -376,9 +385,9 @@ async function inspectInternal(options) {
     jobInputSha256: input.sha256, jobOwnerRecordSha256: ownerRecord.sha256, sourceManifestSha256: manifest.sha256, dbReceiptSha256: db.sha256,
     preparationSha256: preparation?.sha256 || null, sourcePointerSha256: source.sha256, sourceStateSha256: s.stateSha256,
     publicPointerSha256: pub.sha256, catalogSha256: catalog.sha256, publicationReceiptSha256: published.sha256, lastCompleteSha256: completed.sha256, queueSha256, collectionSha256 };
-  return { snapshot, snapshotSha256: hash(jsonBytes(snapshot)), lock: r, directory, processes: proc };
+  return { snapshot, snapshotSha256: hash(jsonBytes(snapshot)), lock: r, directory, processes: proc, collectionReadAudit };
 }
-async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: r.snapshot.retiredInstance ? "retired_instance_review_required" : r.snapshot.ownerReuse ? "reuse_review_required" : "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
+async function inspectWorkerLockRecovery(options) { const r = await inspectInternal(options); return { status: r.snapshot.retiredInstance ? "retired_instance_review_required" : r.snapshot.ownerReuse ? "reuse_review_required" : "review_required", snapshot: r.snapshot, snapshotSha256: r.snapshotSha256, collectionReadAudit: r.collectionReadAudit, legacyIncidentRequired: r.snapshot.lockSchemaVersion === 1 }; }
 function validateReview(proof, inspected) {
   need(proof && Object.keys(proof).every(k => ["schemaVersion", "action", "targetJobId", "snapshotSha256", "lockSha256", "sourcePointerSha256", "publicPointerSha256", "incident"].includes(k))
     && proof.schemaVersion === 1 && proof.action === "reviewed_dead_worker_lock_recovery" && proof.targetJobId === inspected.snapshot.targetJobId
@@ -408,7 +417,8 @@ async function recoverWorkerLock(options) {
     const root = path.join(current.directory, "lock-recovery"); await privateDir(root, options.fixture === true); const destination = path.join(root, id); await fs.mkdir(destination, { mode: 0o700 });
     const destinationStat = await checked(destination, true); need(options.fixture === true && process.platform === "win32" || (destinationStat.mode & 0o777n) === 0o700n && destinationStat.uid === BigInt(process.getuid()));
     const planned = await writeNew(path.join(destination, "reviewed-preflight.json"), { schemaVersion: 1, action: "reviewed_dead_worker_lock_recovery", recoveryId: id,
-      snapshot: current.snapshot, snapshotSha256: current.snapshotSha256, reviewedProofSha256: hash(jsonBytes(options.reviewedProof)), incident: options.reviewedProof.incident, observedAt: new Date().toISOString() });
+      snapshot: current.snapshot, snapshotSha256: current.snapshotSha256, collectionReadAudit: current.collectionReadAudit,
+      reviewedProofSha256: hash(jsonBytes(options.reviewedProof)), incident: options.reviewedProof.incident, observedAt: new Date().toISOString() });
     archive = path.join(destination, "original-lock.json"); need(await absent(archive)); const before = await read(current.lock.file, 16384);
     need(before.sha256 === current.lock.sha256 && same(before.stat, current.lock.stat), "KEYWORD_INCREMENTAL_LOCK_CHANGED");
     need(JSON.stringify(await serverChain(current.processes, options.serverPid)) === JSON.stringify(current.snapshot.serverChain)

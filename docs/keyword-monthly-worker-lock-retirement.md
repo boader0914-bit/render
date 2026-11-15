@@ -59,6 +59,8 @@ node scripts/lib/keyword_monthly_worker_lock.cjs --inspect --job-id OWNER_QUEUE_
 
 현재 웹의 실제 Node와 조상 계통, 다른 계산·수집·후처리·보호 상태, 원본 manifest와 업체 DB 완료 근거, 이전 정상 source checkpoint·공개 pointer·발행 영수증, 대상의 미확정 publication intent 부재를 모두 다시 확인한다. 이전 owner/child의 PID는 퇴역한 다른 네임스페이스의 번호이므로 현재 PID와 비교하여 생존·종료를 판단하지 않는다. 현재 인스턴스의 다른 작업·peer 확인은 유지한다.
 
+broker의 정상 idle claim poll은 루트 `workerLastSeenAt`을 바꾸고 약60초마다 저장한다(`scripts/collector_broker.cjs`의 claim/persist 경로). 두 broker JSON에서 이 필드 값만 null/정규 ISO 시각인지 검증한 뒤 안정 검토 지문에서 제외한다. 필드 존재 여부와 모든 다른 루트 필드·retirement·보호·jobs·job.updatedAt·leaseExpiresAt·중첩 동명 필드는 계속 비교한다. web collector와 후처리 파일은 원래 전체 SHA를 유지한다. 실제 broker 파일의 원본 SHA는 `collectionReadAudit`에 별도로 남기며, 자연 갱신되는 이 감사 값은 승인 snapshot 지문에 포함하지 않는다.
+
 이 snapshot을 검토한 기존 `reviewed_dead_worker_lock_recovery` 문서는 그대로 필요하다. 퇴역 경로의 `incident`만 다음 세 필드로 연결한다.
 
 ```json

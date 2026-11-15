@@ -330,6 +330,43 @@ test("collection admission is rechecked at the final rename boundary", async t =
   await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_COLLECTION_BUSY" });
   assert.equal(JSON.parse(await fs.readFile(f.lockFile)).token, SECRET);
 });
+test("validated idle root heartbeat changes keep review stable, including the final archive boundary", async t => {
+  const f = await fixture(t), brokerFile = path.join(f.dataDir, "collector/jobs.json"), broker = { version: 1, halted: null, workerLastSeenAt: null, jobs: [], retired: false, retainedExtra: { value: "unchanged" } };
+  await save(brokerFile, broker); const before = await L.inspectWorkerLockRecovery(f.options), approved = await f.approval();
+  await save(brokerFile, { ...broker, workerLastSeenAt: NOW }); const after = await L.inspectWorkerLockRecovery(f.options);
+  assert.equal(after.snapshotSha256, before.snapshotSha256); assert.notDeepEqual(after.collectionReadAudit, before.collectionReadAudit);
+  let calls = 0; const lastHeartbeat = "2026-11-15T12:00:00.000Z";
+  f.processReader.peers = async () => { if (++calls === 5) await save(brokerFile, { ...broker, workerLastSeenAt: lastHeartbeat }); return []; };
+  const original = await fs.readFile(f.lockFile), result = await L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false });
+  assert.equal(result.status, "recovered"); assert.equal(JSON.parse(await fs.readFile(brokerFile)).workerLastSeenAt, lastHeartbeat);
+  assert.deepEqual(await fs.readFile(path.join(f.directory, "lock-recovery", result.recoveryId, "original-lock.json")), original);
+});
+for (const [name, change] of [
+  ["broker version", v => ({ ...v, version: 2 })], ["queued job", v => ({ ...v, jobs: [...v.jobs, { status: "queued" }] })],
+  ["new terminal job", v => ({ ...v, jobs: [...v.jobs, { status: "completed", id: "new" }] })],
+  ["unreleased lease", v => ({ ...v, jobs: [{ ...v.jobs[0], leaseHash: "new-private", leaseReleasedAt: null }] })],
+  ["halt protection", v => ({ ...v, halted: { code: "PROVIDER_BLOCKED" } })],
+  ["retirement state", v => ({ ...v, retired: true })], ["other root update time", v => ({ ...v, updatedAt: "2026-11-15T12:00:00.000Z" })],
+  ["job update time", v => ({ ...v, jobs: [{ ...v.jobs[0], updatedAt: "2026-11-15T12:00:00.000Z" }] })],
+  ["job lease expiry", v => ({ ...v, jobs: [{ ...v.jobs[0], leaseExpiresAt: 12345 }] })],
+  ["nested same-name heartbeat", v => ({ ...v, jobs: [{ ...v.jobs[0], workerLastSeenAt: "2026-11-15T12:00:00.000Z" }] })],
+  ["unknown extra root field", v => ({ ...v, unexpected: "new-value" })], ["heartbeat field presence", v => { const out = { ...v }; delete out.workerLastSeenAt; return out; }]
+]) test(`idle heartbeat exclusion still rejects changed ${name}`, async t => {
+  const f = await fixture(t), file = path.join(f.dataDir, "collector/jobs.json"), base = { version: 1, halted: null, workerLastSeenAt: NOW, jobs: [{ id: "old", status: "completed", updatedAt: NOW, leaseHash: null, leaseReleasedAt: NOW, workerLastSeenAt: NOW }], retired: false, updatedAt: NOW };
+  await save(file, base); const approved = await f.approval(), original = await fs.readFile(f.lockFile); await save(file, change(base));
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }));
+  assert.deepEqual(await fs.readFile(f.lockFile), original); await absent(path.join(f.directory, "lock-recovery"));
+});
+for (const invalid of ["not-an-iso", 123, {}, []]) test(`malformed root heartbeat ${JSON.stringify(invalid)} remains unknown`, async t => {
+  const f = await fixture(t); await save(path.join(f.dataDir, "collector/jobs.json"), { version: 1, halted: null, workerLastSeenAt: invalid, jobs: [] });
+  await assert.rejects(L.inspectWorkerLockRecovery(f.options), { code: "KEYWORD_INCREMENTAL_LOCK_COLLECTION_UNKNOWN" });
+});
+test("web collector same-name fields are never excluded from exact review", async t => {
+  const f = await fixture(t), file = path.join(f.dataDir, "collector-web/state.json"); await save(file, { version: 1, halted: null, active: null, workerLastSeenAt: NOW });
+  const approved = await f.approval(), original = await fs.readFile(f.lockFile); await save(file, { version: 1, halted: null, active: null, workerLastSeenAt: "2026-11-15T12:00:00.000Z" });
+  await assert.rejects(L.recoverWorkerLock({ ...f.options, reviewedProof: approved, dryRun: false }), { code: "KEYWORD_INCREMENTAL_LOCK_REVIEW_MISMATCH" });
+  assert.deepEqual(await fs.readFile(f.lockFile), original);
+});
 test("a replaced original inode at the final boundary is not archived", async t => {
   const f = await fixture(t), approved = await f.approval(); let calls = 0;
   f.processReader.peers = async () => { if (++calls === 5) { await fs.rename(f.lockFile, path.join(f.root, "preserved-old-lock")); await save(f.lockFile, { replaced: true }); } return []; };
