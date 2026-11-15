@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { pruneKeywordMonthlyRefreshGenerations: prune } = require("./lib/keyword_monthly_refresh_retention.cjs");
 const digest = b => crypto.createHash("sha256").update(b).digest("hex"), gen = n => n.toString(16).padStart(32, "0");
 const write = async (file, value) => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value)); await fs.writeFile(file, bytes, { flag: "wx", mode: 0o600 }); return { bytes, sha256: digest(bytes) }; };
-async function fixture(t, { current = 4, auto = [1, 2, 3, 4] } = {}) {
+async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [] } = {}) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-retention-test-"));
   // Every recursive test cleanup is confined to the exact verified mkdtemp root.
   const realParent = await fs.realpath(parent); assert.equal(path.resolve(realParent), path.resolve(parent));
@@ -26,10 +26,13 @@ async function fixture(t, { current = 4, auto = [1, 2, 3, 4] } = {}) {
     const publicationRead = await write(path.join(directory, "publication-receipt.json"), publication);
     let receiptFile = null;
     if (auto.includes(n)) {
-      const runId = "run-" + n, manifestSha256 = digest("manifest" + n), keyword = "경남글램핑", sourceKey = digest(JSON.stringify(["keyword-monthly-completed-run-v1", runId, manifestSha256, keyword]));
+      const runId = "run-" + n, manifestSha256 = digest("manifest" + n), keyword = "경남글램핑", newer = incremental.includes(n),
+        refreshVersion = newer ? "keyword-monthly-incremental-v3" : "keyword-monthly-completed-run-v1", sourceKey = digest(JSON.stringify([refreshVersion, runId, manifestSha256, keyword]));
       receiptFile = path.join(root, "refresh-receipts", "complete-" + sourceKey + ".json");
-      await write(receiptFile, { schemaVersion: 1, status: "published", mode: "live", generatedBy: "keyword_monthly_completed_run_refresh", refreshVersion: "keyword-monthly-completed-run-v1", trigger: "completed_collection_postprocess", jobId: crypto.randomUUID(), sourceKey, runId, manifestSha256, keyword,
-        previousPointerSha256: publication.previousPointerSha256, providerCalls: 0, sourceWrites: 0, fixtureOnly: true, strictIsolationVerified: false, executionBasis: "injected_preparation_fixture_not_fresh_kernel_validation",
+      await write(receiptFile, { schemaVersion: 1, status: "published", mode: "live", generatedBy: newer ? "keyword_monthly_incremental_refresh" : "keyword_monthly_completed_run_refresh", refreshVersion, trigger: "completed_collection_postprocess", jobId: crypto.randomUUID(), sourceKey, runId, manifestSha256, keyword,
+        previousPointerSha256: publication.previousPointerSha256, providerCalls: 0, sourceWrites: 0, fixtureOnly: !newer, strictIsolationVerified: newer,
+        executionBasis: newer ? "verified_incremental_source_checkpoint_and_dirty_partition_rebuild" : "injected_preparation_fixture_not_fresh_kernel_validation",
+        ...(newer ? { stateSha256: digest("state-" + n), preparationSha256: digest("preparation-" + n), incrementalValidated: true } : {}),
         generation, pointerSha256: digest(pointerBytes), catalogSha256: catalogRead.sha256, publicationReceiptSha256: publicationRead.sha256, finishedAt: at });
     }
     generations.set(n, { directory, projectionFile, receiptFile, pointer, pointerBytes, publication });
@@ -113,4 +116,65 @@ test("the initial manual baseline with no previous pointer cannot be claimed as 
 test("production pruning rejects injected fixture completion proofs", { skip: process.platform !== "linux" }, async t => {
   const f = await fixture(t); await assert.rejects(f.call({ fixture: false }), e => e.code === "KEYWORD_MONTHLY_RETENTION_RECEIPT_INVALID");
   assert.equal(await exists(f.generations.get(1).directory), true);
+});
+
+test("mixed physical-copy and validated incremental owners share the newest-two backup policy", async t => {
+  const f = await fixture(t, { incremental: [2, 4] }), before = await fs.readFile(path.join(f.root, "current.json"));
+  const result = await f.call(); assert.deepEqual(result.deleted.map(row => row.generation).sort(), [gen(1), gen(2)]);
+  assert.deepEqual(result.keptSuccessfulAuto.sort(), [gen(3), gen(4)]); assert.equal(result.ownCompletedReceiptCount, 4);
+  for (const n of [1, 2, 3, 4]) assert.equal(await exists(f.generations.get(n).receiptFile), true);
+  assert.deepEqual(await fs.readFile(path.join(f.root, "current.json")), before);
+  const again = await f.call(); assert.equal(again.deleted.length, 0); assert.deepEqual(again.alreadyAbsent.sort(), [gen(1), gen(2)]);
+});
+
+test("manual current and a larger backup count preserve mixed-owner automatic generations", async t => {
+  const f = await fixture(t, { incremental: [1, 3], current: 9 }), result = await f.call({ keepSuccessfulAuto: 3 });
+  assert.deepEqual(result.deleted.map(row => row.generation), [gen(1)]);
+  for (const n of [0, 2, 3, 4, 9]) assert.equal(await exists(f.generations.get(n).directory), true);
+});
+
+test("new-owner recovery receipts require every incremental proof even when fixture mode is enabled", async t => {
+  const variants = {
+    missingState: value => { delete value.stateSha256; }, badState: value => { value.stateSha256 = "bad"; },
+    missingPreparation: value => { delete value.preparationSha256; }, badPreparation: value => { value.preparationSha256 = null; },
+    missingValidation: value => { delete value.incrementalValidated; }, unvalidated: value => { value.incrementalValidated = false; },
+    fixtureProof: value => { value.fixtureOnly = true; }, missingIsolation: value => { delete value.strictIsolationVerified; },
+    oldExecutionBasis: value => { value.executionBasis = "fresh_physical_capture_and_strict_isolated_normalization"; },
+    oldVersion: value => { value.refreshVersion = "keyword-monthly-completed-run-v1"; }
+  };
+  for (const [name, mutate] of Object.entries(variants)) await t.test(name, async st => {
+    const f = await fixture(st, { incremental: [1, 4] }), target = f.generations.get(1), value = JSON.parse(await fs.readFile(target.receiptFile));
+    value.recoveredAfterRestart = true; mutate(value); await fs.writeFile(target.receiptFile, JSON.stringify(value));
+    const before = await fs.readFile(path.join(f.root, "current.json"));
+    await assert.rejects(f.call(), { code: "KEYWORD_MONTHLY_RETENTION_RECEIPT_INVALID" });
+    for (const n of [0, 1, 2, 3, 4]) assert.equal(await exists(f.generations.get(n).directory), true);
+    assert.deepEqual(await fs.readFile(path.join(f.root, "current.json")), before); assert.equal(await exists(target.receiptFile), true);
+  });
+});
+
+test("new source keys bind the explicit incremental version and cannot reuse the old version identity", async t => {
+  const f = await fixture(t, { incremental: [1] }), target = f.generations.get(1), value = JSON.parse(await fs.readFile(target.receiptFile));
+  const oldKey = digest(JSON.stringify(["keyword-monthly-completed-run-v1", value.runId, value.manifestSha256, value.keyword]));
+  assert.notEqual(oldKey, value.sourceKey); value.sourceKey = oldKey;
+  const renamed = path.join(f.root, "refresh-receipts", "complete-" + oldKey + ".json"); await fs.rename(target.receiptFile, renamed); await fs.writeFile(renamed, JSON.stringify(value));
+  await assert.rejects(f.call(), { code: "KEYWORD_MONTHLY_RETENTION_RECEIPT_INVALID" });
+  assert.equal(await exists(target.directory), true); assert.equal(await exists(f.generations.get(2).directory), true); assert.equal(await exists(renamed), true);
+});
+
+test("incremental proof fields do not bypass existing publication and immutable projection audits", async t => {
+  const f = await fixture(t, { incremental: [1, 2, 3, 4] }), target = f.generations.get(1);
+  await fs.writeFile(target.projectionFile, "altered-incremental-projection");
+  await assert.rejects(f.call(), { code: "KEYWORD_MONTHLY_RETENTION_GENERATION_HASH_MISMATCH" });
+  assert.equal(await exists(f.generations.get(2).directory), true); assert.equal(await exists(f.generations.get(4).directory), true);
+});
+
+test("mixed-owner pruning never opens or changes private source checkpoints, outbox or original history", async t => {
+  const f = await fixture(t, { incremental: [1, 3, 4] }), privateFiles = ["keyword_monthly_incremental/states/checkpoint.json", "keyword_monthly_incremental/history/source.json.gz",
+    "keyword_monthly_source_delta/pending/event.json", "keyword_monthly_source_delta/complete/event.json", "company_master/companies.json", "history/observations.jsonl"];
+  const before = new Map();
+  for (const relative of privateFiles) { const file = path.join(f.parent, relative); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, "preserve-" + relative); before.set(file, await fs.readFile(file)); }
+  const open = fs.open; fs.open = async (file, ...args) => { assert.equal(before.has(file), false, "Retention opened a source or checkpoint body"); return open(file, ...args); };
+  let result; try { result = await f.call(); } finally { fs.open = open; }
+  assert.deepEqual(result.deleted.map(row => row.generation).sort(), [gen(1), gen(2)]);
+  for (const [file, bytes] of before) assert.deepEqual(await fs.readFile(file), bytes);
 });

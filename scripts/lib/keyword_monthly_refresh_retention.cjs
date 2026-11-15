@@ -5,6 +5,7 @@ const fs = require("node:fs/promises"), native = require("node:fs"), path = requ
 const { validateCatalog, validatePointer } = require("./keyword_monthly_bundle.cjs");
 const SHA = /^[a-f0-9]{64}$/, GEN = /^[a-f0-9]{32}$/, UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const VERSION = "keyword-monthly-completed-run-v1", OWNER = "keyword_monthly_completed_run_refresh";
+const INCREMENTAL_VERSION = "keyword-monthly-incremental-v3", INCREMENTAL_OWNER = "keyword_monthly_incremental_refresh";
 const LIMITS = Object.freeze({ receiptEntries: 16384, receipts: 4096, receiptBytes: 256 * 1024, catalogBytes: 1024 * 1024,
   indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, generationBytes: 144 * 1024 * 1024, generationFiles: 16384, auditedAutoBytes: 1024 ** 3 });
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -32,16 +33,21 @@ async function read(file, maximum) {
 }
 function json(read) { try { return JSON.parse(read.bytes); } catch { need(false, "JSON_INVALID"); } }
 function ownReceipt(value, name, fixture) {
-  if (value?.generatedBy !== OWNER) return null;
-  const source = [VERSION, value.runId, value.manifestSha256, value.keyword];
-  need(value.schemaVersion === 1 && value.status === "published" && value.mode === "live" && value.refreshVersion === VERSION
+  const incremental = value?.generatedBy === INCREMENTAL_OWNER;
+  if (!incremental && value?.generatedBy !== OWNER) return null;
+  const version = incremental ? INCREMENTAL_VERSION : VERSION, source = [version, value.runId, value.manifestSha256, value.keyword];
+  need(value.schemaVersion === 1 && value.status === "published" && value.mode === "live" && value.refreshVersion === version
     && value.trigger === "completed_collection_postprocess" && UUID.test(value.jobId || "") && SHA.test(value.sourceKey || "")
     && name === `complete-${value.sourceKey}.json` && /^[A-Za-z0-9][A-Za-z0-9_-]{0,239}$/.test(value.runId || "")
     && typeof value.keyword === "string" && value.keyword === value.keyword.trim() && value.keyword.length > 0 && value.keyword.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value.keyword)
     && SHA.test(value.manifestSha256 || "") && hash(JSON.stringify(source)) === value.sourceKey && GEN.test(value.generation || "")
     && ["pointerSha256", "catalogSha256", "publicationReceiptSha256", "previousPointerSha256"].every(k => SHA.test(value[k] || "")) && iso(value.finishedAt)
     && value.providerCalls === 0 && value.sourceWrites === 0
-    && (fixture === true || value.fixtureOnly === false && value.strictIsolationVerified === true && value.executionBasis === "fresh_physical_capture_and_strict_isolated_normalization"), "RECEIPT_INVALID");
+    && (incremental
+      ? value.fixtureOnly === false && value.strictIsolationVerified === true && value.incrementalValidated === true
+        && SHA.test(value.stateSha256 || "") && SHA.test(value.preparationSha256 || "")
+        && value.executionBasis === "verified_incremental_source_checkpoint_and_dirty_partition_rebuild"
+      : fixture === true || value.fixtureOnly === false && value.strictIsolationVerified === true && value.executionBasis === "fresh_physical_capture_and_strict_isolated_normalization"), "RECEIPT_INVALID");
   return Object.fromEntries(["sourceKey", "generation", "pointerSha256", "catalogSha256", "publicationReceiptSha256", "previousPointerSha256", "finishedAt"].map(k => [k, value[k]]));
 }
 async function completedReceipts(directory, fixture) {

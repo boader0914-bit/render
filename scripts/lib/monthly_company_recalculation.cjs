@@ -77,12 +77,13 @@ function inScope(request, company, catalogCompany, runs) {
 
 function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations,
   cacheDirectory = null, cacheVersion = "monthly-company-recalculation-v1", maxCachedRunBytes = 6 * 1024 * 1024, projectCorrectionCompany = null, useSourceReadValidationBoundary = false,
-  recalculateAllInventory = false, readProductCapacityEvidence = null, readPersistedProductCapacityEvidence = null }) {
+  recalculateAllInventory = false, readProductCapacityEvidence = null, readPersistedProductCapacityEvidence = null, cacheRevisionForRun = null }) {
   if ([loadRun, applyCompanyManualCorrection, companyProductAvailabilityMatch, buildHistoryObservations].some(fn => typeof fn !== "function")) throw new TypeError("Monthly recalculation dependencies are required");
   if (projectCorrectionCompany !== null && typeof projectCorrectionCompany !== "function") throw new TypeError("An optional correction-company projection must be a function");
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof recalculateAllInventory !== "boolean" || readProductCapacityEvidence !== null && typeof readProductCapacityEvidence !== "function") throw new TypeError("Invalid product-capacity reconstruction options");
   if (readPersistedProductCapacityEvidence !== null && typeof readPersistedProductCapacityEvidence !== "function") throw new TypeError("Invalid persisted product-capacity reader");
+  if (cacheRevisionForRun !== null && typeof cacheRevisionForRun !== "function") throw new TypeError("Invalid per-run cache revision reader");
   if (!Number.isSafeInteger(maxCachedRunBytes) || maxCachedRunBytes < 128 || maxCachedRunBytes > 6 * 1024 * 1024) throw new TypeError("Invalid compact run row budget");
   const cache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: cacheDirectory,
     maxEntries: 256, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 }) : null;
@@ -90,9 +91,14 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
   // Their independent namespace and budget cannot evict company-view cache rows.
   const industryCache = cacheDirectory ? createMonthlyReportMaterializedCache({ directory: path.join(cacheDirectory, "industry_rows"),
     maxEntries: 512, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024, compression: "gzip" }) : null;
+  // Only the explicit incremental adapter supplies independently verified run
+  // dependencies. Default keyword readers retain their original uncached path.
+  const keywordCache = cacheDirectory && cacheRevisionForRun ? createMonthlyReportMaterializedCache({ directory: path.join(cacheDirectory, "keyword_rows"),
+    maxEntries: 512, maxBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024, compression: "gzip" }) : null;
   const metrics = { savedRunLoads: 0, runRowBuilds: 0, runRowCacheHits: 0, companyProjectionsRead: 0, correctionCompanyProjections: 0, runRowOversizeFallbacks: 0, maximumCachedRunBytes: 0,
-    industryRunRowBuilds: 0, industryRunRowCacheHits: 0, industryRunRowOversizeFallbacks: 0, maximumIndustryCachedRunBytes: 0 };
-  const oversizedByType = { company: new Set(), industry: new Set() };
+    industryRunRowBuilds: 0, industryRunRowCacheHits: 0, industryRunRowOversizeFallbacks: 0, maximumIndustryCachedRunBytes: 0,
+    keywordRunRowBuilds: 0, keywordRunRowCacheHits: 0, keywordRunRowOversizeFallbacks: 0, maximumKeywordCachedRunBytes: 0 };
+  const oversizedByType = { company: new Set(), industry: new Set(), keyword: new Set() };
   async function loadStored(id, capacityCompanies) {
     metrics.savedRunLoads++;
     let stored;
@@ -140,10 +146,19 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
   }
   async function cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, sourceReadValidationBoundary, productCapacityEvidence = [], targetCompanyIds = null, productCapacityWarnings = [], cacheType = "company") {
     const owner = data._companySource;
-    const activeCache = cacheType === "industry" ? industryCache : cache, oversized = oversizedByType[cacheType];
+    const activeCache = cacheType === "industry" ? industryCache : cacheType === "keyword" ? keywordCache : cache, oversized = oversizedByType[cacheType];
     const targetKey = recalculateAllInventory ? [...targetCompanyIds].sort() : null;
     const capacityRevision = recalculateAllInventory ? productCapacityEvidenceRevision(productCapacityEvidence, targetKey, originalRun.collectedAt, productCapacityWarnings) : null;
-    const scopeKey = JSON.stringify([cacheVersion, owner.revision, id, targetKey, capacityRevision]);
+    let dependencyRevision = owner.revision;
+    if (cacheType === "keyword") {
+      // Never infer cache freshness from event/job order or the latest global
+      // owner. An uncertain callback must fail before reading original runs.
+      dependencyRevision = await cacheRevisionForRun({ run: originalRun, data, companies: capacityCompanies, capacityCompanies,
+        targetCompanyIds: [...targetCompanyIds].sort(), evidence: productCapacityEvidence, warnings: productCapacityWarnings,
+        productCapacityEvidenceRevision: capacityRevision });
+      if (typeof dependencyRevision !== "string" || !/^[a-f0-9]{64}$/.test(dependencyRevision)) throw unavailable();
+    }
+    const scopeKey = JSON.stringify([cacheVersion, dependencyRevision, id, targetKey, capacityRevision]);
     if (oversized.has(scopeKey)) return null;
     const readRevision = async () => {
       if (sourceReadValidationBoundary) {
@@ -154,11 +169,11 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
           || !sourceReadValidationBoundary.isActive()) throw unavailable();
       } else await owner.assertCurrent();
       if (typeof owner.revision !== "string" || !owner.revision) throw unavailable();
-      return owner.revision;
+      return cacheType === "keyword" ? dependencyRevision : owner.revision;
     };
     let result;
     try { result = await activeCache.getOrBuild({ key: JSON.stringify([cacheVersion, id, targetKey, capacityRevision]), readRevision, build: async () => {
-      metrics[cacheType === "industry" ? "industryRunRowBuilds" : "runRowBuilds"]++;
+      metrics[cacheType === "industry" ? "industryRunRowBuilds" : cacheType === "keyword" ? "keywordRunRowBuilds" : "runRowBuilds"]++;
       // A run contains several companies. Parse its saved product response only
       // once, publish bounded corrected observation rows, then release it. Never
       // keep a full run or complete company master in a long-lived heap cache.
@@ -184,16 +199,16 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         if (bytes > maxCachedRunBytes) throw Object.assign(new Error("Compact run row budget exceeded"), { code: "MONTHLY_RUN_ROWS_TOO_LARGE" });
         companies.push(entry);
       }
-      const maximumKey = cacheType === "industry" ? "maximumIndustryCachedRunBytes" : "maximumCachedRunBytes";
+      const maximumKey = cacheType === "industry" ? "maximumIndustryCachedRunBytes" : cacheType === "keyword" ? "maximumKeywordCachedRunBytes" : "maximumCachedRunBytes";
       metrics[maximumKey] = Math.max(metrics[maximumKey], bytes);
       return { runId: id, companies };
     } }); } catch (error) {
       if (error?.code !== "MONTHLY_RUN_ROWS_TOO_LARGE") throw error;
-      metrics[cacheType === "industry" ? "industryRunRowOversizeFallbacks" : "runRowOversizeFallbacks"]++;
+      metrics[cacheType === "industry" ? "industryRunRowOversizeFallbacks" : cacheType === "keyword" ? "keywordRunRowOversizeFallbacks" : "runRowOversizeFallbacks"]++;
       oversized.add(scopeKey); if (oversized.size > 256) oversized.delete(oversized.values().next().value);
       return null; // Release the all-company build before target-only fallback.
     }
-    if (result.status !== "calculated") metrics[cacheType === "industry" ? "industryRunRowCacheHits" : "runRowCacheHits"]++;
+    if (result.status !== "calculated") metrics[cacheType === "industry" ? "industryRunRowCacheHits" : cacheType === "keyword" ? "keywordRunRowCacheHits" : "runRowCacheHits"]++;
     if (result.value.runId !== id || !Array.isArray(result.value.companies)) throw unavailable();
     return result.value;
   }
@@ -250,7 +265,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       const originalRun = eligibleRuns.get(id);
       // A completed industry run remains reusable after a cooperative retry.
       // It uses its own bounded disk cache; no raw run stays in a heap cache.
-      const selectedCache = request.type === "company" ? cache : request.type === "industry" ? industryCache : null;
+      const selectedCache = request.type === "company" ? cache : request.type === "industry" ? industryCache : request.type === "keyword" ? keywordCache : null;
       const useCache = selectedCache && typeof data._companySource?.assertCurrent === "function"
         && typeof data._companySource?.readCompany === "function" && typeof data._companySource.revision === "string";
       const cached = useCache ? await cachedRunRows(id, originalRun, data, capacityCompanies, checkpoint, boundary, productCapacityEvidence, new Set(companies.map(company => company.companyId)), productCapacityWarnings, request.type) : null;

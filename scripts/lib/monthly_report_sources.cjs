@@ -26,9 +26,61 @@ async function readJson(file, fallback, checkpoint = async () => {}) {
   catch (error) { if (error.code === "ENOENT") return fallback; throw sourceError(); }
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
+async function projectMonthlyCatalog({ preparedCompanies, runs, regionMaster, capacityForCompany = () => null, prepareCapacity = true, checkpoint = async () => {} }) {
+  const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
+  const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
+  const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
+  const aliases = units.flatMap(unit => [...new Set([unit.fullName, unit.name, ...(unit.aliases || [])].map(token).filter(Boolean))].map(alias => ({ alias, unit })));
+  function exactRegion(value, address = false) {
+    const text = token(value);
+    if (!text) return null;
+    if (idIndex.has(value)) return idIndex.get(value);
+    let candidates = aliases.filter(row => address ? text.startsWith(row.alias) : text === row.alias);
+    if (address && candidates.length) {
+      const length = Math.max(...candidates.map(row => row.alias.length));
+      candidates = candidates.filter(row => row.alias.length === length);
+    }
+    const unique = [...new Map(candidates.map(row => [row.unit.regionKey, row.unit])).values()];
+    return unique.length === 1 ? unique[0] : null;
+  }
+  const rawCompanies = new Map();
+  const companies = []; let companyIndex = 0;
+  for (const company of preparedCompanies instanceof Map ? preparedCompanies.values() : Object.values(preparedCompanies)) {
+    if (!company || !company.companyId || company.mergedIntoCompanyId || company.deletedAt) continue;
+    if (companyIndex++ % 16 === 0) await checkpoint();
+    rawCompanies.set(company.companyId, company);
+    const override = company.manualCorrection?.active === false ? null : company.manualCorrection?.regionOverride;
+    let region = override ? exactRegion(override) : null;
+    if (!override) {
+      for (const address of company.addresses || []) { region = exactRegion(typeof address === "string" ? address : address.address, true); if (region) break; }
+      if (!region) {
+        const matches = [...new Map((company.regions || []).map(value => exactRegion(value)).filter(Boolean).map(item => [item.regionKey, item])).values()];
+        if (matches.length === 1) region = matches[0];
+        else if (matches.length > 1) {
+          const local = matches.filter(item => item.level === "local");
+          if (local.length === 1 && matches.every(item => item.regionKey === local[0].regionKey || item.regionKey === local[0].provinceRegionKey)) region = local[0];
+        }
+      }
+    }
+    const addressBasis = companyAddressBasis(company);
+    const addressLocation = addressBasis.status === "ready" ? addressRegion(addressBasis.address, units) : null;
+    companies.push({ companyId: company.companyId, primaryName: company.primaryName || company.companyId,
+      addressBasis: { ...addressBasis, regionKey: addressLocation?.regionKey || "", regionLabel: addressLocation?.fullName || addressLocation?.name || "지역 확인 전" },
+      ...industryCompanyReference(company, industryRegions),
+      regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
+      regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
+      placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],
+      capacity: prepareCapacity ? capacityForCompany(company) : null, capacityBasis: prepareCapacity ? company._integratedCapacity || null : null,
+      capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") });
+  }
+  return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
+}
+
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, preparedCatalogProvider = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
+  if (preparedCatalogProvider !== null && ["readCatalog", "readCompanyCatalog", "withCatalog", "withCompanyCatalog", "stats"]
+    .some(method => typeof preparedCatalogProvider?.[method] !== "function")) throw new TypeError("Prepared company catalog provider is incomplete");
   if (readSavedProductRecoveries !== null && typeof readSavedProductRecoveries !== "function") throw new TypeError("Saved recovery reader must be a function");
   if (typeof industrySourceCandidateCacheEnabled !== "boolean" || typeof companySourceCandidateCacheEnabled !== "boolean" || readPersistedProductCapacityEvidence !== null && typeof readPersistedProductCapacityEvidence !== "function"
     || (industrySourceCandidateCacheEnabled || companySourceCandidateCacheEnabled) && (typeof readRevision !== "function" || typeof projectCapacityCompany !== "function"
@@ -52,12 +104,13 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   const checkpointFor = ({ priority } = {}) => () => sourceReadScheduler.checkpoint({
     priority: priority === "background" ? "background" : "foreground"
   });
-  const companySourceCatalog = typeof readRevision === "function" && typeof projectCapacityCompany === "function"
+  const companySourceCatalog = preparedCatalogProvider || (typeof readRevision === "function" && typeof projectCapacityCompany === "function"
     ? createMonthlyCompanySourceCatalog({ dataDir, readRevision, projectCapacityCompany, useSourceReadValidationBoundary, shareFrozenCatalogMetadata,
       version: require("node:crypto").createHash("sha256").update(String(companySourceVersion)).update(fs.readFileSync(__filename))
         .update(fs.readFileSync(require.resolve("./company_address_basis.cjs"))).digest("hex"),
-      loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null;
+      loadFullCatalog: options => readCatalog({ checkpoint: options?.checkpoint }) }) : null);
   async function readCatalog({ prepareCapacity = true, checkpoint = async () => {} } = {}) {
+    if (preparedCatalogProvider) return preparedCatalogProvider.readCatalog({ prepareCapacity, checkpoint });
     await checkpoint();
     // Validate the complete document, retaining one parsed company at a time.
     // A full UTF-8 master string must not coexist with its parsed inventories.
@@ -70,53 +123,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     await checkpoint();
     if (prepareCapacity && prepareCompanies) { sourceMetrics.capacityPreparations++; master.companies = await prepareCompanies(master.companies, { runs, checkpoint, shareReadOnlyInventory: true }); }
-    const units = (regionMaster.units || []).filter(unit => unit.active && unit.selectable && ["local", "broad"].includes(unit.level));
-    const industryRegions = units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level, aliases: unit.aliases }));
-    const idIndex = new Map(units.flatMap(unit => [unit.regionKey, unit.regionId].filter(Boolean).map(key => [key, unit])));
-    const aliases = units.flatMap(unit => [...new Set([unit.fullName, unit.name, ...(unit.aliases || [])].map(token).filter(Boolean))].map(alias => ({ alias, unit })));
-    function exactRegion(value, address = false) {
-      const text = token(value);
-      if (!text) return null;
-      if (idIndex.has(value)) return idIndex.get(value);
-      let candidates = aliases.filter(row => address ? text.startsWith(row.alias) : text === row.alias);
-      if (address && candidates.length) {
-        const length = Math.max(...candidates.map(row => row.alias.length));
-        candidates = candidates.filter(row => row.alias.length === length);
-      }
-      const unique = [...new Map(candidates.map(row => [row.unit.regionKey, row.unit])).values()];
-      return unique.length === 1 ? unique[0] : null;
-    }
-    const rawCompanies = new Map();
-    const companies = []; let companyIndex = 0;
-    for (const company of Object.values(master.companies)) {
-      if (!company || !company.companyId || company.mergedIntoCompanyId || company.deletedAt) continue;
-      if (companyIndex++ % 16 === 0) await checkpoint();
-      rawCompanies.set(company.companyId, company);
-      const override = company.manualCorrection?.active === false ? null : company.manualCorrection?.regionOverride;
-      let region = override ? exactRegion(override) : null;
-      if (!override) {
-        for (const address of company.addresses || []) { region = exactRegion(typeof address === "string" ? address : address.address, true); if (region) break; }
-        if (!region) {
-          const matches = [...new Map((company.regions || []).map(value => exactRegion(value)).filter(Boolean).map(item => [item.regionKey, item])).values()];
-          if (matches.length === 1) region = matches[0];
-          else if (matches.length > 1) {
-            const local = matches.filter(item => item.level === "local");
-            if (local.length === 1 && matches.every(item => item.regionKey === local[0].regionKey || item.regionKey === local[0].provinceRegionKey)) region = local[0];
-          }
-        }
-      }
-      const addressBasis = companyAddressBasis(company);
-      const addressLocation = addressBasis.status === "ready" ? addressRegion(addressBasis.address, units) : null;
-      companies.push({ companyId: company.companyId, primaryName: company.primaryName || company.companyId,
-        addressBasis: { ...addressBasis, regionKey: addressLocation?.regionKey || "", regionLabel: addressLocation?.fullName || addressLocation?.name || "지역 확인 전" },
-        ...industryCompanyReference(company, industryRegions),
-        regionKey: region?.regionKey || "", regionKeys: [...new Set([region?.regionKey, region?.provinceRegionKey].filter(Boolean))],
-        regionLabel: region?.fullName || "지역 확인 전", keywords: Object.values(company.keywords || {}).map(item => item.keyword).filter(Boolean),
-        placeIds: [...new Set((company.placeIds || []).map(value => String(value).trim()).filter(Boolean))],
-        capacity: prepareCapacity ? capacityForCompany(company) : null, capacityBasis: prepareCapacity ? company._integratedCapacity || null : null,
-        capacitySource: company._integratedCapacity?.label || (company.manualCorrection ? "DB 검토값 우선 · 저장 관측 기준" : "최대 관측 객실 수") });
-    }
-    return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
+    return projectMonthlyCatalog({ preparedCompanies: master.companies, runs, regionMaster, capacityForCompany, prepareCapacity, checkpoint });
   }
   async function catalog(options = {}) { return runWork(() => catalogOwned(options), { ...options, kind: "source-catalog" }); }
   async function catalogOwned(options = {}) {
@@ -585,4 +592,4 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       companySourceCandidates: companyCandidates?.stats() || null }) };
 }
 
-module.exports = { createMonthlyReportSources };
+module.exports = { createMonthlyReportSources, projectMonthlyCatalog };

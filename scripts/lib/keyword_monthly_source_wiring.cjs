@@ -57,10 +57,22 @@ function inspectSource(codeRoot) {
   return { root, filename, source, ast, vars, functions, bindings: { appSha256: sha(raw), appBytes: raw.length,
     codeFingerprint: sha(JSON.stringify(calculationFiles)), calculationFiles, appEntryExecutions: 0, providerFactories: 0, collectorFactories: 0 } };
 }
-function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs = null, streamHistoryOnly = false } = {}) {
+function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs = null, streamHistoryOnly = false, incremental = null } = {}) {
   need(typeof copyDataDir === "string" && path.isAbsolute(copyDataDir) && Number.isFinite(Date.parse(now)), "KEYWORD_WIRING_COPY_AND_CLOCK_REQUIRED");
+  need(incremental === null || incremental && typeof incremental === "object" && incremental.observationIndex
+    && ["ensure", "readRows", "revisionPartitions"].every(method => typeof incremental.observationIndex[method] === "function"), "KEYWORD_WIRING_INCREMENTAL_INVALID");
   const I = inspectSource(codeRoot), dataDir = path.resolve(copyDataDir), req = createRequire(I.filename), quiet = () => {};
   const metrics = { sourceReads: 0, savedRunLoads: 0, appEntryExecutions: 0, providerFactories: 0, collectorFactories: 0, deniedRequires: 0 };
+  let sourceOptions = null;
+  const incrementalRevision = async () => {
+    need(typeof incremental?.revision === "string" && incremental.revision.length > 0 && incremental.revision.length <= 1024, "KEYWORD_WIRING_INCREMENTAL_REVISION_REQUIRED");
+    return incremental.revision;
+  };
+  const catalogProxy = incremental && Object.fromEntries(["readCatalog", "readCompanyCatalog", "withCatalog", "withCompanyCatalog", "stats"].map(method => [method, (...args) => {
+    const provider = incremental.catalog;
+    need(provider && typeof provider[method] === "function", "KEYWORD_WIRING_INCREMENTAL_CATALOG_REQUIRED");
+    return provider[method](...args);
+  }]));
   const requireAllowlist = new Set([...IMPORTS.map(row => "./" + row[0]), "./yeogi_import_parser.cjs", "./lib/company_master_stream.cjs", "./lib/company_address_basis.cjs"]);
   const vmRequire = filename => { if (!requireAllowlist.has(filename)) { metrics.deniedRequires++; throw Object.assign(new Error("KEYWORD_WIRING_REQUIRE_DENIED"), { code: "KEYWORD_WIRING_REQUIRE_DENIED" }); } return req(filename); };
   const sandbox = { Buffer, URL, URLSearchParams, TextDecoder, TextEncoder, AbortController, AbortSignal, structuredClone,
@@ -79,13 +91,26 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
     for (const entry of names) {
       const [from, to] = Array.isArray(entry) ? entry : [entry, entry]; need(typeof module[from] === "function", "KEYWORD_WIRING_IMPORT_MISSING");
       sandbox[to] = (...args) => {
+        if (incremental && to === "createHistoryObservationIndex") return incremental.observationIndex;
+        if (incremental && ["createMonthlyReportSourceRevision", "createMonthlyReportSelectorRevision"].includes(to)) return incrementalRevision;
         // An explicit saved-copy mode uses the application's pre-existing
         // streaming branch. No SQLite database, WAL or index factory executes.
         if (to === "createHistoryObservationIndex" && streamHistoryOnly) return null;
         if (to.startsWith("create")) {
           args[0] = { ...(args[0] || {}) };
           if (!["createAnalyticalWorkScheduler", "createAnalyticalMemorySampler"].includes(to)) args[0].now = () => new Date(now);
-          if (to === "createMonthlyCompanyRecalculation") { const read = args[0].loadRun; args[0].loadRun = (...values) => { metrics.savedRunLoads++; return read(...values); }; }
+          if (to === "createMonthlyCompanyRecalculation") {
+            const read = args[0].loadRun; args[0].loadRun = (...values) => { metrics.savedRunLoads++; return read(...values); };
+            if (incremental) args[0].cacheRevisionForRun = details => {
+              need(typeof incremental.runRevision === "function", "KEYWORD_WIRING_INCREMENTAL_RUN_REVISION_REQUIRED");
+              return incremental.runRevision(details);
+            };
+            if (incremental?.cacheDirectory) args[0].cacheDirectory = incremental.cacheDirectory;
+          }
+          if (to === "createMonthlyReportSources") {
+            sourceOptions = { ...args[0] };
+            if (incremental) Object.assign(args[0], { preparedCatalogProvider: catalogProxy, readRevision: incrementalRevision, readOptionsRevision: incrementalRevision });
+          }
         }
         const result = module[from](...args);
         if (to === "createMonthlyReportSources") for (const method of ["loadSources", "loadSourcesWithCatalog"]) { const read = result[method]; result[method] = (...values) => { metrics.sourceReads++; return read(...values); }; }
@@ -98,6 +123,12 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
   const context = vm.createContext(sandbox, { name: "explicit-keyword-saved-copy" }), ranges = [];
   const evaluate = (text, name) => new vm.Script(text, { filename: "keyword-source-extract-" + name + ".cjs" }).runInContext(context);
   evaluate(I.functions.map(node => I.source.slice(node.start, node.end)).join("\n"), "function-declarations");
+  if (incremental) sandbox.listRuns = async () => {
+    if (incremental.runs === undefined) return vm.runInContext("runCatalog.list()", context);
+    need(Array.isArray(incremental.runs), "KEYWORD_WIRING_INCREMENTAL_RUNS_INVALID");
+    return structuredClone(incremental.runs).sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || ""))
+      || String(b.id || "").localeCompare(String(a.id || "")));
+  };
   for (const [name, { d }] of I.vars) if (/^[A-Z][A-Z0-9_]*$/.test(name) && literalSafe(d.init) && !Object.hasOwn(sandbox, name)) evaluate(`this.${name}=(${I.source.slice(d.init.start, d.init.end)});`, name);
   for (const name of ["ADMIN_REGION_ALIAS_TO_KEY", "ADMIN_REGION_CHILD_SETS"]) {
     const { d } = I.vars.get(name) || {}; need(d, "KEYWORD_WIRING_REGION_MAP_MISSING"); evaluate("this." + name + "=(" + I.source.slice(d.init.start, d.init.end) + ");", name);
@@ -108,8 +139,10 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
   }
   return { sources: vm.runInContext("monthlyReportSources", context), index: vm.runInContext("historyObservationIndex", context),
     listRuns: vm.runInContext("listRuns", context),
+    bridge: { prepareCompanies: sourceOptions.prepareCompanies, projectCapacityCompany: sourceOptions.projectCapacityCompany,
+      capacityForCompany: sourceOptions.capacityForCompany, maximumRoomCapacity: vm.runInContext("companyMaximumRoomCapacity", context), sourceOptions },
     scheduler: vm.runInContext("analyticalWork", context), metrics, bindings: { ...I.bindings, ranges, imports: IMPORTS.map(row => row[0]), declarationOrder: BUILD_ORDER,
-      observationIndexMode: streamHistoryOnly ? "exact_application_streaming_fallback" : "copied_data_index", originalOutputsReadOnlyReferenced: Boolean(readOnlyOriginalOutputs) },
+      observationIndexMode: incremental ? "incremental_saved_deltas" : streamHistoryOnly ? "exact_application_streaming_fallback" : "copied_data_index", originalOutputsReadOnlyReferenced: Boolean(readOnlyOriginalOutputs) },
     assertCodeCurrent() { need(inspectSource(I.root).bindings.codeFingerprint === I.bindings.codeFingerprint, "KEYWORD_WIRING_CODE_CHANGED"); },
     requireAllowlist: [...requireAllowlist] };
 }

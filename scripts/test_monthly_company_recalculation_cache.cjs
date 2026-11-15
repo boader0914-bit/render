@@ -141,3 +141,87 @@ test("source-read validation is explicit, invocation-bound and never weakens def
       error => error.code === "MONTHLY_RECALCULATION_UNAVAILABLE");
   }
 });
+
+function incrementalKeywordOptions(f, extra = {}) {
+  const sha = value => require("node:crypto").createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return { ...f.options, recalculateAllInventory: true, projectCorrectionCompany: compactMonthlyCapacityCompany,
+    cacheRevisionForRun: ({ run, companies, targetCompanyIds, productCapacityEvidenceRevision }) => sha({ run,
+      companies: companies.map(company => [company.companyId, company.primaryName, company.placeIds, company.manualCorrection]),
+      targetCompanyIds, productCapacityEvidenceRevision }), ...extra };
+}
+const keywordRequest = month => ({ type: "keyword", targetId: "stored", month: month || "2026-09", cutoffDate: "2026-10-22" });
+
+test("incremental keyword cache reuses old run dependencies after a new generation and new run", async t => {
+  const f = await fixture(t), options = incrementalKeywordOptions(f), helper = createMonthlyCompanyRecalculation(options);
+  const first = await helper(keywordRequest(), f.data);
+  assert.equal(f.loads(), 1);
+  assert.deepEqual(await helper(keywordRequest(), f.data), first);
+  assert.equal(f.loads(), 1);
+  f.change(); f.data._companySource.revision = "r2";
+  const next = { ...f.data.runs[0], id: "next", collectedAt: "2026-09-21T00:00:00Z" };
+  f.data.runs.push(next); for (const company of f.companies) company.runIds.push("next");
+  const actual = await helper(keywordRequest(), f.data);
+  assert.equal(f.loads(), 2, "unchanged old run is a hit; only the new run loads saved source");
+  const beforeBaseline = f.loads();
+  const baseline = createMonthlyCompanyRecalculation({ ...options, cacheDirectory: null });
+  assert.deepEqual(actual, await baseline(keywordRequest(), f.data));
+  const beforeRestart = f.loads();
+  const restarted = createMonthlyCompanyRecalculation(options);
+  await restarted(keywordRequest("2026-10"), f.data);
+  assert.equal(f.loads(), beforeRestart, "saved units survive restart and serve the adjacent month");
+  assert.equal(beforeRestart - beforeBaseline, 2);
+  assert.equal(helper.stats().keywordRunRowBuilds, 2);
+  assert.equal(helper.stats().keywordRunRowCacheHits, 2);
+  assert.deepEqual(await fs.readdir(f.root), ["keyword_rows"]);
+  assert.equal((await fs.readdir(path.join(f.root, "keyword_rows"))).filter(name => name.endsWith(".json.gz")).length, 2);
+});
+
+test("keyword run dependencies invalidate changed correction, identity and original run quality", async t => {
+  const f = await fixture(t), helper = createMonthlyCompanyRecalculation(incrementalKeywordOptions(f));
+  assert.equal((await helper(keywordRequest(), f.data))[0].supply, 10);
+  f.companies[0].manualCorrection.lodgingBasisTotal = 8;
+  assert.equal((await helper(keywordRequest(), f.data))[0].supply, 8);
+  assert.equal(f.loads(), 2);
+  f.companies[0].placeIds = ["changed-identity"];
+  assert.deepEqual((await helper(keywordRequest(), f.data)).map(row => row.companyId), ["b"]);
+  assert.equal(f.loads(), 3);
+  f.data.runs[0].collectionQuality.status = "partial";
+  await helper(keywordRequest(), f.data);
+  assert.equal(f.loads(), 4);
+  f.data.runs[0].collectionQuality.status = "failed";
+  assert.deepEqual(await helper(keywordRequest(), f.data), []);
+  assert.equal(f.loads(), 4, "ineligible quality does not reopen a cached or original source");
+});
+
+test("keyword capacity evidence uses each run's as-of boundary and reuses unchanged future witnesses", async t => {
+  const f = await fixture(t), evidence = [];
+  const helper = createMonthlyCompanyRecalculation(incrementalKeywordOptions(f, { readProductCapacityEvidence: async () => [...evidence] }));
+  await helper(keywordRequest(), f.data); assert.equal(f.loads(), 1);
+  evidence.push({ companyId: "a", productId: "room", productType: "lodging", count: 12,
+    collectedAt: "2026-09-21T00:00:00.000Z", runId: "future", source: "normal_saved_product_response" });
+  await helper(keywordRequest(), f.data); assert.equal(f.loads(), 1, "future capacity must not change an earlier run dependency");
+  evidence.push({ companyId: "a", productId: "room", productType: "lodging", count: 8,
+    collectedAt: "2026-09-19T00:00:00.000Z", runId: "late", source: "normal_saved_product_response" });
+  await helper(keywordRequest(), f.data); assert.equal(f.loads(), 2, "late earlier evidence changes the earlier run baseline");
+});
+
+test("uncertain keyword dependency callbacks and stale owners fail before original run fallback", async t => {
+  const f = await fixture(t);
+  for (const cacheRevisionForRun of [async () => { throw Object.assign(new Error("unknown dependencies"), { code: "DEPENDENCY_UNVERIFIED" }); }, async () => "not-a-sha"]) {
+    const helper = createMonthlyCompanyRecalculation(incrementalKeywordOptions(f, { cacheRevisionForRun }));
+    await assert.rejects(helper(keywordRequest(), f.data));
+    assert.equal(f.loads(), 0);
+  }
+  const helper = createMonthlyCompanyRecalculation(incrementalKeywordOptions(f));
+  await helper(keywordRequest(), f.data); assert.equal(f.loads(), 1);
+  f.change(); await assert.rejects(helper(keywordRequest(), f.data));
+  assert.equal(f.loads(), 1);
+});
+
+test("ordinary keyword reads keep their original uncached behavior", async t => {
+  const f = await fixture(t), helper = createMonthlyCompanyRecalculation({ ...f.options, recalculateAllInventory: true });
+  await helper(keywordRequest(), f.data); await helper(keywordRequest(), f.data);
+  assert.equal(f.loads(), 2);
+  assert.equal(helper.stats().keywordRunRowBuilds, 0);
+  assert.deepEqual(await fs.readdir(f.root), []);
+});

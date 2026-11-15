@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,24 @@ HERE = Path(__file__).resolve().parent
 LAUNCHER = HERE / "launch_keyword_monthly_isolated.py"
 NODE = None
 NODE_SHA = None
+
+
+class LauncherGuardContractTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("guard_contract_fixture", LAUNCHER)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_default_and_incremental_guard_names_are_fixed(self):
+        base = ["--copy-root", "/fixture", "--proof", "/fixture/control/proof.json"]
+        self.assertEqual(self.module.parse_args(base).guard_name,
+                         "reconstruct_keyword_monthly_source_copy.cjs")
+        self.assertEqual(self.module.parse_args([*base, "--guard-name", "reconstruct_keyword_monthly_incremental.cjs"]).guard_name,
+                         "reconstruct_keyword_monthly_incremental.cjs")
+        for name in ("arbitrary.cjs", "../reconstruct_keyword_monthly_incremental.cjs",
+                     "/tmp/reconstruct_keyword_monthly_incremental.cjs", "reconstruct_keyword_monthly_incremental.cjs.extra"):
+            with mock.patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+                self.module.parse_args([*base, "--guard-name", name])
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux seccomp tests require Linux")
@@ -101,6 +120,24 @@ class IsolatedLauncherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ISOLATION_PROOF_ALREADY_EXISTS", result.stderr)
         self.assertEqual(proof.read_bytes(), b"original-evidence")
+
+    def test_incremental_guard_requires_explicit_fixed_name_and_the_same_sha_contract(self):
+        incremental_guard = self.guard.with_name("reconstruct_keyword_monthly_incremental.cjs")
+        self.guard.rename(incremental_guard)
+        rejected = self.invoke("--code-root", str(self.code), "--guard-sha256", self.sha,
+                               "--node-sha256", NODE_SHA, command=[NODE, str(incremental_guard)])
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("ISOLATION_GUARDED_COMMAND_REQUIRED", rejected.stderr)
+        target = self.root / "control" / "incremental-result.json"
+        result = self.invoke("--code-root", str(self.code), "--guard-name", incremental_guard.name,
+                             "--guard-sha256", self.sha, "--node-sha256", NODE_SHA,
+                             proof="incremental-exec.json", command=[NODE, str(incremental_guard),
+                             str(self.root / "control" / "incremental-exec.json"), str(target)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        proof = json.loads((self.root / "control" / "incremental-exec.json").read_text())
+        self.assertEqual(proof["guardName"], incremental_guard.name)
+        self.assertEqual(proof["guardSha256"], self.sha)
+        self.assertTrue(json.loads(target.read_text())["execInheritedKernelFilter"])
 
     def test_inherited_socket_fd_is_closed_before_filter_or_exec(self):
         left, right = socket.socketpair()

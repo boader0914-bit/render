@@ -1,6 +1,6 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os"), crypto = require("node:crypto");
-const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
+const { createCompanyCapacityRegistry, capacityIdentityOwnership } = require("./lib/company_capacity_registry.cjs");
 const { createHistoryObservationIndex } = require("./lib/history_observation_index.cjs");
 const now = () => new Date("2026-10-21T12:00:00.000Z");
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
@@ -35,6 +35,40 @@ async function fixture(t) {
   return { root, legacyDir, indexedDir, companies, runs, rows, base, source, indexFile, historyCache, bases, registry,
     appendLegacy: row => fs.appendFile(path.join(legacyDir, "history/observations.jsonl"), JSON.stringify(row) + "\n") };
 }
+
+for (const indexed of [false, true]) test(`subset capacity preparation retains complete alias ownership and raw-only callbacks (indexed=${indexed})`, async t => {
+  const f = await fixture(t), population = {
+    a: { companyId: "a", rawPreparationWitness: true, observed: 15, duplicateNotes: [{ mergedCompanyId: "shared" }, { mergedCompanyId: "b" }] },
+    b: { companyId: "b", rawPreparationWitness: true, duplicateNotes: [{ mergedCompanyId: "shared" }] },
+    removed: { companyId: "removed", rawPreparationWitness: true, deletedAt: "2026-10-20T00:00:00Z", duplicateNotes: [{ mergedCompanyId: "shared" }] },
+    merged: { companyId: "merged", rawPreparationWitness: true, mergedIntoCompanyId: "b", duplicateNotes: [{ mergedCompanyId: "shared" }] },
+    reviewed: { companyId: "reviewed", rawPreparationWitness: true, manualCorrection: { lodgingBasisTotal: 7 } }
+  };
+  const identityCompanies = Object.fromEntries(Object.values(population).map(company => [company.companyId,
+    Object.fromEntries(["companyId", "duplicateNotes", "deletedAt", "mergedIntoCompanyId"].filter(key => Object.hasOwn(company, key)).map(key => [key, company[key]]))]));
+  assert.deepEqual([...await capacityIdentityOwnership(identityCompanies)], [["a", "a"], ["shared", "b"], ["b", "b"], ["reviewed", "reviewed"]]);
+  const rows = [["shared", 50], ["b", 40], ["a", 10], ["reviewed", 99]].map(([companyKey, rawTotal]) => ({ ...f.base, companyKey, rawTotal }));
+  for (const directory of [f.legacyDir, f.indexedDir]) await fs.writeFile(path.join(directory, "history/observations.jsonl"), rows.map(JSON.stringify).join("\n") + "\n");
+  const index = indexed ? createHistoryObservationIndex({ file: f.source, indexFile: f.indexFile }) : null;
+  const subsetCalls = [];
+  const registry = (dataDir, observationIndex, calls = null) => createCompanyCapacityRegistry({ dataDir, observationIndex, now,
+    observedCapacity: company => { assert.equal(company.rawPreparationWitness, true, "capacity trust receives only original raw bodies"); if (calls) calls.push(company.companyId); return company.observed || null; },
+    reviewedCapacity: company => { assert.equal(company.rawPreparationWitness, true); return company.manualCorrection?.lodgingBasisTotal || null; } });
+  try {
+    const full = registry(f.legacyDir, null), partial = registry(f.indexedDir, index, subsetCalls);
+    let expected = await full.prepareCompanies(population, { runs: f.runs });
+    let actual = await partial.prepareCompanies({ reviewed: population.reviewed, a: population.a }, { runs: f.runs, identityCompanies });
+    assert.deepEqual(actual.a, expected.a); assert.deepEqual(actual.reviewed, expected.reviewed);
+    assert.equal(actual.a._integratedCapacity.capacity, 15, "an unchanged later alias owner prevents capacity 50 from leaking into a newly prepared company");
+    assert.equal(actual.reviewed._integratedCapacity.capacity, 7);
+    assert.deepEqual(subsetCalls, ["reviewed", "a"]);
+    population.a.manualCorrection = { lodgingBasisTotal: 13 }; population.a.manualCorrectionRevision = 1;
+    expected = await full.prepareCompanies(population, { runs: f.runs });
+    actual = await partial.prepareCompanies({ a: population.a }, { runs: f.runs, identityCompanies });
+    assert.deepEqual(actual.a, expected.a); assert.equal(actual.a._integratedCapacity.capacity, 13);
+    assert.equal(actual.a._integratedCapacity.source, "db_review");
+  } finally { if (index) await index.close(); }
+});
 
 test("indexed capacity history preserves locked bases, review warnings, raw trust gates, missing dates, typed identities and current run quality", async t => {
   const f = await fixture(t), index = createHistoryObservationIndex({ file: f.source, indexFile: f.indexFile });

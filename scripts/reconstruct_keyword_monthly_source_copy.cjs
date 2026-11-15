@@ -39,10 +39,14 @@ async function kernelIsolation(proofFile, copyRoot) {
   need(tcp && udp, "KEYWORD_RECONSTRUCT_KERNEL_NETWORK_PROBE_FAILED");
   return { mode: "seccomp", proofSha256: proof.sha256, pid: process.pid, noNewPrivs: true, seccompMode: 2, networkFdsClosed: true, tcpKernelDenied: true, udpKernelDenied: true };
 }
-function installGuards(copyRoot, { codeRoot = null, originalOutputs = null } = {}) {
+function installGuards(copyRoot, { codeRoot = null, originalOutputs = null, readOnlyRoots = [], metadataOnlyFiles = [] } = {}) {
+  need([readOnlyRoots, metadataOnlyFiles].every(values => Array.isArray(values) && values.length <= 128
+    && values.every(value => typeof value === "string" && path.isAbsolute(value) && path.resolve(value) === value
+      && value !== path.parse(value).root)), "KEYWORD_RECONSTRUCT_READ_SCOPE_INVALID");
+  const readonlyRoots = [...new Set(readOnlyRoots)], metadataFiles = new Set(metadataOnlyFiles), readonlyDescriptors = new Set();
   const metrics = { networkAttempts: 0, childProcessAttempts: 0, outsideCopyWriteAttempts: 0, outsideReadAttempts: 0, appEntryExecutions: 0, providerFactories: 0 }, restore = [];
   const originalLstat = native.lstatSync.bind(native), originalReaddir = native.readdirSync.bind(native), codeFiles = new Set(), codeDirectories = new Set(), outputFiles = new Set(), outputDirectories = new Set(), ancestorStats = new Set(), allowedDescriptors = new Set();
-  for (const approved of [copyRoot, codeRoot, originalOutputs?.root].filter(Boolean)) { let parent = path.resolve(approved); while (true) { ancestorStats.add(parent); const next = path.dirname(parent); if (next === parent) break; parent = next; } }
+  for (const approved of [copyRoot, codeRoot, originalOutputs?.root, ...readonlyRoots, ...metadataFiles].filter(Boolean)) { let parent = path.resolve(approved); while (true) { ancestorStats.add(parent); const next = path.dirname(parent); if (next === parent) break; parent = next; } }
   const addParents = (set, filename, root) => { let current = path.dirname(filename); while (inside(root, current)) { set.add(current); if (current === root) break; current = path.dirname(current); } };
   if (codeRoot) {
     codeRoot = path.resolve(codeRoot);
@@ -60,11 +64,13 @@ function installGuards(copyRoot, { codeRoot = null, originalOutputs = null } = {
     if (typeof value === "number") { if (!allowedDescriptors.has(value)) { metrics.outsideReadAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_READ_DENIED"); } return; }
     const filename = value instanceof URL ? require("node:url").fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : value;
     const file = typeof filename === "string" ? path.resolve(filename) : null;
+    if (file && !metadata && metadataFiles.has(file)) { metrics.outsideReadAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_READ_DENIED"); }
     let expectedMissingOutput = false;
     if (file && originalOutputs && inside(originalOutputs.root, file) && !outputFiles.has(file) && !outputDirectories.has(file)) {
       try { originalLstat(file); } catch (error) { if (error.code === "ENOENT") expectedMissingOutput = true; else throw error; }
     }
     if (!file || !inside(copyRoot, file) && !codeFiles.has(file) && !(metadata && codeDirectories.has(file)) && !outputFiles.has(file) && !(metadata && outputDirectories.has(file))
+      && !readonlyRoots.some(root => inside(root, file)) && !(metadata && metadataFiles.has(file))
       && !(metadata === "ancestors" && ancestorStats.has(file)) && !expectedMissingOutput && !systemFiles.has(file)) {
       metrics.outsideReadAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_READ_DENIED");
     }
@@ -85,28 +91,53 @@ function installGuards(copyRoot, { codeRoot = null, originalOutputs = null } = {
   replace(require("node:tls"), "connect", denied("KEYWORD_RECONSTRUCT_NETWORK_DENIED"));
   const cp = require("node:child_process"); for (const key of ["exec", "execFile", "spawn", "fork", "execSync", "execFileSync", "spawnSync"]) replace(cp, key, denied("KEYWORD_RECONSTRUCT_CHILD_PROCESS_DENIED"));
   const assertWrite = value => {
-    if (typeof value === "number") return;
+    if (typeof value === "number") { if (readonlyDescriptors.has(value)) { metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_COPY_WRITE_DENIED"); } return; }
     const file = value instanceof URL ? require("node:url").fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : value;
-    if (typeof file !== "string" || !inside(copyRoot, path.resolve(file))) { metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_COPY_WRITE_DENIED"); }
+    const resolved = typeof file === "string" ? path.resolve(file) : null;
+    if (!resolved || !inside(copyRoot, resolved) || readonlyRoots.some(root => inside(root, resolved)) || metadataFiles.has(resolved)) { metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_COPY_WRITE_DENIED"); }
+    {
+      let current = path.parse(resolved).root;
+      for (const part of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part); let stat;
+        try { stat = originalLstat(current); } catch (error) { if (error.code === "ENOENT") break; throw error; }
+        if (stat.isSymbolicLink() || current !== resolved && !stat.isDirectory() || current === resolved && stat.isFile() && stat.nlink !== 1) {
+          metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_WRITE_SYMLINK_DENIED");
+        }
+      }
+    }
+  };
+  const readonly = value => {
+    const file = value instanceof URL ? require("node:url").fileURLToPath(value) : Buffer.isBuffer(value) ? value.toString() : value;
+    return typeof file === "string" && (!inside(copyRoot, path.resolve(file)) || readonlyRoots.some(root => inside(root, path.resolve(file))));
   };
   const writing = flags => typeof flags === "number" ? Boolean(flags & (native.constants.O_WRONLY | native.constants.O_RDWR | native.constants.O_CREAT | native.constants.O_TRUNC | native.constants.O_APPEND)) : /[wa+]/.test(String(flags));
   for (const object of [native, fs]) {
-    for (const name of ["writeFile", "appendFile", "mkdir", "rm", "rmdir", "unlink", "chmod", "chown", "truncate", "utimes", "writeFileSync", "appendFileSync", "mkdirSync", "rmSync", "rmdirSync", "unlinkSync", "chmodSync", "chownSync", "truncateSync", "utimesSync"]) if (typeof object[name] === "function") {
+    for (const name of ["writeFile", "appendFile", "mkdir", "rm", "rmdir", "unlink", "chmod", "chown", "truncate", "utimes", "writeFileSync", "appendFileSync", "mkdirSync", "rmSync", "rmdirSync", "unlinkSync", "chmodSync", "chownSync", "truncateSync", "utimesSync", "createWriteStream"]) if (typeof object[name] === "function") {
       const original = object[name]; replace(object, name, (...values) => { assertWrite(values[0]); return original.apply(object, values); });
     }
     for (const name of ["rename", "renameSync", "link", "linkSync", "symlink", "symlinkSync"]) if (typeof object[name] === "function") { const original = object[name]; replace(object, name, (...values) => { assertWrite(values[0]); assertWrite(values[1]); return original.apply(object, values); }); }
     for (const name of ["copyFile", "copyFileSync"]) if (typeof object[name] === "function") { const original = object[name]; replace(object, name, (...values) => { assertRead(values[0]); assertWrite(values[1]); return original.apply(object, values); }); }
     for (const name of ["open", "openSync"]) if (typeof object[name] === "function") { const original = object[name]; replace(object, name, (...values) => {
       if (writing(values[1])) assertWrite(values[0]); else assertRead(values[0]);
-      if (name === "openSync") { const fd = original.apply(object, values); allowedDescriptors.add(fd); return fd; }
-      if (object === fs) return original.apply(object, values).then(handle => { allowedDescriptors.add(handle.fd); const close = handle.close.bind(handle); handle.close = async () => { const fd = handle.fd; try { return await close(); } finally { allowedDescriptors.delete(fd); } }; return handle; });
-      const callback = values.at(-1); if (typeof callback === "function") values[values.length - 1] = (error, fd) => { if (!error) allowedDescriptors.add(fd); callback(error, fd); };
+      if (name === "openSync") { const fd = original.apply(object, values); allowedDescriptors.add(fd); if (readonly(values[0])) readonlyDescriptors.add(fd); return fd; }
+      if (object === fs) return original.apply(object, values).then(handle => {
+        allowedDescriptors.add(handle.fd); const close = handle.close.bind(handle);
+        if (readonly(values[0])) { readonlyDescriptors.add(handle.fd);
+          for (const method of ["write", "writev", "writeFile", "appendFile", "truncate", "chmod", "chown", "utimes"]) handle[method] = async () => { metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_COPY_WRITE_DENIED"); };
+          handle.createWriteStream = () => { metrics.outsideCopyWriteAttempts++; fail("KEYWORD_RECONSTRUCT_OUTSIDE_COPY_WRITE_DENIED"); };
+        }
+        handle.close = async () => { const fd = handle.fd; try { return await close(); } finally { allowedDescriptors.delete(fd); readonlyDescriptors.delete(fd); } }; return handle;
+      });
+      const callback = values.at(-1); if (typeof callback === "function") values[values.length - 1] = (error, fd) => { if (!error) { allowedDescriptors.add(fd); if (readonly(values[0])) readonlyDescriptors.add(fd); } callback(error, fd); };
       return original.apply(object, values);
     }); }
     for (const name of ["readFile", "readFileSync", "createReadStream"]) if (typeof object[name] === "function") { const original = object[name]; replace(object, name, (...values) => { assertRead(values[0]); return original.apply(object, values); }); }
     for (const name of ["stat", "statSync", "lstat", "lstatSync", "access", "accessSync", "existsSync", "readdir", "readdirSync", "realpath", "realpathSync", "readlink", "readlinkSync"]) if (typeof object[name] === "function") { const original = object[name]; replace(object, name, (...values) => { assertRead(values[0], /^(?:stat|lstat|realpath)/.test(name) ? "ancestors" : true); return original.apply(object, values); }); }
   }
-  for (const name of ["close", "closeSync"]) { const original = native[name]; replace(native, name, (fd, ...rest) => { if (name === "closeSync") { try { return original(fd, ...rest); } finally { allowedDescriptors.delete(fd); } } const callback = rest.at(-1); if (typeof callback === "function") rest[rest.length - 1] = error => { allowedDescriptors.delete(fd); callback(error); }; return original(fd, ...rest); }); }
+  for (const name of ["write", "writev", "writeSync", "writevSync", "ftruncate", "ftruncateSync", "fchmod", "fchmodSync", "fchown", "fchownSync", "futimes", "futimesSync"]) {
+    const original = native[name]; if (typeof original === "function") replace(native, name, (fd, ...values) => { assertWrite(fd); return original(fd, ...values); });
+  }
+  for (const name of ["close", "closeSync"]) { const original = native[name]; replace(native, name, (fd, ...rest) => { if (name === "closeSync") { try { return original(fd, ...rest); } finally { allowedDescriptors.delete(fd); readonlyDescriptors.delete(fd); } } const callback = rest.at(-1); if (typeof callback === "function") rest[rest.length - 1] = error => { allowedDescriptors.delete(fd); readonlyDescriptors.delete(fd); callback(error); }; return original(fd, ...rest); }); }
   return { metrics, restore() { for (const operation of restore.reverse()) operation(); } };
 }
 function publicSource(value, removed, location = "") {

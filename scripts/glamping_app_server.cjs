@@ -56,6 +56,8 @@ const { createSearchDemandActivation } = require("./lib/search_demand_activation
 const { createSearchDemandService } = require("./lib/search_demand_service.cjs");
 const { createSearchDemandHttpHandler } = require("./lib/search_demand_http.cjs");
 const { createKeywordMonthlyRefreshIntegration } = require("./lib/keyword_monthly_refresh_integration.cjs");
+const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_source_delta.cjs");
+const { sourceStamp: keywordMonthlySourceStamp } = require("./lib/keyword_monthly_incremental_state.cjs");
 const { createTrafficConnectionChecks, parseTrafficVerificationRequest } = require("./lib/traffic_connection_checks.cjs");
 const { resolveDatalabConnection } = require("./lib/naver_datalab_connection.cjs");
 const { createRegionalReportPreparation } = require("./lib/regional_report_preparation.cjs");
@@ -160,6 +162,9 @@ const collectionHistory = createCollectionHistory({ dataDir: DATA_DIR, outputsDi
     return items;
   } });
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
+// The existing shared source writer owns this independent outbox instance.
+// Completion here records transport only, never collection/DB completion.
+const keywordMonthlySourceDelta = createKeywordMonthlySourceDelta({ dataDir: DATA_DIR });
 // Rebuildable derived data only. The existing sharedWrite/analytical lease
 // remains the sole app writer for the original observation stream.
 const historyObservationIndex = createHistoryObservationIndex({ file: HISTORY_OBSERVATIONS_FILE,
@@ -11075,11 +11080,21 @@ async function readCompanyMaster() {
 }
 
 async function readStoredCompanyIntegrationSignatures() {
+  let sourceStampBefore = null, monthlySourceError = null;
+  try { sourceStampBefore = await readKeywordMonthlySourceStamp(COMPANY_MASTER_FILE, true); }
+  catch (error) { monthlySourceError = keywordMonthlyDeltaReason(error); }
   let stored;
   try {
     stored = JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE, "utf8")).replace(/^\uFEFF/, ""));
   } catch (error) {
-    if (error.code === "ENOENT") return new Map();
+    if (error.code === "ENOENT") {
+      const empty = new Map();
+      // A verified absent file can seed the first delta. A failed stamp read or
+      // disappearance during the existing read is an independent monthly hold.
+      Object.defineProperty(empty, "monthlySource", { value: { allSignatures: new Map(), order: [], sourceStampBefore,
+        errorCode: monthlySourceError || (sourceStampBefore === null ? null : "KEYWORD_DELTA_SOURCE_CHANGED") } });
+      return empty;
+    }
     throw Object.assign(new Error("저장된 업체 자료의 변경 여부를 확인하지 못했습니다."), { code: "COMPANY_INTEGRATION_SOURCE_UNAVAILABLE" });
   }
   if (!stored?.companies || typeof stored.companies !== "object" || Array.isArray(stored.companies)) {
@@ -11087,8 +11102,31 @@ async function readStoredCompanyIntegrationSignatures() {
   }
   // Compare the durable before/after values. A process-local signature map is
   // empty after every restart and would enqueue every company on its first save.
-  return new Map(Object.values(stored.companies).filter(company => company?.companyId && !company.deletedAt && !company.mergedIntoCompanyId)
+  const signatures = new Map(Object.values(stored.companies).filter(company => company?.companyId && !company.deletedAt && !company.mergedIntoCompanyId)
     .map(company => [company.companyId, crypto.createHash("sha256").update(stableJson(company)).digest("hex")]));
+  let monthlySource;
+  try {
+    if (monthlySourceError) throw Object.assign(new Error(monthlySourceError), { code: monthlySourceError });
+    const afterRead = await readKeywordMonthlySourceStamp(COMPANY_MASTER_FILE);
+    if (JSON.stringify(afterRead) !== JSON.stringify(sourceStampBefore)) throw Object.assign(new Error("KEYWORD_DELTA_SOURCE_CHANGED"), { code: "KEYWORD_DELTA_SOURCE_CHANGED" });
+    monthlySource = { allSignatures: new Map(Object.entries(stored.companies).map(([id, company]) => [id, crypto.createHash("sha256").update(JSON.stringify(company)).digest("hex")])),
+      order: Object.keys(stored.companies), sourceStampBefore, errorCode: null };
+  } catch (error) { monthlySource = { allSignatures: null, order: null, sourceStampBefore, errorCode: keywordMonthlyDeltaReason(error) }; }
+  Object.defineProperty(signatures, "monthlySource", { value: monthlySource });
+  return signatures;
+}
+
+function keywordMonthlyDeltaReason(error) {
+  return /^(?:KEYWORD_[A-Z0-9_]{1,110}|E[A-Z0-9]{1,30})$/.test(error?.errorCode || error?.code || "")
+    ? error.errorCode || error.code : "KEYWORD_DELTA_SOURCE_UNAVAILABLE";
+}
+
+async function readKeywordMonthlySourceStamp(file, optional = false) {
+  try {
+    const stat = await fsp.lstat(file, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n) throw Object.assign(new Error("KEYWORD_DELTA_SOURCE_UNSAFE"), { code: "KEYWORD_DELTA_SOURCE_UNSAFE" });
+    return keywordMonthlySourceStamp(stat);
+  } catch (error) { if (optional && error.code === "ENOENT") return null; throw error; }
 }
 
 async function writeCompanyMaster(master) {
@@ -11099,6 +11137,23 @@ async function writeCompanyMaster(master) {
   const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
   await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
   await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+  try {
+    const previous = previousSignatures.monthlySource;
+    if (!previous || previous.errorCode || !(previous.allSignatures instanceof Map) || !Array.isArray(previous.order)) {
+      throw Object.assign(new Error("KEYWORD_DELTA_SOURCE_UNAVAILABLE"), { code: previous?.errorCode || "KEYWORD_DELTA_SOURCE_UNAVAILABLE" });
+    }
+    const sourceStampAfter = await readKeywordMonthlySourceStamp(COMPANY_MASTER_FILE);
+    // Inspect the already serialized in-memory input one member at a time. Only
+    // changed members are cloned; no second full master string/graph is held.
+    const companies = next.companies || {}, order = Object.keys(companies), changes = [];
+    for (const [orderIndex, companyId] of order.entries()) {
+      const raw = JSON.stringify(companies[companyId]), signature = crypto.createHash("sha256").update(raw).digest("hex");
+      if (previous.allSignatures.get(companyId) !== signature) changes.push({ companyId, company: JSON.parse(raw), orderIndex });
+    }
+    for (const [orderIndex, companyId] of previous.order.entries()) if (!Object.hasOwn(companies, companyId)) changes.push({ companyId, company: null, orderIndex });
+    const delta = await keywordMonthlySourceDelta.recordCompanyDelta({ changes, order, sourceStamp: { before: previous.sourceStampBefore, after: sourceStampAfter } });
+    if (delta.status !== "complete") console.error("keyword_monthly_source_delta_needs_verification", keywordMonthlyDeltaReason(delta));
+  } catch (error) { console.error("keyword_monthly_source_delta_needs_verification", keywordMonthlyDeltaReason(error)); }
   companyBootstrapStore.invalidate();
   // Deletion, merging and changes to actual regions affect past cohorts too.
   await invalidateIndustryAnalysis("company_saved");
@@ -15928,8 +15983,19 @@ async function appendHistoryForRunUnlocked(runId, options = {}) {
   let indexUpdated = true;
   await step("historyAppendMs", async () => {
     if (missing.length) {
+      const monthlyReason = error => typeof keywordMonthlyDeltaReason === "function" ? keywordMonthlyDeltaReason(error) : "KEYWORD_DELTA_SOURCE_UNAVAILABLE";
+      let sourceStampBefore = null, monthlySourceError = null;
+      try { sourceStampBefore = await readKeywordMonthlySourceStamp(HISTORY_OBSERVATIONS_FILE, true); }
+      catch (error) { monthlySourceError = monthlyReason(error); }
       const update = await historyObservationIndex.append(`${needsSeparator ? "\n" : ""}${missing.map(row => JSON.stringify(row)).join("\n")}\n`);
       indexUpdated = update.indexed;
+      try {
+        if (monthlySourceError) throw Object.assign(new Error(monthlySourceError), { code: monthlySourceError });
+        const sourceStampAfter = await readKeywordMonthlySourceStamp(HISTORY_OBSERVATIONS_FILE);
+        const delta = await keywordMonthlySourceDelta.recordHistoryDelta({ runId, rows: JSON.parse(JSON.stringify(missing)),
+          sourceStamp: { before: sourceStampBefore, after: sourceStampAfter }, indexUpdated });
+        if (delta.status !== "complete") console.error("keyword_monthly_source_delta_needs_verification", monthlyReason(delta));
+      } catch (error) { console.error("keyword_monthly_source_delta_needs_verification", monthlyReason(error)); }
       // An index publication failure cannot append the same source twice.
       // The next verified reader rebuilds it from the successfully saved raw
       // stream; pending aggregation still revalidates before publishing.

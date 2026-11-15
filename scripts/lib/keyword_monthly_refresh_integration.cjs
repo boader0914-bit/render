@@ -4,7 +4,7 @@
 const fs = require("node:fs/promises"), path = require("node:path"), crypto = require("node:crypto");
 const { readBundleFile } = require("./keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyRefresh } = require("./keyword_monthly_refresh.cjs");
-const { refreshKeywordMonthlyFromCompletedRun } = require("../refresh_keyword_monthly_from_completed_run.cjs");
+const { refreshKeywordMonthlyIncremental, VERSION: INCREMENTAL_VERSION } = require("../refresh_keyword_monthly_incremental.cjs");
 const { pruneKeywordMonthlyRefreshGenerations } = require("./keyword_monthly_refresh_retention.cjs");
 const RUN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,239}$/, SHA = /^[a-f0-9]{64}$/;
 const fail = code => { throw Object.assign(new Error(code), { code }); };
@@ -72,7 +72,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
   const { dataDir, codeRoot, outputsDir = path.join(dataDir || "/", "outputs"), readPostprocess, readPostprocessList, allowsDerivedUpdates,
     isCollectionIdle = () => false, runWork, now = () => new Date(), logger = console,
     assertAnalyticalLeaseHeld = () => false,
-    createQueue = createKeywordMonthlyRefresh, refresh = refreshKeywordMonthlyFromCompletedRun,
+    createQueue = createKeywordMonthlyRefresh, refresh = refreshKeywordMonthlyIncremental,
     setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = options;
   if (!path.isAbsolute(dataDir || "") || !path.isAbsolute(codeRoot || "") || [readPostprocess, readPostprocessList, allowsDerivedUpdates, runWork].some(f => typeof f !== "function")) throw new TypeError("Keyword refresh requires explicit source and application callbacks");
   const namespaceSupported = path.resolve(outputsDir) === path.join(dataDir, "outputs");
@@ -84,9 +84,9 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
     if (closed || !isCollectionIdle()) return { allowed: false, reasonCode: "KEYWORD_REFRESH_COLLECTION_BUSY" };
     return readStoredCollectionAdmission(dataDir, clock());
   }
-  // The compressed physical-copy worker gets new durable job identities while
-  // retaining the original activation and all previous-version job receipts.
-  const queue = createQueue({ dataDir, refreshVersion: "keyword-monthly-refresh-compressed-v2",
+  // Source-delta adoption gets new job identities. Activation and every prior
+  // worker's immutable receipt remain historical evidence.
+  const queue = createQueue({ dataDir, refreshVersion: INCREMENTAL_VERSION,
     readCompletedEvidence: intent => readCompletedKeywordEvidence({ dataDir, intent, readPostprocess, allowsDerivedUpdates }),
     canProcess: admission, idleIntervalMs: 30000,
     refresh: (evidence, intent, work = {}) => runWork(async () => {
@@ -98,7 +98,14 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
       try {
         const result = await refresh({ dataDir, codeRoot, scratchParent: path.resolve(require("node:os").tmpdir()), mode: "live",
         evidence, now: clock, signal: controller.signal,
-        canPublish: async () => { const gate = await admission(); return gate.allowed; } });
+        canPublish: async () => { const gate = await admission(); return gate.allowed; },
+        readDeltaEvidence: async runId => {
+          if (!RUN.test(runId || "")) fail("KEYWORD_INCREMENTAL_DELTA_RUN_INVALID");
+          const row = await readPostprocess(runId);
+          if (!row || (row.status || row.state) !== "complete") return { status: "waiting", reasonCode: "KEYWORD_INCREMENTAL_DELTA_DB_PENDING" };
+          const r = await readJson(path.join(dataDir, "outputs", runId, "manifest.json"), 1024 * 1024);
+          return readCompletedKeywordEvidence({ dataDir, intent: { runId, keyword: r.value.keyword, manifestSha256: r.sha256, scheduleOccurrenceId: row.scheduleOccurrenceId || null }, readPostprocess, allowsDerivedUpdates });
+        } });
         for (const name of ["repeatedSource", "operatingPointerChanged"]) if (result?.[name] !== undefined && typeof result[name] !== "boolean") fail("KEYWORD_REFRESH_RESULT_INVALID");
         // A reused receipt describes an earlier publication. Its saved pointer
         // may no longer be current, so it cannot authorize retention cleanup.
@@ -139,21 +146,30 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
       if (!status.errorCode && Array.isArray(status.items)) for (const item of status.items.slice(0, 512)) {
         const intent = item?.intent;
         if (item?.status !== "complete" || !SHA.test(item.jobId || "") || !iso(item.finishedAt)
-          || !intent || intent.refreshVersion !== "keyword-monthly-refresh-v1" || !RUN.test(intent.runId || "") || !keyword(intent.keyword)
+          || !intent || !["keyword-monthly-refresh-v1", "keyword-monthly-refresh-compressed-v2", INCREMENTAL_VERSION].includes(intent.refreshVersion) || !RUN.test(intent.runId || "") || !keyword(intent.keyword)
           || !SHA.test(intent.manifestSha256 || "") || !Object.hasOwn(intent, "scheduleOccurrenceId")
           || intent.scheduleOccurrenceId !== null && !RUN.test(intent.scheduleOccurrenceId || "") || !keyword(intent.scope)
           || !["published", "unchanged", "complete"].includes(item.result?.status) || !SHA.test(item.result?.pointerSha256 || "")) continue;
+        if (sha(JSON.stringify([intent.refreshVersion, intent.runId, intent.manifestSha256, intent.keyword, intent.scope, intent.scheduleOccurrenceId])) !== item.jobId) continue;
         completed.add(JSON.stringify([intent.runId, intent.manifestSha256, intent.keyword, intent.scheduleOccurrenceId, intent.scope]));
       }
       const snapshot = await readPostprocessList();
       if (!Array.isArray(snapshot?.items)) fail("KEYWORD_REFRESH_DB_INDEX_UNKNOWN");
-      for (const row of snapshot.items.slice(0, 1024)) {
+      let bootstrapPending = false;
+      try { const state = await fs.lstat(path.join(dataDir, "keyword_monthly_incremental", "source-current.json")); if (!state.isFile() || state.isSymbolicLink()) fail("KEYWORD_INCREMENTAL_STATE_POINTER_INVALID"); }
+      catch (e) { if (e.code !== "ENOENT") throw e; bootstrapPending = true; }
+      // One most-recent completed run initializes the private source checkpoint.
+      // This does not recollect anything or replay all historical source events.
+      const sourceRows = [...snapshot.items.slice(0, 1024)].sort((a, b) => String(b.finishedAt || "").localeCompare(String(a.finishedAt || "")));
+      for (const row of sourceRows) {
         if ((row.status || row.state) !== "complete" || !RUN.test(row.runId || "") || !iso(row.finishedAt) || Date.parse(row.finishedAt) < Date.parse(activatedAt)) continue;
         const r = await readJson(path.join(dataDir, "outputs", row.runId, "manifest.json"), 1024 * 1024), m = r.value;
         if (!keyword(m.keyword) || m.searchMode === "company" || m.collectionQuality?.status !== "complete" || !allowsDerivedUpdates(m)) continue;
         const intent = { runId: row.runId, keyword: m.keyword, manifestSha256: r.sha256, scheduleOccurrenceId: row.scheduleOccurrenceId || null };
-        if (completed.has(JSON.stringify([intent.runId, intent.manifestSha256, intent.keyword, intent.scheduleOccurrenceId, intent.keyword]))) continue;
+        const consumed = completed.has(JSON.stringify([intent.runId, intent.manifestSha256, intent.keyword, intent.scheduleOccurrenceId, intent.keyword]));
+        if (consumed && !bootstrapPending) continue;
         await queue.enqueue(intent);
+        bootstrapPending = false;
       }
     })().catch(e => report("keyword_monthly_refresh_reconcile_failed", e)).finally(() => { reconciling = null; });
     return reconciling;
@@ -167,7 +183,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
   async function close() { closed = true; if (timer) clearIntervalImpl(timer); timer = null; await queue.close(); if (reconciling) await reconciling; }
   return { start, close, signalCompletedRun, reconcile, status: async () => namespaceSupported ? { ...(await queue.status()), cleanup }
     : { status: "needs_verification", readOnly: true, errorCode: "KEYWORD_REFRESH_OUTPUT_NAMESPACE_UNSUPPORTED", counts: null, items: null,
-      refreshVersion: "keyword-monthly-refresh-compressed-v2", currentVersionCounts: null, historicalCountsByVersion: null,
+      refreshVersion: INCREMENTAL_VERSION, currentVersionCounts: null, historicalCountsByVersion: null,
       currentVersionNeedsVerification: null, historicalNeedsVerification: null }, runOnce: () => queue.runOnce() };
 }
 module.exports = { createKeywordMonthlyRefreshIntegration, readCompletedKeywordEvidence, readStoredCollectionAdmission, holdActive };

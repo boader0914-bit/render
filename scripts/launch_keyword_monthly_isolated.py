@@ -35,6 +35,7 @@ BYPASS_SYSCALLS = (
     "ptrace", "process_vm_readv", "process_vm_writev", "bpf",
 )
 GUARD_NAME = "reconstruct_keyword_monthly_source_copy.cjs"
+GUARD_NAMES = frozenset((GUARD_NAME, "reconstruct_keyword_monthly_incremental.cjs"))
 MAX_GUARD_BYTES = 1024 * 1024
 MAX_PROOF_BYTES = 64 * 1024
 
@@ -279,6 +280,7 @@ def parse_args(values):
     parser.add_argument("--proof", required=True)
     parser.add_argument("--code-root")
     parser.add_argument("--guard-sha256")
+    parser.add_argument("--guard-name", default=GUARD_NAME, choices=sorted(GUARD_NAMES))
     parser.add_argument("--node-sha256")
     parser.add_argument("--node-max-old-space-size", type=int, default=768,
                         help="Explicit Node heap bound in MiB, 128 through 1024")
@@ -317,7 +319,8 @@ def main(values=None):
         code_root = absolute(args.code_root)
         executable, guard = absolute(args.command[0]), absolute(args.command[1])
         require(os.path.basename(executable) == "node"
-                and guard == os.path.join(code_root, "scripts", GUARD_NAME), "ISOLATION_GUARDED_COMMAND_REQUIRED")
+                and args.guard_name in GUARD_NAMES
+                and guard == os.path.join(code_root, "scripts", args.guard_name), "ISOLATION_GUARDED_COMMAND_REQUIRED")
         node_digest, node_bytes = regular_digest(executable, 256 * 1024 * 1024, executable=True)
         require(node_digest == args.node_sha256, "ISOLATION_NODE_SHA_MISMATCH")
         guard_digest, _ = regular_digest(guard, MAX_GUARD_BYTES)
@@ -334,6 +337,7 @@ def main(values=None):
              "preflightOnly": args.preflight, "applicationStarted": False,
              "providerCalls": 0, "unrestrictedFallbackAllowed": False,
              "guardSha256": guard_digest, "guardRequiredBeforeNormalization": True,
+             "guardName": args.guard_name,
              "nodeSha256": node_digest, "nodeBytes": node_bytes,
              "nodeMaxOldSpaceSizeMiB": args.node_max_old_space_size,
              "execBindingMode": "trusted_path_with_pre_exec_sha_recheck",

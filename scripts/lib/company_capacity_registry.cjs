@@ -28,6 +28,16 @@ function trustedRawQuantity(row) {
   return true;
 }
 function rawCompanyIdentity(row) { return String(row.companyId || row.companyKey || ""); }
+async function capacityIdentityOwnership(companies, checkpoint = null) {
+  const identities = new Map(); let companyCount = 0;
+  for (const company of Object.values(companies)) {
+    if (checkpoint && ++companyCount % 16 === 0) await checkpoint();
+    if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
+    identities.set(company.companyId, company.companyId);
+    for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) identities.set(prior.mergedCompanyId, company.companyId);
+  }
+  return identities;
+}
 function checkRawCapacityPartition(part, seen) {
   if (!part || typeof part.key !== "string" || seen.has(part.key) || !/^[a-f0-9]{64}$/.test(part.digest || "")
     || !Number.isSafeInteger(part.count) || part.count < 1) throw historyFault();
@@ -163,13 +173,7 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
       }
       partitions.sort((a, b) => a.key.localeCompare(b.key));
       const body = { schemaVersion: HISTORY_CACHE_VERSION, ruleVersion, sourceDigest: before.contentDigest, partitions };
-      const identities = new Map(); count = 0;
-      for (const company of Object.values(companies)) {
-        if (checkpoint && ++count % 16 === 0) await checkpoint();
-        if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
-        identities.set(company.companyId, company.companyId);
-        for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) identities.set(prior.mergedCompanyId, company.companyId);
-      }
+      const identities = await capacityIdentityOwnership(companies, checkpoint);
       const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
       const values = new Map(); count = 0;
       for (const part of partitions) {
@@ -186,14 +190,7 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
     const filename = path.join(dataDir, "history", "observations.jsonl");
     let stat; try { stat = await fs.stat(filename); } catch (error) { if (error.code === "ENOENT") return new Map(); throw error; }
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
-    const identities = new Map();
-    let companyCount = 0;
-    for (const company of Object.values(companies)) {
-      if (checkpoint && ++companyCount % 16 === 0) await checkpoint();
-      if (!company?.companyId || company.deletedAt || company.mergedIntoCompanyId) continue;
-      identities.set(company.companyId, company.companyId);
-      for (const prior of company.duplicateNotes || []) if (prior.mergedCompanyId) identities.set(prior.mergedCompanyId, company.companyId);
-    }
+    const identities = await capacityIdentityOwnership(companies, checkpoint);
     if (checkpoint) await checkpoint();
     const key = crypto.createHash("sha256").update(JSON.stringify([stat.size, stat.mtimeMs, [...runMap], [...identities]])).digest("hex");
     if (historyCache?.key === key) return historyCache.values;
@@ -218,10 +215,11 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
     } finally { input.close(); stream.destroy(); }
     historyCache = { key, values }; return values;
   }
-  async function prepare(companies, { runs = [], checkpoint: suppliedCheckpoint = null, shareReadOnlyInventory = false } = {}) {
+  async function prepare(companies, { runs = [], identityCompanies = companies, checkpoint: suppliedCheckpoint = null, shareReadOnlyInventory = false } = {}) {
+    if (!identityCompanies || typeof identityCompanies !== "object" || Array.isArray(identityCompanies)) throw new TypeError("Capacity identity population must be an object");
     const checkpoint = typeof suppliedCheckpoint === "function" ? suppliedCheckpoint : null;
     if (checkpoint) await checkpoint();
-    const historical = await (observationIndex ? indexedHistoricalMaxima(companies, runs, checkpoint) : legacyHistoricalMaxima(companies, runs, checkpoint));
+    const historical = await (observationIndex ? indexedHistoricalMaxima(identityCompanies, runs, checkpoint) : legacyHistoricalMaxima(identityCompanies, runs, checkpoint));
     const runMap = new Map(runs.map(run => [String(run.id || run.runId || ""), String(typeof run.collectionQuality === "string" ? run.collectionQuality : run.collectionQuality?.status || "unknown")]));
     let store, storedText;
     try { storedText = await fs.readFile(file, "utf8"); }
@@ -279,4 +277,4 @@ function createCompanyCapacityRegistry({ dataDir, observedCapacity, reviewedCapa
     return task;
   } };
 }
-module.exports = { createCompanyCapacityRegistry };
+module.exports = { createCompanyCapacityRegistry, capacityIdentityOwnership };
