@@ -5,7 +5,7 @@ const fs = require("node:fs/promises"), native = require("node:fs"), path = requ
 const { validateCatalog, validatePointer } = require("./keyword_monthly_bundle.cjs");
 const SHA = /^[a-f0-9]{64}$/, GEN = /^[a-f0-9]{32}$/, UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const VERSION = "keyword-monthly-completed-run-v1", OWNER = "keyword_monthly_completed_run_refresh";
-const INCREMENTAL_VERSION = "keyword-monthly-incremental-v3", INCREMENTAL_OWNER = "keyword_monthly_incremental_refresh";
+const INCREMENTAL_VERSIONS = new Set(["keyword-monthly-incremental-v3", "keyword-monthly-incremental-v4"]), INCREMENTAL_OWNER = "keyword_monthly_incremental_refresh";
 const LIMITS = Object.freeze({ receiptEntries: 16384, receipts: 4096, receiptBytes: 256 * 1024, catalogBytes: 1024 * 1024,
   indexBytes: 1024 * 1024, projectionBytes: 32 * 1024 * 1024, generationBytes: 144 * 1024 * 1024, generationFiles: 16384, auditedAutoBytes: 1024 ** 3 });
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
@@ -35,8 +35,8 @@ function json(read) { try { return JSON.parse(read.bytes); } catch { need(false,
 function ownReceipt(value, name, fixture) {
   const incremental = value?.generatedBy === INCREMENTAL_OWNER;
   if (!incremental && value?.generatedBy !== OWNER) return null;
-  const version = incremental ? INCREMENTAL_VERSION : VERSION, source = [version, value.runId, value.manifestSha256, value.keyword];
-  need(value.schemaVersion === 1 && value.status === "published" && value.mode === "live" && value.refreshVersion === version
+  const version = incremental ? value.refreshVersion : VERSION, source = [version, value.runId, value.manifestSha256, value.keyword];
+  need(value.schemaVersion === 1 && value.status === "published" && value.mode === "live" && value.refreshVersion === version && (!incremental || INCREMENTAL_VERSIONS.has(version))
     && value.trigger === "completed_collection_postprocess" && UUID.test(value.jobId || "") && SHA.test(value.sourceKey || "")
     && name === `complete-${value.sourceKey}.json` && /^[A-Za-z0-9][A-Za-z0-9_-]{0,239}$/.test(value.runId || "")
     && typeof value.keyword === "string" && value.keyword === value.keyword.trim() && value.keyword.length > 0 && value.keyword.length <= 160 && !/[\u0000-\u001f\u007f]/.test(value.keyword)

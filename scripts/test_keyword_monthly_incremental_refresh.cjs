@@ -40,8 +40,10 @@ async function fixture(t, variant = {}) {
   await buildKeywordMonthlyProjection({ source: source(OTHER, 4), sourceFingerprint: "b".repeat(64), outputDir: initialB, materializedAt: NOW, dataThrough: NOW, publishMonths: ["2026-11"] });
   await B.publishKeywordMonthlyBundle({ inputs: [{ directory: initialA }, { directory: initialB }], outputDir: liveDir, now: NOW });
   const store = createStore({ dataDir, now: () => NOW }), lockFile = path.join(store.directory, "worker-lock.json");
-  let executions = 0, publications = 0, lastJob = null;
-  const execute = async (_command, args) => {
+  let executions = 0, publications = 0, lastJob = null, lastChildOptions = null;
+  const execute = async (_command, args, childOptions) => {
+    assert.equal(childOptions.receiptOnly, true, "the strict launcher must inherit /dev/null stdio rather than Node socket pairs");
+    lastChildOptions = childOptions;
     executions++; const flag = name => args[args.indexOf(name) + 1], jobRoot = flag("--job-root"), proofFile = flag("--proof");
     const job = JSON.parse(await fs.readFile(flag("--input"))), outbox = createKeywordMonthlySourceDelta({ dataDir }), inventory = await events(outbox); lastJob = job;
     await store.initialize(); let current = await store.load();
@@ -53,28 +55,30 @@ async function fixture(t, variant = {}) {
       materializedAt: NOW, dataThrough: NOW, publishMonths: ["2026-11"] });
     const pid = process.pid + 100, proof = { mode: "seccomp", fixtureOnly: true, noNewPrivs: true, seccompMode: 2,
       networkFdsClosed: true, expectedRoot: jobRoot, preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0,
-      guardSha256: flag("--guard-sha256"), nodeSha256: flag("--node-sha256"), pid: variant.wrongProofPid ? pid + 1 : pid,
+      guardSha256: variant.wrongGuardPin ? "0".repeat(64) : flag("--guard-sha256"), nodeSha256: variant.wrongNodePin ? "0".repeat(64) : flag("--node-sha256"), pid: variant.wrongProofPid ? pid + 1 : pid,
       kernelProbe: { tcpSocketDenied: true, udpSocketDenied: true, ipv6SocketDenied: true,
         syscallsDeniedWithEperm: Object.fromEntries(["socket", "socketpair", "connect", "sendto", "sendmsg"].map(name => [name, true])) },
       nonStandardFdsClosedBeforeExec: true, nonStandardFdsRemainingBeforeExec: 0 };
     if (!variant.missingProof) await json(proofFile, proof);
     const scopes = [{ keyword: A, month: "2026-11", cutoffDate: "2026-11-15" }];
     const prepared = { schemaVersion: 1, version: R.VERSION, status: "complete", fixtureOnly: true, executionBasis: R.BASIS,
-      capturedAt: NOW, bootstrap: true, stateSha256: current.stateSha256, statePointerSha256: current.pointerSha256,
+      capturedAt: variant.wrongCapturedAt ? "2026-11-14T00:00:00.000Z" : NOW, bootstrap: true, stateSha256: current.stateSha256, statePointerSha256: current.pointerSha256,
       inputsFingerprint: "c".repeat(64), outboxInventorySha256: inventory.inventory,
       inputs: [{ directory, exposeScopes: [{ keyword: A, month: "2026-11" }] }], parts: scopes, plan: { scopes }, metrics: { fixtureOnly: true },
-      isolation: { pid, proofSha256: variant.wrongProofSha ? "0".repeat(64) : H.hash(Buffer.from(JSON.stringify(proof))) },
+      isolation: { pid: variant.wrongPreparedPid ? pid + 1 : pid, proofSha256: variant.wrongProofSha ? "0".repeat(64) : H.hash(Buffer.from(JSON.stringify(proof))) },
       sourceMetadata: before, staticDependencies: seeded, providerCalls: 0, sourceWrites: 0, appEntryExecutions: 0, kosisReadOrChanged: false };
-    const bytes = Buffer.from(JSON.stringify(prepared)); await fs.writeFile(path.join(jobRoot, "preparation-complete.json"), bytes);
+    const bytes = Buffer.from(JSON.stringify(prepared));
+    if (!variant.missingPreparation) await fs.writeFile(path.join(jobRoot, "preparation-complete.json"), bytes);
     if (variant.mutateSource) await fs.appendFile(path.join(dataDir, "history/observations.jsonl"), "{}\n");
-    return { exitCode: 0, stderrBytes: 0, pid, stdout: { status: "complete", isolationVerified: true,
-      resultSha256: variant.wrongResultHash ? "0".repeat(64) : H.hash(bytes) } };
+    return { exitCode: 0, stderrBytes: variant.pipedProtocol ? 0 : null, pid, receiptOnly: !variant.pipedProtocol,
+      stdout: variant.pipedProtocol || variant.unexpectedStdout ? { status: "complete", isolationVerified: true, resultSha256: H.hash(bytes) } : null };
   };
   const deps = { fixture: true, execute, publish: async input => { publications++; return B.publishKeywordMonthlyBundle(input); } };
   const call = { dataDir, codeRoot, evidence, mode: "live", now: () => NOW, canPublish: async () => true,
     readDeltaEvidence: async runId => ({ ...evidence, runId }) };
   return { root, dataDir, codeRoot, liveDir, manifestFile, evidence, call, deps, store, lockFile,
-    executions: () => executions, publications: () => publications, lastJob: () => lastJob, pointer: () => fs.readFile(path.join(liveDir, "current.json")) };
+    executions: () => executions, publications: () => publications, lastJob: () => lastJob, lastChildOptions: () => lastChildOptions,
+    pointer: () => fs.readFile(path.join(liveDir, "current.json")) };
 }
 async function absent(file) { await assert.rejects(fs.access(file), { code: "ENOENT" }); }
 async function value(f, keyword, month) {
@@ -152,6 +156,7 @@ test("a second delta DB completion tuple is rechecked again at the final before-
 test("successful fixture transaction preserves untouched public bindings and repeat is a historical no-op", async t => {
   const f = await fixture(t), before = await B.loadBundle(f.liveDir), result = await R.refreshKeywordMonthlyIncremental(f.call, f.deps);
   assert.equal(result.status, "published"); assert.equal(result.fixtureOnly, true); assert.equal(result.refreshedScopeCount, 1);
+  assert.equal(f.lastChildOptions().receiptOnly, true);
   assert.equal(result.unchangedScopeCount, 2); assert.equal(result.strictIsolationVerified, true);
   assert.equal((await value(f, A, "2026-11")).snapshot.summary.lodging.sold, 2);
   assert.equal((await value(f, A, "2026-10")).snapshot.summary.lodging.sold, 1);
@@ -231,7 +236,7 @@ for (const variant of ["tamperedCompressedEvidence", "wrongRawEvidenceHash", "mi
   await absent(path.join(receiptDir, "complete-" + R.keyFor(f.evidence) + ".json"));
 });
 
-for (const variant of ["wrongResultHash", "missingProof", "wrongProofPid", "wrongProofSha"]) test(`${variant} never promotes`, async t => {
+for (const variant of ["pipedProtocol", "unexpectedStdout", "missingPreparation", "wrongCapturedAt", "wrongPreparedPid", "missingProof", "wrongProofPid", "wrongProofSha", "wrongGuardPin", "wrongNodePin"]) test(`${variant} never promotes`, async t => {
   const f = await fixture(t, { [variant]: true }), pointer = await f.pointer();
   await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, f.deps));
   assert.equal(f.executions(), 1, "the proof/result gate is reached before this rejection");

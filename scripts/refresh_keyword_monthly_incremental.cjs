@@ -91,18 +91,23 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       outboxInventorySha256: inventory.inventory, admittedRunIds: [...admittedRunIds], admittedEvidence: [...admittedEvidence.values()], expectedSourceStateSha256: current?.stateSha256 || null };
     const jobInput = path.join(jobRoot, "job-input.json"); await saveBytes(jobInput, Buffer.from(JSON.stringify(job)), 1024 * 1024);
     const node = await fs.realpath(process.execPath), guard = path.join(codeRoot, "scripts/reconstruct_keyword_monthly_incremental.cjs"), launcher = path.join(codeRoot, "scripts/launch_keyword_monthly_isolated.py");
-    const pins = await Promise.all([node, guard, launcher].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json");
+    const pins = await Promise.all([node, guard, launcher].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
+    for (const file of [proofFile, preparationFile]) {
+      try { await fs.lstat(file); throw H.fault("KEYWORD_INCREMENTAL_CHILD_RECEIPT_PREEXISTING"); }
+      catch (e) { if (e.code !== "ENOENT") throw e; }
+    }
     const execute = dependencies.fixture === true && dependencies.execute ? dependencies.execute : prep.runChild;
     await admission();
     const child = await execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
       "--guard-name", "reconstruct_keyword_monthly_incremental.cjs", "--guard-sha256", pins[1].sha256, "--node-sha256", pins[0].sha256,
       "--node-max-old-space-size", "1024", "--", node, guard, "--input", jobInput, "--input-sha", H.hash(Buffer.from(JSON.stringify(job))),
-      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000 });
+      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true });
     if (options.signal?.aborted || child.code === "KEYWORD_PREP_CHILD_ABORTED") throw Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
-    H.need(child.exitCode === 0 && prep.childStderrSafe(child) && child.stdout?.status === "complete" && child.stdout.isolationVerified === true, "KEYWORD_INCREMENTAL_CHILD_INVALID");
+    H.need(child.exitCode === 0 && child.receiptOnly === true && child.stdout === null && child.stderrBytes === null
+      && Number.isSafeInteger(child.pid) && child.pid > 0, "KEYWORD_INCREMENTAL_CHILD_INVALID");
     for (const pin of pins) H.need((await prep.fileHash(pin.file)).sha256 === pin.sha256, "KEYWORD_INCREMENTAL_CODE_CHANGED");
-    const preparation = await H.read(path.join(jobRoot, "preparation-complete.json"), 16 * 1024 * 1024), prepared = preparation.value;
-    H.need(preparation.sha256 === child.stdout.resultSha256 && prepared.version === VERSION && prepared.status === "complete" && prepared.executionBasis === BASIS
+    const preparation = await H.read(preparationFile, 16 * 1024 * 1024), prepared = preparation.value;
+    H.need(prepared.version === VERSION && prepared.status === "complete" && prepared.executionBasis === BASIS && prepared.capturedAt === capturedAt
       && prepared.providerCalls === 0 && prepared.sourceWrites === 0 && prepared.appEntryExecutions === 0 && prepared.kosisReadOrChanged === false
       && prepared.isolation?.pid === child.pid && H.SHA.test(prepared.stateSha256 || "") && Array.isArray(prepared.inputs) && prepared.inputs.length > 0, "KEYWORD_INCREMENTAL_PREPARATION_INVALID");
     const proof = await H.read(proofFile, 65536); prep.isolation(proof.value, jobRoot, { "node-sha": pins[0].sha256, "guard-sha": pins[1].sha256 });

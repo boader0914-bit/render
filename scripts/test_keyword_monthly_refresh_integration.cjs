@@ -71,7 +71,7 @@ test("fresh preparation receives an advancing clock callback rather than a froze
     createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({}) }; },
     refresh: async options => { assert.equal(typeof options.now, "function"); assert.equal(options.mode, "live"); instant += 5000; observedClock = options.now(); return { status: "staged" }; }
   });
-  assert.equal(callbacks.refreshVersion, "keyword-monthly-incremental-v3");
+  assert.equal(callbacks.refreshVersion, "keyword-monthly-incremental-v4");
   await callbacks.refresh({}, {}); assert.equal(observedClock, "2026-10-30T10:00:05.000Z"); await integration.close();
 });
 
@@ -130,7 +130,7 @@ test("incremental reconciliation preserves equal-finish postprocess order and fu
     allowsDerivedUpdates: () => true, runWork: async work => work(),
     createQueue: options => { callbacks = options; return { enqueue: async value => { signals.push(value); return { status: "queued" }; }, status: async () => ({ activatedAt }), close: async () => {} }; }
   }); t.after(() => integration.close());
-  await integration.reconcile(); assert.equal(callbacks.refreshVersion, "keyword-monthly-incremental-v3"); assert.deepEqual(signals.map(value => value.runId), ["run_3", "run_2", "run_1"]);
+  await integration.reconcile(); assert.equal(callbacks.refreshVersion, "keyword-monthly-incremental-v4"); assert.deepEqual(signals.map(value => value.runId), ["run_3", "run_2", "run_1"]);
   const value = await integration.signalCompletedRun("run_1", { historyPayload: { keyword: f.m.keyword }, manifestSha256: f.intent.manifestSha256, scheduleOccurrenceId: f.intent.scheduleOccurrenceId });
   assert.equal(value.status, "queued"); assert.equal(signals.at(-1).runId, "run_1"); assert.equal(signals.at(-1).manifestSha256, f.intent.manifestSha256);
 });
@@ -143,7 +143,7 @@ test("unsupported output namespaces report unknown cohort counts without activat
   }); t.after(() => integration.close());
   const state = await integration.status(); assert.equal(state.status, "needs_verification"); assert.equal(state.errorCode, "KEYWORD_REFRESH_OUTPUT_NAMESPACE_UNSUPPORTED");
   for (const name of ["counts", "items", "currentVersionCounts", "historicalCountsByVersion", "currentVersionNeedsVerification", "historicalNeedsVerification"]) assert.equal(state[name], null);
-  assert.equal(state.refreshVersion, "keyword-monthly-incremental-v3"); await integration.start(); assert.equal(starts, 0);
+  assert.equal(state.refreshVersion, "keyword-monthly-incremental-v4"); await integration.start(); assert.equal(starts, 0);
 });
 
 function completedMetadata(intent, patch = {}) {
@@ -191,7 +191,7 @@ test("prior completion optimization never guesses missing or changed source iden
     ["scope", item => { item.intent.scope = "경남글램핑:2026-10"; }],
     ["missing_scope", item => { delete item.intent.scope; }],
     ["missing_version", item => { delete item.intent.refreshVersion; }],
-    ["current_version_with_stale_job_hash", item => { item.intent.refreshVersion = "keyword-monthly-incremental-v3"; }],
+    ["current_version_with_stale_job_hash", item => { item.intent.refreshVersion = "keyword-monthly-incremental-v4"; }],
     ["unknown_valid_version", item => { Object.assign(item, completedMetadata({ ...item.intent, refreshVersion: "keyword-monthly-refresh-v9" })); }],
     ["queued", item => { item.status = "queued"; }], ["running", item => { item.status = "running"; }],
     ["deferred", item => { item.status = "deferred"; }], ["needs_verification", item => { item.status = "needs_verification"; }],
@@ -223,11 +223,20 @@ test("exact null occurrence and default keyword scope may reuse a validated prio
   await view.integration.reconcile(); assert.deepEqual(view.signals, []); assert.deepEqual(view.statusCalls, [{ limit: 512 }]);
 });
 
-for (const version of ["keyword-monthly-refresh-compressed-v2", "keyword-monthly-incremental-v3"]) test(`an existing checkpoint skips a valid ${version} completion`, async t => {
+for (const version of ["keyword-monthly-refresh-compressed-v2", "keyword-monthly-incremental-v3", "keyword-monthly-incremental-v4"]) test(`an existing checkpoint skips a valid ${version} completion`, async t => {
   const f = await fixture(t, { checkpoint: true }), completed = completedMetadata({ ...f.intent, refreshVersion: version });
   const before = JSON.stringify(completed), view = reconcileReader(f, [completed]); t.after(() => view.integration.close());
   await view.integration.reconcile(); assert.deepEqual(view.signals, []); assert.equal(JSON.stringify(completed), before);
   await assert.rejects(fs.access(path.join(f.root, "keyword_monthly_analysis")), { code: "ENOENT" });
+});
+
+test("a failed v3 source is eligible for the new v4 identity without changing its historical row", async t => {
+  const f = await fixture(t, { checkpoint: true });
+  const prior = completedMetadata({ ...f.intent, refreshVersion: "keyword-monthly-incremental-v3" }, { status: "needs_verification", reasonCode: "ISOLATION_SOCKET_OR_UNSAFE_STDIO", result: null });
+  const original = JSON.stringify(prior), view = reconcileReader(f, [prior]); t.after(() => view.integration.close());
+  await view.integration.reconcile(); assert.deepEqual(view.signals, [f.intent]); assert.equal(JSON.stringify(prior), original);
+  const current = completedMetadata({ ...f.intent, refreshVersion: "keyword-monthly-incremental-v4" });
+  assert.notEqual(current.jobId, prior.jobId);
 });
 
 test("missing checkpoint requests only the newest consumed completion for bootstrap and preserves activation", async t => {

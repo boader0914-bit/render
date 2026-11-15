@@ -1,6 +1,6 @@
 "use strict";
 const H = require("./keyword_monthly_refresh_preparation.cjs");
-const VERSION = "keyword-monthly-incremental-v3", MAX_SCOPES = 128;
+const VERSION = "keyword-monthly-incremental-v4", MAX_SCOPES = 128;
 function planScopes({ state, catalog, evidence, range, capturedAt, inputsFingerprint }) {
   const dirty = new Set(state.dirtyKeywords || []), wanted = new Map(), add = (keyword, month, reason) => {
     H.need(typeof keyword === "string" && keyword.length > 0 && keyword.length <= 160 && !/[\u0000-\u001f\u007f]/.test(keyword) && H.MONTH.test(month), "KEYWORD_INCREMENTAL_SCOPE_INVALID");

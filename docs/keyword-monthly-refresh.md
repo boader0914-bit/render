@@ -2,7 +2,9 @@
 
 ## 현재 v3 구현 경로
 
-이 변경의 중앙 연결 버전은 `keyword-monthly-incremental-v3`다. `refresh_keyword_monthly_incremental.cjs`가 같은 run의 완전 수집·완전 DB 후처리 증거를 확인한 뒤, `reconstruct_keyword_monthly_incremental.cjs` 전용 프로세스에서 저장 입력을 정규화한다. 앱 진입점은 텍스트로 파싱해 필요한 선언만 사용하며 앱 서버·수집기·공급자 서비스를 실행하지 않는다. Linux launcher는 고정된 두 guard 이름, 코드·Node SHA, 같은 PID의 seccomp 증거와 네트워크 차단을 검사한다.
+이 변경의 중앙 연결 버전은 `keyword-monthly-incremental-v4`다. `refresh_keyword_monthly_incremental.cjs`가 같은 run의 완전 수집·완전 DB 후처리 증거를 확인한 뒤, `reconstruct_keyword_monthly_incremental.cjs` 전용 프로세스에서 저장 입력을 정규화한다. 앱 진입점은 텍스트로 파싱해 필요한 선언만 사용하며 앱 서버·수집기·공급자 서비스를 실행하지 않는다. Linux launcher는 고정된 두 guard 이름, 코드·Node SHA, 같은 PID의 seccomp 증거와 네트워크 차단을 검사한다.
+
+전송은 기존 launcher의 `receiptOnly` 방식으로 표준 입출력을 `/dev/null`에 연결한다. Linux Node 부모의 `pipe`는 Unix socket일 수 있으므로 엄격한 표준 입출력 검사를 완화하지 않는다. 부모는 종료 코드 0, 새로운 UUID 작업 폴더의 준비 완료 파일, 정확한 관측 시각, 자식/격리 proof/준비 결과의 같은 PID, proof SHA와 코드 SHA를 검증한다. stdout JSON은 완료 근거로 쓰지 않는다. v3의 실패·보류 큐 원장은 보존하고 v4의 새 job identity로 같은 저장 수집·DB 근거를 검수한다. 이는 원본 재수집이 아니다. 유효한 v3/v4 발행 영수증에는 동일한 기존 보존 정책과 각 버전의 정확한 sourceKey 검증을 적용한다.
 
 처리 방식은 합계에 새 금액을 더하는 방식이 아니다. 새 입력과 변경된 의존성만 private 상태에 채택하고, 영향받은 키워드·월을 기존 `monthly_reports.cjs`와 전월 비교·insights 계산기로 다시 만든다. 변경하지 않은 공개 scope는 기존 partition 연결을 유지한다. 이 문서의 설계·사본 회귀·트랜잭션 시험은 운영 배포나 실제 최신 run의 화면 채택 완료 증거를 대신하지 않는다.
 
@@ -121,7 +123,7 @@ raw 모드는 바뀌지 않는다.
 이미 있는 외부/소유권 불명 준비 폴더나 발행 불명확 상태는 무시·삭제하지 않는다.
 기존 실패 이력도 정상 완료로 고치지 않는다.
 
-v2 당시 중앙 연결자는 `keyword-monthly-refresh-compressed-v2` 큐 버전으로 신호를 기록했다. 현재 중앙 연결자는 `keyword-monthly-incremental-v3`를 사용하며 v1/v2 기록을 보존한다.
+v2 당시 중앙 연결자는 `keyword-monthly-refresh-compressed-v2` 큐 버전으로 신호를 기록했다. 현재 중앙 연결자는 `keyword-monthly-incremental-v4`를 사용하며 v1/v2/v3 기록을 보존한다.
 단독 큐의 기본 v1과 발행 sourceKey 계산 버전은 그대로다. 작업자는 자신의 버전만
 실행·중단 복구하고 다른 버전의 원장 파일은 보존한다. 전역 오류와 전체 건수도
 유지하면서 `currentVersionCounts`, `historicalCountsByVersion`,

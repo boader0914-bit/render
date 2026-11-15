@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { pruneKeywordMonthlyRefreshGenerations: prune } = require("./lib/keyword_monthly_refresh_retention.cjs");
 const digest = b => crypto.createHash("sha256").update(b).digest("hex"), gen = n => n.toString(16).padStart(32, "0");
 const write = async (file, value) => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value)); await fs.writeFile(file, bytes, { flag: "wx", mode: 0o600 }); return { bytes, sha256: digest(bytes) }; };
-async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [] } = {}) {
+async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [], incrementalVersions = {} } = {}) {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-retention-test-"));
   // Every recursive test cleanup is confined to the exact verified mkdtemp root.
   const realParent = await fs.realpath(parent); assert.equal(path.resolve(realParent), path.resolve(parent));
@@ -27,7 +27,7 @@ async function fixture(t, { current = 4, auto = [1, 2, 3, 4], incremental = [] }
     let receiptFile = null;
     if (auto.includes(n)) {
       const runId = "run-" + n, manifestSha256 = digest("manifest" + n), keyword = "경남글램핑", newer = incremental.includes(n),
-        refreshVersion = newer ? "keyword-monthly-incremental-v3" : "keyword-monthly-completed-run-v1", sourceKey = digest(JSON.stringify([refreshVersion, runId, manifestSha256, keyword]));
+        refreshVersion = newer ? incrementalVersions[n] || "keyword-monthly-incremental-v3" : "keyword-monthly-completed-run-v1", sourceKey = digest(JSON.stringify([refreshVersion, runId, manifestSha256, keyword]));
       receiptFile = path.join(root, "refresh-receipts", "complete-" + sourceKey + ".json");
       await write(receiptFile, { schemaVersion: 1, status: "published", mode: "live", generatedBy: newer ? "keyword_monthly_incremental_refresh" : "keyword_monthly_completed_run_refresh", refreshVersion, trigger: "completed_collection_postprocess", jobId: crypto.randomUUID(), sourceKey, runId, manifestSha256, keyword,
         previousPointerSha256: publication.previousPointerSha256, providerCalls: 0, sourceWrites: 0, fixtureOnly: !newer, strictIsolationVerified: newer,
@@ -131,6 +131,14 @@ test("manual current and a larger backup count preserve mixed-owner automatic ge
   const f = await fixture(t, { incremental: [1, 3], current: 9 }), result = await f.call({ keepSuccessfulAuto: 3 });
   assert.deepEqual(result.deleted.map(row => row.generation), [gen(1)]);
   for (const n of [0, 2, 3, 4, 9]) assert.equal(await exists(f.generations.get(n).directory), true);
+});
+
+test("v3 and v4 successful receipts retain their own exact version identity in the same policy", async t => {
+  const f = await fixture(t, { incremental: [1, 2, 3, 4], incrementalVersions: { 2: "keyword-monthly-incremental-v4", 4: "keyword-monthly-incremental-v4" } });
+  const originals = await Promise.all([1,2,3,4].map(n => fs.readFile(f.generations.get(n).receiptFile)));
+  const result = await f.call(); assert.equal(result.ownCompletedReceiptCount, 4);
+  assert.deepEqual(result.deleted.map(row => row.generation).sort(), [gen(1), gen(2)]);
+  for (const [i,n] of [1,2,3,4].entries()) assert.deepEqual(await fs.readFile(f.generations.get(n).receiptFile), originals[i]);
 });
 
 test("new-owner recovery receipts require every incremental proof even when fixture mode is enabled", async t => {
