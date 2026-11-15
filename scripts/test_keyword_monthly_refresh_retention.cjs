@@ -160,8 +160,8 @@ test("manual current and a larger backup count preserve mixed-owner automatic ge
   for (const n of [0, 2, 3, 4, 9]) assert.equal(await exists(f.generations.get(n).directory), true);
 });
 
-test("v3 and v4 successful receipts retain their own exact version identity in the same policy", async t => {
-  const f = await fixture(t, { incremental: [1, 2, 3, 4], incrementalVersions: { 2: "keyword-monthly-incremental-v4", 4: "keyword-monthly-incremental-v4" } });
+test("v3 v4 and v5 successful receipts retain their own exact version identity in the same policy", async t => {
+  const f = await fixture(t, { incremental: [1, 2, 3, 4], incrementalVersions: { 2: "keyword-monthly-incremental-v4", 4: "keyword-monthly-incremental-v5" } });
   const originals = await Promise.all([1,2,3,4].map(n => fs.readFile(f.generations.get(n).receiptFile)));
   const result = await f.call(); assert.equal(result.ownCompletedReceiptCount, 4);
   assert.deepEqual(result.deleted.map(row => row.generation).sort(), [gen(1), gen(2)]);

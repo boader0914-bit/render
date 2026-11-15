@@ -4,6 +4,7 @@
 const fs = require("node:fs/promises");
 const C = require("node:fs").constants;
 const path = require("node:path");
+const os = require("node:os");
 const crypto = require("node:crypto");
 const { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, KEYWORD_MONTHLY_LIMITS: CHILD_LIMITS } = require("./keyword_monthly_analysis.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
@@ -25,6 +26,8 @@ const keywordValid = value => typeof value === "string" && value.length > 0 && v
 const iso = value => typeof value === "string" && /^20\d{2}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value))
   && new Date(`${value.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) === value.slice(0, 10);
 const scopeId = (keyword, month) => JSON.stringify([keyword, month]);
+const PREVALIDATION_KIND = "keyword_monthly_bundle_semantic_prevalidation_v1", PREVALIDATION_BYTES = 16 * 1024 * 1024;
+const inputIdentity = inputs => hash(JSON.stringify(inputs.map(input => ({ directory: path.resolve(input.directory), ...(input.exposeScopes === undefined ? {} : { exposeScopes: input.exposeScopes }) }))));
 function fault(code, statusCode = 503) { return Object.assign(new Error(code), { code, statusCode }); }
 function ensure(value, code, statusCode = 503) { if (!value) throw fault(code, statusCode); }
 async function checkPath(file, directory = false) {
@@ -45,6 +48,12 @@ async function readFile(file, maximum) {
     ensure(offset === before.size && sameStat(before, await handle.stat()) && sameStat(before, await checkPath(file)), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
     const buffer = bytes.subarray(0, offset); return { file, bytes: buffer, size: buffer.length, sha256: hash(buffer), stamp: before };
   } finally { await handle.close(); }
+}
+async function exactDirectoryEntries(directory, expected, maximum) {
+  const before = await checkPath(directory, true), entries = await fs.readdir(directory, { withFileTypes: true });
+  ensure(entries.length <= maximum && entries.every(entry => !entry.isSymbolicLink())
+    && JSON.stringify(entries.map(entry => entry.name).sort()) === JSON.stringify([...expected].sort())
+    && sameStat(before, await checkPath(directory, true)), "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_READBACK_FAILED");
 }
 function json(read) { try { return JSON.parse(read.bytes.toString("utf8")); } catch { throw fault("KEYWORD_MONTHLY_BUNDLE_INVALID_JSON"); } }
 function validatePointer(value) {
@@ -255,7 +264,65 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
 async function ensureDirectory(directory) {
   try { await checkPath(directory, true); } catch (error) { if (error.code !== "ENOENT") throw error; await checkPath(path.dirname(directory), true); await fs.mkdir(directory, { mode: 0o700 }); await checkPath(directory, true); }
 }
-async function inputPartition(input, now, { prepareResults = false } = {}) {
+const resultName = descriptor => `${descriptor.sha256}.json${descriptor.encoding === "gzip" ? ".gz" : ""}`;
+function validateResultBuild(prepareResults, preparedQueries) {
+  ensure(typeof prepareResults === "boolean" && Array.isArray(preparedQueries) && preparedQueries.length <= RESULT_LIMITS.results
+    && (prepareResults || preparedQueries.length === 0), "KEYWORD_MONTHLY_RESULT_BUILD_INVALID");
+  const ids = new Set();
+  for (const query of preparedQueries) {
+    ensure(exact(query, ["keyword", "month", "cutoffDate"]) && keywordValid(query.keyword) && MONTH.test(query.month)
+      && typeof query.cutoffDate === "string" && /^20\d{2}-\d\d-\d\d$/.test(query.cutoffDate)
+      && Number.isFinite(Date.parse(`${query.cutoffDate}T00:00:00Z`)) && new Date(`${query.cutoffDate}T00:00:00Z`).toISOString().slice(0, 10) === query.cutoffDate
+      && !ids.has(queryId(query)), "KEYWORD_MONTHLY_RESULT_QUERY_INVALID"); ids.add(queryId(query));
+  }
+}
+function validPreparationShape(value) {
+  return exact(value, ["schemaVersion", "kind", "fixedValidationClock", "maxTotalBytes", "inputsFingerprint", "parts", ...(value?.schemaVersion === 2 ? ["preparedResults"] : [])])
+    && [1, 2].includes(value.schemaVersion) && value.kind === PREVALIDATION_KIND && iso(value.fixedValidationClock)
+    && Array.isArray(value.parts) && value.parts.length > 0 && value.parts.length <= LIMITS.partitions
+    && Number.isSafeInteger(value.maxTotalBytes) && value.maxTotalBytes > 0 && value.maxTotalBytes <= 8 * 1024 * 1024 * 1024 && SHA.test(value.inputsFingerprint || "")
+    && Buffer.byteLength(JSON.stringify(value)) <= PREVALIDATION_BYTES;
+}
+async function savePreparedAnalysis(result, partitionKey, directory, descriptors, maximum) {
+  const saved = encodePreparedResult(result, { partition: partitionKey });
+  ensure(descriptors.length < RESULT_LIMITS.results, "KEYWORD_MONTHLY_RESULT_CATALOG_BOUND");
+  ensure(descriptors.reduce((sum, row) => sum + row.bytes, 0) + saved.bytes.length <= maximum, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
+  const file = path.join(directory, resultName(saved.descriptor));
+  await fs.writeFile(file, saved.bytes, { flag: "wx", mode: 0o600 });
+  const check = await readFile(file, RESULT_LIMITS.encodedBytes);
+  ensure(check.sha256 === saved.descriptor.sha256 && check.size === saved.descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
+  descriptors.push(saved.descriptor);
+}
+// This validation uses only bounded metadata and file bytes. The attested
+// isolated child already decoded and semantically validated each final result.
+async function preparedMetadata(preparation, parts) {
+  if (preparation.schemaVersion === 1) return null;
+  const saved = preparation.preparedResults;
+  ensure(exact(saved, ["directory", "calculationFingerprint", "descriptors"])
+    && typeof saved.directory === "string" && path.isAbsolute(saved.directory) && path.resolve(saved.directory) === saved.directory
+    && saved.directory !== path.parse(saved.directory).root && saved.calculationFingerprint === calculationFingerprint()
+    && Array.isArray(saved.descriptors) && saved.descriptors.length > 0 && saved.descriptors.length <= RESULT_LIMITS.results, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+  const scopes = new Map(), ids = new Set(), indexes = new Map();
+  for (const part of parts) {
+    let index = indexes.get(part.index.sha256);
+    if (!index) { index = json(await readFile(part.index.file, CHILD_LIMITS.indexBytes)); indexes.set(part.index.sha256, index); }
+    for (const scope of part.exposed) scopes.set(scopeId(scope.keyword, scope.month), { part, index });
+  }
+  for (const descriptor of saved.descriptors) {
+    validatePreparedDescriptor(descriptor); const item = scopes.get(scopeId(descriptor.keyword, descriptor.month)), id = queryId(descriptor);
+    const source = item?.index.keywords.find(row => row.keyword === descriptor.keyword)?.scopes.find(row => row.month === descriptor.month);
+    ensure(item && descriptor.partition === item.part.index.sha256 && source && descriptor.sourceProjectionSha256 === source.sha256
+      && descriptor.calculationFingerprint === saved.calculationFingerprint && !ids.has(id), "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID"); ids.add(id);
+  }
+  for (const { part } of scopes.values()) for (const row of part.validation) ensure(ids.has(queryId(row.query)), "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+  await exactDirectoryEntries(saved.directory, saved.descriptors.map(resultName), RESULT_LIMITS.results);
+  for (const descriptor of saved.descriptors) {
+    const read = await readFile(path.join(saved.directory, resultName(descriptor)), RESULT_LIMITS.encodedBytes);
+    ensure(read.sha256 === descriptor.sha256 && read.size === descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
+  }
+  return saved;
+}
+async function inputPartition(input, now, prevalidated = null, resultOutput = null) {
   ensure(plain(input) && Object.keys(input).every(key => ["directory", "exposeScopes"].includes(key)) && typeof input.directory === "string" && path.isAbsolute(input.directory), "KEYWORD_MONTHLY_BUNDLE_INPUT_DIRECTORY");
   const directory = path.resolve(input.directory), index = await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes), value = json(index);
   const service = createKeywordMonthlyAnalysis({ projectionDir: directory, now: () => now }), options = await service.options();
@@ -272,41 +339,112 @@ async function inputPartition(input, now, { prepareResults = false } = {}) {
     ensure(read.sha256 === scope.sha256 && read.size === scope.bytes, "KEYWORD_MONTHLY_BUNDLE_INPUT_PROJECTION_MISMATCH"); files.push({ name, sha256: read.sha256, bytes: read.size });
   }
   const validation = [];
-  for (const scope of prepareResults ? [] : exposed) {
-    const item = options.keywords.find(row => row.keyword === scope.keyword), query = { ...scope, cutoffDate: item.defaultCutoffs[scope.month] }, result = await service.analyze(query);
-    if (!(["available", "stale"].includes(result.status) && result.snapshot && result.request.keyword === query.keyword && result.request.month === query.month && result.request.cutoffDate === query.cutoffDate && SHA.test(result.snapshot.sources?.digest || ""))) throw Object.assign(fault("KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED"), { scope: query, inputStatus: result.status, diagnostics: result.diagnostics });
-    validation.push({ query, status: result.status, selectedDigest: result.snapshot.sources.digest, inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough });
+  if (prevalidated !== null) {
+    // Only the incremental host may supply this path, after binding the complete
+    // descriptor to its successful, network-denied child's PID/proof/receipt.
+    // Re-read every stored byte/index and reconstruct options here. Never parse
+    // a normalized projection or rebuild a financial graph in the web parent.
+    const metadata = { directory, index: { file: index.file, sha256: index.sha256, size: index.size }, exposed, files, options: narrowOptions(options, exposed) };
+    ensure(exact(prevalidated, ["directory", "index", "exposed", "files", "validation", "options"])
+      && JSON.stringify(Object.fromEntries(Object.keys(metadata).map(key => [key, prevalidated[key]]))) === JSON.stringify(metadata)
+      && Array.isArray(prevalidated.validation) && prevalidated.validation.length === exposed.length, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+    for (let position = 0; position < exposed.length; position++) {
+      const scope = exposed[position], item = options.keywords.find(row => row.keyword === scope.keyword), query = { keyword: scope.keyword, month: scope.month, cutoffDate: item.defaultCutoffs[scope.month] }, row = prevalidated.validation[position];
+      const dataThroughDay = new Date(Date.parse(options.provenance.dataThrough) + 9 * 3600000).toISOString().slice(0, 10);
+      const expectedStatus = options.status === "stale" || options.provenance.observationScope !== "selected_only" && query.cutoffDate > dataThroughDay ? "stale" : "available";
+      ensure(exact(row, ["query", "status", "selectedDigest", "inputSha256", "dataThrough"])
+        && exact(row.query, ["keyword", "month", "cutoffDate"]) && JSON.stringify(row.query) === JSON.stringify(query)
+        && row.status === expectedStatus && SHA.test(row.selectedDigest) && row.inputSha256 === options.provenance.inputSha256
+        && row.dataThrough === options.provenance.dataThrough, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+      validation.push({ ...row, query: { ...row.query } });
+    }
+  } else {
+    for (const scope of exposed) {
+      const item = options.keywords.find(row => row.keyword === scope.keyword), query = { keyword: scope.keyword, month: scope.month, cutoffDate: item.defaultCutoffs[scope.month] }, result = await service.analyze(query);
+      if (!(["available", "stale"].includes(result.status) && result.snapshot && result.request.keyword === query.keyword && result.request.month === query.month && result.request.cutoffDate === query.cutoffDate && SHA.test(result.snapshot.sources?.digest || ""))) throw Object.assign(fault("KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED"), { scope: query, inputStatus: result.status, diagnostics: result.diagnostics });
+      validation.push({ query, status: result.status, selectedDigest: result.snapshot.sources.digest, inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough });
+      if (resultOutput) await savePreparedAnalysis(result, index.sha256, resultOutput.directory, resultOutput.descriptors, resultOutput.maximum);
+    }
   }
   ensure((await readFile(path.join(directory, "index.json"), CHILD_LIMITS.indexBytes)).sha256 === index.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
   return { directory, index: { file: index.file, sha256: index.sha256, size: index.size }, exposed, files, validation, options: narrowOptions(options, exposed) };
 }
-async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCurrentSha256 = null, maxTotalBytes = LIMITS.defaultTotalBytes,
-  beforePromote, prepareResults = false, preparedQueries = [] } = {}) {
-  ensure(Array.isArray(inputs) && inputs.length > 0 && inputs.length <= LIMITS.partitions && typeof outputDir === "string" && path.isAbsolute(outputDir) && iso(now), "KEYWORD_MONTHLY_BUNDLE_BUILD_INPUT");
-  ensure(typeof prepareResults === "boolean" && Array.isArray(preparedQueries) && preparedQueries.length <= RESULT_LIMITS.results
-    && (prepareResults || preparedQueries.length === 0), "KEYWORD_MONTHLY_RESULT_BUILD_INVALID");
-  const preparedQueryIds = new Set();
-  for (const query of preparedQueries) {
-    ensure(exact(query, ["keyword", "month", "cutoffDate"]) && keywordValid(query.keyword) && MONTH.test(query.month)
-      && typeof query.cutoffDate === "string" && /^20\d{2}-\d\d-\d\d$/.test(query.cutoffDate)
-      && Number.isFinite(Date.parse(`${query.cutoffDate}T00:00:00Z`)) && new Date(`${query.cutoffDate}T00:00:00Z`).toISOString().slice(0, 10) === query.cutoffDate
-      && !preparedQueryIds.has(queryId(query)), "KEYWORD_MONTHLY_RESULT_QUERY_INVALID");
-    preparedQueryIds.add(queryId(query));
+async function prepareKeywordMonthlyBundle({ inputs, now, maxTotalBytes = LIMITS.defaultTotalBytes,
+  prepareResults = false, preparedQueries = [], preparedOutputDir } = {}) {
+  ensure(Array.isArray(inputs) && inputs.length > 0 && inputs.length <= LIMITS.partitions && iso(now), "KEYWORD_MONTHLY_BUNDLE_BUILD_INPUT");
+  ensure(Number.isSafeInteger(maxTotalBytes) && maxTotalBytes > 0 && maxTotalBytes <= 8 * 1024 * 1024 * 1024, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
+  validateResultBuild(prepareResults, preparedQueries);
+  let resultOutput = null;
+  if (prepareResults) {
+    ensure(typeof preparedOutputDir === "string" && path.isAbsolute(preparedOutputDir) && path.resolve(preparedOutputDir) === preparedOutputDir
+      && preparedOutputDir !== path.parse(preparedOutputDir).root, "KEYWORD_MONTHLY_RESULT_OUTPUT_INVALID");
+    await checkPath(path.dirname(preparedOutputDir), true); await fs.mkdir(preparedOutputDir, { mode: 0o700 }); await checkPath(preparedOutputDir, true);
+    resultOutput = { directory: preparedOutputDir, calculationFingerprint: calculationFingerprint(), descriptors: [] };
+    Object.defineProperty(resultOutput, "maximum", { value: maxTotalBytes });
   }
+  const parts = []; for (const input of inputs) parts.push(await inputPartition(input, now, null, resultOutput));
+  if (resultOutput) {
+    for (const query of preparedQueries) {
+      const part = parts.find(value => value.exposed.some(scope => scope.keyword === query.keyword && scope.month === query.month));
+      ensure(part, "KEYWORD_MONTHLY_RESULT_QUERY_UNEXPOSED");
+      if (resultOutput.descriptors.some(row => queryId(row) === queryId(query))) continue;
+      const result = await createKeywordMonthlyAnalysis({ projectionDir: part.directory, now: () => now }).analyze(query);
+      ensure(["available", "stale"].includes(result.status) && result.snapshot && queryId(result.request) === queryId(query), "KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED");
+      await savePreparedAnalysis(result, part.index.sha256, resultOutput.directory, resultOutput.descriptors, maxTotalBytes);
+    }
+    resultOutput.descriptors.sort((a, b) => queryId(a).localeCompare(queryId(b)));
+  }
+  const value = { schemaVersion: prepareResults ? 2 : 1, kind: PREVALIDATION_KIND, fixedValidationClock: new Date(now).toISOString(), maxTotalBytes, inputsFingerprint: inputIdentity(inputs), parts,
+    ...(resultOutput ? { preparedResults: resultOutput } : {}) };
+  await preparedMetadata(value, parts);
+  const unique = new Map(parts.map(part => [part.index.sha256, part]));
+  ensure([...unique.values()].reduce((sum, part) => sum + part.index.size + part.files.reduce((total, file) => total + file.bytes, 0), 0)
+    + (resultOutput?.descriptors.reduce((sum, row) => sum + row.bytes, 0) || 0) <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
+  ensure(Buffer.byteLength(JSON.stringify(value)) <= PREVALIDATION_BYTES, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_BOUND");
+  return value;
+}
+async function publishKeywordMonthlyBundle(options = {}) {
+  // Generic explicit/offline publication performs semantic validation here.
+  // The web incremental parent always calls the prevalidated API instead.
+  let temporary;
+  if (options.prepareResults && !options.preparedOutputDir) temporary = await fs.mkdtemp(path.join(os.tmpdir(), "keyword-monthly-final-results-"));
+  try {
+    const preparation = await prepareKeywordMonthlyBundle({ ...options, ...(temporary ? { preparedOutputDir: path.join(temporary, "results") } : {}) });
+    return await publishPrevalidatedKeywordMonthlyBundle({ ...options, preparation });
+  } finally {
+    // Only remove the exact newly-created, owned namespace. Unknown artifacts
+    // hold cleanup; no recursive or wildcard removal reaches existing data.
+    if (temporary) {
+      try { const directory = path.join(temporary, "results"), entries = await fs.readdir(directory, { withFileTypes: true });
+        if (entries.every(entry => entry.isFile() && /^[a-f0-9]{64}\.json(?:\.gz)?$/.test(entry.name))) {
+          for (const entry of entries) { await checkPath(path.join(directory, entry.name)); await fs.unlink(path.join(directory, entry.name)); }
+          await fs.rmdir(directory); await fs.rmdir(temporary);
+        }
+      } catch {} // Failed/unknown preparation evidence is retained for review.
+    }
+  }
+}
+async function publishPrevalidatedKeywordMonthlyBundle({ inputs, outputDir, now, expectedCurrentSha256 = null, maxTotalBytes = LIMITS.defaultTotalBytes, beforePromote, preparation } = {}) {
+  ensure(Array.isArray(inputs) && inputs.length > 0 && inputs.length <= LIMITS.partitions && typeof outputDir === "string" && path.isAbsolute(outputDir) && iso(now), "KEYWORD_MONTHLY_BUNDLE_BUILD_INPUT");
   ensure(Number.isSafeInteger(maxTotalBytes) && maxTotalBytes > 0 && maxTotalBytes <= 8 * 1024 * 1024 * 1024, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
   ensure(expectedCurrentSha256 === null || SHA.test(expectedCurrentSha256), "KEYWORD_MONTHLY_BUNDLE_EXPECTED_POINTER");
-  const prepared = []; for (const input of inputs) prepared.push(await inputPartition(input, now, { prepareResults }));
+  ensure(validPreparationShape(preparation) && preparation.fixedValidationClock === new Date(now).toISOString()
+    && preparation.maxTotalBytes === maxTotalBytes && preparation.inputsFingerprint === inputIdentity(inputs)
+    && Array.isArray(preparation.parts) && preparation.parts.length === inputs.length
+    && Buffer.byteLength(JSON.stringify(preparation)) <= PREVALIDATION_BYTES, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+  const prepared = []; for (let position = 0; position < inputs.length; position++) prepared.push(await inputPartition(inputs[position], now, preparation.parts[position]));
+  const preparedResults = await preparedMetadata(preparation, prepared);
   const partitions = new Map(), scopes = [], seen = new Set(); let totalBytes = 0;
   for (const part of prepared) {
-    if (!partitions.has(part.index.sha256)) { partitions.set(part.index.sha256, part); totalBytes += part.index.size + part.files.reduce((sum, file) => sum + file.bytes, 0); }
+    if (!partitions.has(part.index.sha256)) { partitions.set(part.index.sha256, { ...part }); totalBytes += part.index.size + part.files.reduce((sum, file) => sum + file.bytes, 0); }
     for (const scope of part.exposed) { const id = scopeId(scope.keyword, scope.month); ensure(!seen.has(id), "KEYWORD_MONTHLY_BUNDLE_SCOPE_CONFLICT"); seen.add(id); scopes.push({ ...scope, partition: part.index.sha256 }); }
   }
   ensure(scopes.length <= LIMITS.scopes && totalBytes <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
-  ensure(preparedQueries.every(query => scopes.some(scope => scope.keyword === query.keyword && scope.month === query.month)), "KEYWORD_MONTHLY_RESULT_QUERY_UNEXPOSED");
   let catalog = validateCatalog({ schemaVersion: 1, kind: "keyword_monthly_partition_bundle", createdAt: new Date(now).toISOString(),
     partitions: [...partitions].map(([key, part]) => ({ key, indexSha256: key, indexBytes: part.index.size })), scopes: scopes.sort((a, b) => scopeId(a.keyword, a.month).localeCompare(scopeId(b.keyword, b.month))) });
-  let catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
-  const scopePlanSha256 = hash(catalogBytes);
+  const scopePlanSha256 = hash(Buffer.from(JSON.stringify(catalog)));
+  if (preparedResults) catalog = validateCatalog({ ...catalog, schemaVersion: 2, preparedResults: preparedResults.descriptors });
+  const catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
   // Recombine a repeated identical input index's explicit subsets before the
   // exact same options-size check used by the runtime reader.
   for (const [key, part] of partitions) {
@@ -325,34 +463,16 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     for (const file of part.files) { const read = await readFile(path.join(part.directory, "projections", file.name), CHILD_LIMITS.projectionBytes); ensure(read.sha256 === file.sha256 && read.size === file.bytes, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); await fs.writeFile(path.join(target, "projections", file.name), read.bytes, { flag: "wx", mode: 0o600 }); const copied = await readFile(path.join(target, "projections", file.name), CHILD_LIMITS.projectionBytes); ensure(copied.sha256 === file.sha256 && copied.size === file.bytes, "KEYWORD_MONTHLY_BUNDLE_COPY_MISMATCH"); }
     const index = await readFile(path.join(part.directory, "index.json"), CHILD_LIMITS.indexBytes); ensure(index.sha256 === key && index.size === part.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); await fs.writeFile(path.join(target, "index.json"), index.bytes, { flag: "wx", mode: 0o600 });
   }
-  if (prepareResults) {
-    const resultDir = path.join(generationDir, "results"); await fs.mkdir(resultDir, { mode: 0o700 });
-    const results = [];
-    // Compute and write one final payload at a time. Do not retain a second
-    // all-scope snapshot graph or an all-scope encoded-result buffer cache.
-    for (const [key, part] of partitions) {
-      const service = createKeywordMonthlyAnalysis({ projectionDir: path.join(generationDir, "partitions", key), now: () => now });
-      const queries = new Map();
-      for (const scope of scopes.filter(scope => scope.partition === key)) {
-        const item = part.options.keywords.find(row => row.keyword === scope.keyword), query = { keyword: scope.keyword, month: scope.month, cutoffDate: item.defaultCutoffs[scope.month] };
-        queries.set(queryId(query), query);
-      }
-      for (const query of preparedQueries.filter(query => scopes.some(scope => scope.partition === key && scope.keyword === query.keyword && scope.month === query.month))) queries.set(queryId(query), query);
-      ensure(results.length + queries.size <= RESULT_LIMITS.results, "KEYWORD_MONTHLY_RESULT_CATALOG_BOUND");
-      for (const query of queries.values()) {
-        const result = await service.analyze(query);
-        if (!(["available", "stale"].includes(result.status) && result.snapshot && queryId(result.request) === queryId(query))) throw Object.assign(fault("KEYWORD_MONTHLY_BUNDLE_INPUT_ANALYSIS_FAILED"), { scope: query, inputStatus: result.status, diagnostics: result.diagnostics });
-        const saved = encodePreparedResult(result, { partition: key });
-        totalBytes += saved.bytes.length; ensure(totalBytes <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
-        const file = path.join(resultDir, `${saved.descriptor.sha256}.json${saved.descriptor.encoding === "gzip" ? ".gz" : ""}`);
-        await fs.writeFile(file, saved.bytes, { flag: "wx", mode: 0o600 });
-        const copied = await readFile(file, RESULT_LIMITS.encodedBytes); ensure(copied.sha256 === saved.descriptor.sha256 && copied.size === saved.descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
-        results.push(saved.descriptor);
-        part.validation.push({ query, status: result.status, selectedDigest: result.snapshot.sources.digest, inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough });
-      }
+  if (preparedResults) {
+    const target = path.join(generationDir, "results"); await fs.mkdir(target, { mode: 0o700 });
+    for (const descriptor of preparedResults.descriptors) {
+      const saved = await readFile(path.join(preparedResults.directory, resultName(descriptor)), RESULT_LIMITS.encodedBytes);
+      ensure(saved.sha256 === descriptor.sha256 && saved.size === descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
+      totalBytes += saved.size; ensure(totalBytes <= maxTotalBytes, "KEYWORD_MONTHLY_BUNDLE_TOTAL_BOUND");
+      await fs.writeFile(path.join(target, resultName(descriptor)), saved.bytes, { flag: "wx", mode: 0o600 });
+      const copied = await readFile(path.join(target, resultName(descriptor)), RESULT_LIMITS.encodedBytes);
+      ensure(copied.sha256 === descriptor.sha256 && copied.size === descriptor.bytes, "KEYWORD_MONTHLY_RESULT_COPY_MISMATCH");
     }
-    catalog = validateCatalog({ ...catalog, schemaVersion: 2, preparedResults: results.sort((a, b) => queryId(a).localeCompare(queryId(b))) });
-    catalogBytes = Buffer.from(JSON.stringify(catalog)); ensure(catalogBytes.length <= LIMITS.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
   }
   await fs.writeFile(path.join(generationDir, "catalog.json"), catalogBytes, { flag: "wx", mode: 0o600 });
   const pointer = { schemaVersion: 1, generation, catalogSha256: hash(catalogBytes), catalogBytes: catalogBytes.length, publishedAt: new Date(now).toISOString() }, pointerBytes = Buffer.from(JSON.stringify(pointer));
@@ -367,16 +487,16 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     if (beforePromote) await beforePromote(Object.freeze({ schemaVersion: 1, kind: "keyword_monthly_catalog_candidate",
       generation, catalogSchemaVersion: catalog.schemaVersion, catalogSha256: pointer.catalogSha256, catalogBytes: catalogBytes.length,
       scopePlanSha256, partitionCount: partitions.size, scopeCount: scopes.length,
-      preparedResultCount: catalog.preparedResults?.length || 0, ...(prepareResults ? { calculationFingerprint: calculationFingerprint() } : {}) }));
+      preparedResultCount: catalog.preparedResults?.length || 0, ...(preparedResults ? { calculationFingerprint: preparedResults.calculationFingerprint } : {}) }));
     const finalCatalog = await readFile(path.join(generationDir, "catalog.json"), LIMITS.catalogBytes);
     ensure(finalCatalog.sha256 === pointer.catalogSha256 && finalCatalog.size === catalogBytes.length, "KEYWORD_MONTHLY_BUNDLE_CHANGED_BEFORE_PROMOTION");
     for (const [key, part] of partitions) {
       const finalIndex = await readFile(path.join(generationDir, "partitions", key, "index.json"), CHILD_LIMITS.indexBytes);
       ensure(finalIndex.sha256 === key && finalIndex.size === part.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_BEFORE_PROMOTION");
     }
-    if (prepareResults) for (const result of catalog.preparedResults) {
-      const saved = await readFile(path.join(generationDir, "results", `${result.sha256}.json${result.encoding === "gzip" ? ".gz" : ""}`), RESULT_LIMITS.encodedBytes);
-      ensure(saved.sha256 === result.sha256 && saved.size === result.bytes, "KEYWORD_MONTHLY_RESULT_CHANGED_BEFORE_PROMOTION");
+    if (preparedResults) for (const descriptor of preparedResults.descriptors) {
+      const saved = await readFile(path.join(generationDir, "results", resultName(descriptor)), RESULT_LIMITS.encodedBytes);
+      ensure(saved.sha256 === descriptor.sha256 && saved.size === descriptor.bytes, "KEYWORD_MONTHLY_RESULT_CHANGED_BEFORE_PROMOTION");
     }
     const temporary = path.join(directory, `.current-${generation}.tmp`), handle = await fs.open(temporary, "wx", 0o600);
     try { await handle.writeFile(pointerBytes); await handle.sync(); } finally { await handle.close(); }
@@ -385,9 +505,10 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     const readback = await loadBundle(directory); ensure(readback.pointerRead.sha256 === hash(pointerBytes) && readback.catalogRead.sha256 === pointer.catalogSha256, "KEYWORD_MONTHLY_BUNDLE_PUBLICATION_READBACK");
     const receipt = { schemaVersion: 1, status: "published", generation, bundleDir: directory, totalStoredBytes: totalBytes, pointerSha256: hash(pointerBytes), previousPointerSha256: previous?.sha256 || null,
       catalogSha256: pointer.catalogSha256, partitionCount: partitions.size, scopeCount: scopes.length, fixedValidationClock: new Date(now).toISOString(),
-      ...(prepareResults ? { preparedResultCount: catalog.preparedResults.length, calculationFingerprint: calculationFingerprint() } : {}),
+      ...(preparedResults ? { preparedResultCount: preparedResults.descriptors.length, calculationFingerprint: preparedResults.calculationFingerprint } : {}),
       partitions: prepared.map(part => ({ inputIndexSha256: part.index.sha256, inputIndexBytes: part.index.size, validation: part.validation })),
       sourceProvenancePreserved: true, originalEnvelopesRewritten: false, providerCalls: 0, collectorStarted: false, kosisReadOrChanged: false,
+      semanticPrevalidationSha256: hash(JSON.stringify(preparation)), publicationProjectionAnalyses: 0,
       freshnessPolicy: "Original child materializedAt/dataThrough/status retained; bundle assembly never refreshes historical source provenance." };
     await fs.writeFile(path.join(generationDir, "publication-receipt.json"), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx", mode: 0o600 }); return receipt;
   } catch (error) { if (promoted) throw committedError(error); throw error; }
@@ -397,4 +518,63 @@ async function publishKeywordMonthlyBundle({ inputs, outputDir, now, expectedCur
     } catch (error) { if (promoted) throw committedError(error); throw error; }
   }
 }
-module.exports = { createKeywordMonthlyBundleAnalysis, publishKeywordMonthlyBundle, validateCatalog, validatePointer, loadBundle, composeOptions, readBundleFile: readFile, KEYWORD_MONTHLY_BUNDLE_LIMITS: LIMITS };
+async function verifyPrevalidatedKeywordMonthlyBundle({ projectionDir, expectedCatalogSha256, preparation, wantedScopes } = {}) {
+  ensure(typeof projectionDir === "string" && path.isAbsolute(projectionDir) && SHA.test(expectedCatalogSha256 || "")
+    && validPreparationShape(preparation)
+    && Array.isArray(wantedScopes) && wantedScopes.length > 0 && wantedScopes.length <= LIMITS.scopes
+    && wantedScopes.every(scope => exact(scope, ["keyword", "month"]) && keywordValid(scope.keyword) && MONTH.test(scope.month)),
+  "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+  const loaded = await loadBundle(projectionDir), receiptRead = await readFile(path.join(loaded.generationDir, "publication-receipt.json"), 256 * 1024), receipt = json(receiptRead);
+  ensure(loaded.catalogRead.sha256 === expectedCatalogSha256 && receipt.status === "published" && receipt.generation === loaded.pointer.generation
+    && receipt.pointerSha256 === loaded.pointerRead.sha256 && receipt.catalogSha256 === loaded.catalogRead.sha256
+    && receipt.fixedValidationClock === preparation.fixedValidationClock && receipt.semanticPrevalidationSha256 === hash(JSON.stringify(preparation))
+    && receipt.publicationProjectionAnalyses === 0 && receipt.sourceProvenancePreserved === true && receipt.originalEnvelopesRewritten === false
+    && receipt.providerCalls === 0 && receipt.collectorStarted === false && receipt.kosisReadOrChanged === false,
+  "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_READBACK_FAILED");
+  await exactDirectoryEntries(loaded.generationDir, ["catalog.json", "publication-receipt.json", "partitions", ...(preparation.schemaVersion === 2 ? ["results"] : [])], 4);
+  await exactDirectoryEntries(path.join(loaded.generationDir, "partitions"), loaded.catalog.partitions.map(part => part.key), LIMITS.partitions);
+  const expectedParts = new Map(), expectedScopes = [], seenScopes = new Set(), validations = new Map(), publishedParts = []; let totalStoredBytes = 0;
+  for (const part of preparation.parts) {
+    ensure(plain(part) && SHA.test(part.index?.sha256 || "") && Array.isArray(part.exposed), "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_INVALID");
+    const directory = path.join(loaded.generationDir, "partitions", part.index.sha256), adjusted = { ...part, directory, index: { ...part.index, file: path.join(directory, "index.json") } };
+    const current = await inputPartition({ directory, exposeScopes: part.exposed }, preparation.fixedValidationClock, adjusted);
+    publishedParts.push(current);
+    if (!expectedParts.has(current.index.sha256)) {
+      expectedParts.set(current.index.sha256, { key: current.index.sha256, indexSha256: current.index.sha256, indexBytes: current.index.size });
+      totalStoredBytes += current.index.size + current.files.reduce((sum, file) => sum + file.bytes, 0);
+      await exactDirectoryEntries(directory, ["index.json", "projections"], 2);
+      await exactDirectoryEntries(path.join(directory, "projections"), current.files.map(file => file.name), CHILD_LIMITS.scopes);
+    }
+    for (const scope of current.exposed) {
+      const id = scopeId(scope.keyword, scope.month); ensure(!seenScopes.has(id), "KEYWORD_MONTHLY_BUNDLE_SCOPE_CONFLICT"); seenScopes.add(id);
+      expectedScopes.push({ ...scope, partition: current.index.sha256 });
+      validations.set(id, { indexSha256: current.index.sha256, value: current.validation.find(row => row.query.keyword === scope.keyword && row.query.month === scope.month) });
+    }
+  }
+  let expectedCatalog = { schemaVersion: 1, kind: "keyword_monthly_partition_bundle", createdAt: new Date(preparation.fixedValidationClock).toISOString(),
+    partitions: [...expectedParts.values()], scopes: expectedScopes.sort((a, b) => scopeId(a.keyword, a.month).localeCompare(scopeId(b.keyword, b.month))) };
+  if (preparation.schemaVersion === 2) {
+    // Recovery never needs the removed disposable child namespace. Bind the
+    // unchanged attestation, then inspect the exact committed published files.
+    const saved = await preparedMetadata({ ...preparation, preparedResults: { ...preparation.preparedResults, directory: path.join(loaded.generationDir, "results") } }, publishedParts);
+    expectedCatalog = { ...expectedCatalog, schemaVersion: 2, preparedResults: saved.descriptors };
+    totalStoredBytes += saved.descriptors.reduce((sum, descriptor) => sum + descriptor.bytes, 0);
+    ensure(receipt.preparedResultCount === saved.descriptors.length && receipt.calculationFingerprint === saved.calculationFingerprint, "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_READBACK_FAILED");
+  }
+  ensure(JSON.stringify(loaded.catalog) === JSON.stringify(expectedCatalog) && receipt.partitionCount === expectedParts.size
+    && receipt.totalStoredBytes === totalStoredBytes && totalStoredBytes <= preparation.maxTotalBytes
+    && receipt.scopeCount === expectedScopes.length && JSON.stringify(receipt.partitions) === JSON.stringify(preparation.parts.map(part => ({ inputIndexSha256: part.index.sha256, inputIndexBytes: part.index.size, validation: part.validation }))),
+  "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_READBACK_FAILED");
+  const scopes = [], wantedIds = new Set();
+  for (const wanted of wantedScopes) {
+    const id = scopeId(wanted.keyword, wanted.month), validated = validations.get(id); ensure(validated && !wantedIds.has(id), "KEYWORD_MONTHLY_BUNDLE_PREVALIDATION_READBACK_FAILED"); wantedIds.add(id);
+    const row = validated.value, query = row.query;
+    scopes.push({ ...query, resultId: hash(JSON.stringify([loaded.pointerRead.sha256, loaded.catalogRead.sha256, validated.indexSha256, query])),
+      inputSha256: row.inputSha256, dataThrough: row.dataThrough, selectedDigest: row.selectedDigest, status: row.status });
+  }
+  ensure((await loadBundle(projectionDir)).pointerRead.sha256 === loaded.pointerRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  return { generation: loaded.pointer.generation, pointerSha256: loaded.pointerRead.sha256, catalogSha256: loaded.catalogRead.sha256,
+    publicationReceiptSha256: receiptRead.sha256, scopeCount: loaded.catalog.scopes.length, scopes,
+    verificationBasis: "attested_semantic_validation_and_exact_published_bytes", semanticValidationClock: preparation.fixedValidationClock, readbackProjectionAnalyses: 0 };
+}
+module.exports = { createKeywordMonthlyBundleAnalysis, publishKeywordMonthlyBundle, prepareKeywordMonthlyBundle, publishPrevalidatedKeywordMonthlyBundle, verifyPrevalidatedKeywordMonthlyBundle, validateCatalog, validatePointer, loadBundle, composeOptions, readBundleFile: readFile, KEYWORD_MONTHLY_BUNDLE_LIMITS: LIMITS };

@@ -34,6 +34,52 @@ function validRecord(value) {
   return plain(value) && value.schemaVersion === 2 && Object.keys(value).every(k => ["schemaVersion", "token", "pid", "sourceKey", "createdAt", "owner"].includes(k))
     && UUID.test(value.token || "") && Number.isSafeInteger(value.pid) && value.pid > 0 && H.SHA.test(value.sourceKey || "") && H.validIso(value.createdAt) && validOwner(value.owner);
 }
+function validProductionContext(value, withStart = false) {
+  const keys = ["bootId", "pidNamespace", "hostId", ...(withStart ? ["startTicks"] : [])];
+  return plain(value) && Object.keys(value).every(k => keys.includes(k)) && UUID.test(value.bootId || "")
+    && /^pid:\[\d+\]$/.test(value.pidNamespace || "") && H.SHA.test(value.hostId || "")
+    && (!withStart || /^\d{1,30}$/.test(value.startTicks || ""));
+}
+function validProductionRecord(value) {
+  // The operational lock writer owns this distinct schema2 shape. Reading it
+  // here never grants permission to release, reclaim, recover or retry it.
+  return plain(value) && value.schemaVersion === 2
+    && Object.keys(value).every(k => ["schemaVersion", "token", "pid", "sourceKey", "jobId", "version", "createdAt", "owner"].includes(k))
+    && UUID.test(value.token || "") && UUID.test(value.jobId || "") && Number.isSafeInteger(value.pid) && value.pid > 0
+    && H.SHA.test(value.sourceKey || "") && H.validIso(value.createdAt)
+    && ["keyword-monthly-incremental-v4", "keyword-monthly-incremental-v5"].includes(value.version)
+    && validProductionContext(value.owner, true);
+}
+async function inspectProductionOwner(row, result, diagnosticProcessReader) {
+  let reader, context;
+  try {
+    // Only context/process are called. In particular, neither peer enumeration,
+    // clock helpers nor the operational recovery/acquisition paths are used.
+    reader = diagnosticProcessReader || require("./keyword_monthly_worker_lock.cjs").createLinuxProcessReader();
+    H.need(typeof reader?.context === "function" && typeof reader.process === "function", "KEYWORD_INCREMENTAL_LOCK_OWNER_INVALID");
+    context = await reader.context();
+    H.need(validProductionContext(context), "KEYWORD_INCREMENTAL_LOCK_OWNER_INVALID");
+  } catch { result.reasonCode = "OWNER_IDENTITY_UNAVAILABLE"; return result; }
+  const sameContext = (a, b) => ["bootId", "pidNamespace", "hostId"].every(k => a[k] === b[k]);
+  result.sameInstance = sameContext(row.owner, context);
+  if (!result.sameInstance) { result.reasonCode = "OWNER_OTHER_INSTANCE"; return result; }
+  let observed;
+  try {
+    observed = await reader.process(row.pid);
+    const after = await reader.context();
+    if (!validProductionContext(after) || !sameContext(after, context)) {
+      result.sameInstance = null; result.reasonCode = "OWNER_IDENTITY_UNAVAILABLE"; return result;
+    }
+  } catch { result.reasonCode = "OWNER_STATE_UNAVAILABLE"; result.ownerProcessState = "unavailable"; return result; }
+  if (observed === null) { result.reasonCode = "OWNER_NOT_RUNNING"; result.ownerProcessState = "not_running"; return result; }
+  if (!plain(observed) || observed.pid !== row.pid || !/^\d{1,30}$/.test(observed.startTicks || "")
+    || ["Z", "X", "x"].includes(observed.state)) {
+    result.reasonCode = "OWNER_STATE_UNAVAILABLE"; result.ownerProcessState = "unavailable"; return result;
+  }
+  result.ownerProcessState = "running";
+  result.reasonCode = observed.startTicks === row.owner.startTicks ? "OWNER_ACTIVE" : "OWNER_PID_REUSED";
+  return result;
+}
 async function savedLock(lockFile, fileSystem) {
   await H.checked(path.dirname(lockFile), true);
   const before = await fileSystem.lstat(lockFile);
@@ -46,7 +92,7 @@ async function savedLock(lockFile, fileSystem) {
   let value; try { value = JSON.parse(bytes); } catch { throw H.fault("KEYWORD_INCREMENTAL_LOCK_INVALID"); }
   return { value, bytes, stat: before };
 }
-async function inspectWorkerLock({ lockFile, now = () => new Date(), ownerIdentity, fileSystem = fs, probeOwnerProcess = pid => probeProcess(pid, { fileSystem }) } = {}) {
+async function inspectWorkerLock({ lockFile, now = () => new Date(), ownerIdentity, fileSystem = fs, probeOwnerProcess = pid => probeProcess(pid, { fileSystem }), diagnosticProcessReader } = {}) {
   H.absolute(lockFile); H.need(path.basename(lockFile) === "worker-lock.json", "KEYWORD_INCREMENTAL_LOCK_PATH_INVALID");
   const result = { schemaVersion: 1, reasonCode: "LOCK_UNVERIFIED", ownerSchemaVersion: null, ageMs: null, sameInstance: null, ownerProcessState: "unverified" };
   let saved;
@@ -56,6 +102,7 @@ async function inspectWorkerLock({ lockFile, now = () => new Date(), ownerIdenti
   const at = Date.parse(typeof now === "function" ? now() : now), created = Date.parse(row?.createdAt);
   if (Number.isFinite(at) && Number.isFinite(created)) result.ageMs = Math.max(0, at - created);
   if (row?.schemaVersion === 1) { result.reasonCode = "LEGACY_OWNER_UNVERIFIED"; return result; }
+  if (validProductionRecord(row)) return inspectProductionOwner(row, result, diagnosticProcessReader);
   if (!validRecord(row)) { result.reasonCode = "LOCK_INVALID"; return result; }
   let owner;
   try { owner = ownerIdentity || await readOwnerIdentity({ fileSystem }); } catch { result.reasonCode = "OWNER_IDENTITY_UNAVAILABLE"; return result; }

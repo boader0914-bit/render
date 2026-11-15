@@ -146,7 +146,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
       if (!status.errorCode && Array.isArray(status.items)) for (const item of status.items.slice(0, 512)) {
         const intent = item?.intent;
         if (item?.status !== "complete" || !SHA.test(item.jobId || "") || !iso(item.finishedAt)
-          || !intent || !["keyword-monthly-refresh-v1", "keyword-monthly-refresh-compressed-v2", "keyword-monthly-incremental-v3", INCREMENTAL_VERSION].includes(intent.refreshVersion) || !RUN.test(intent.runId || "") || !keyword(intent.keyword)
+          || !intent || !["keyword-monthly-refresh-v1", "keyword-monthly-refresh-compressed-v2", "keyword-monthly-incremental-v3", "keyword-monthly-incremental-v4", INCREMENTAL_VERSION].includes(intent.refreshVersion) || !RUN.test(intent.runId || "") || !keyword(intent.keyword)
           || !SHA.test(intent.manifestSha256 || "") || !Object.hasOwn(intent, "scheduleOccurrenceId")
           || intent.scheduleOccurrenceId !== null && !RUN.test(intent.scheduleOccurrenceId || "") || !keyword(intent.scope)
           || !["published", "unchanged", "complete"].includes(item.result?.status) || !SHA.test(item.result?.pointerSha256 || "")) continue;

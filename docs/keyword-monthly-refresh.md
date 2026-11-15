@@ -1,10 +1,10 @@
-# 월별 키워드 자동 갱신 조정기와 v3 증분 입력
+# 월별 키워드 자동 갱신 조정기와 증분 입력
 
-## 현재 v3 구현 경로
+## 현재 v5 구현 경로
 
-이 변경의 중앙 연결 버전은 `keyword-monthly-incremental-v4`다. `refresh_keyword_monthly_incremental.cjs`가 같은 run의 완전 수집·완전 DB 후처리 증거를 확인한 뒤, `reconstruct_keyword_monthly_incremental.cjs` 전용 프로세스에서 저장 입력을 정규화한다. 앱 진입점은 텍스트로 파싱해 필요한 선언만 사용하며 앱 서버·수집기·공급자 서비스를 실행하지 않는다. Linux launcher는 고정된 두 guard 이름, 코드·Node SHA, 같은 PID의 seccomp 증거와 네트워크 차단을 검사한다.
+이 변경의 중앙 연결 버전은 `keyword-monthly-incremental-v5`다. `refresh_keyword_monthly_incremental.cjs`가 같은 run의 완전 수집·완전 DB 후처리 증거를 확인한 뒤, `reconstruct_keyword_monthly_incremental.cjs` 전용 프로세스에서 저장 입력을 정규화한다. 앱 진입점은 텍스트로 파싱해 필요한 선언만 사용하며 앱 서버·수집기·공급자 서비스를 실행하지 않는다. Linux launcher는 고정된 두 guard 이름, 코드·Node SHA, 같은 PID의 seccomp 증거와 네트워크 차단을 검사한다.
 
-전송은 기존 launcher의 `receiptOnly` 방식으로 표준 입출력을 `/dev/null`에 연결한다. Linux Node 부모의 `pipe`는 Unix socket일 수 있으므로 엄격한 표준 입출력 검사를 완화하지 않는다. 부모는 종료 코드 0, 새로운 UUID 작업 폴더의 준비 완료 파일, 정확한 관측 시각, 자식/격리 proof/준비 결과의 같은 PID, proof SHA와 코드 SHA를 검증한다. stdout JSON은 완료 근거로 쓰지 않는다. v3의 실패·보류 큐 원장은 보존하고 v4의 새 job identity로 같은 저장 수집·DB 근거를 검수한다. 이는 원본 재수집이 아니다. 유효한 v3/v4 발행 영수증에는 동일한 기존 보존 정책과 각 버전의 정확한 sourceKey 검증을 적용한다.
+전송은 기존 launcher의 `receiptOnly` 방식으로 표준 입출력을 `/dev/null`에 연결한다. Linux Node 부모의 `pipe`는 Unix socket일 수 있으므로 엄격한 표준 입출력 검사를 완화하지 않는다. 부모는 종료 코드 0, 새로운 UUID 작업 폴더의 준비 완료 파일, 정확한 관측 시각, 자식/격리 proof/준비 결과의 같은 PID, proof SHA와 코드 SHA를 검증한다. stdout JSON은 완료 근거로 쓰지 않는다. v3/v4의 실패·보류 큐 원장은 보존하고 v5의 새 job identity로 같은 저장 수집·DB 근거를 검수한다. 이는 원본 재수집이 아니다. 유효한 v3/v4/v5 발행 영수증에는 동일한 기존 보존 정책과 각 버전의 정확한 sourceKey 검증을 적용한다. 정확한 source tuple과 완료 영수증이 있는 v4 작업은 v5 도입만으로 다시 준비하지 않는다. 실패·불명확한 이전 작업을 성공으로 바꾸거나 같은 원장을 덮지 않는다.
 
 처리 방식은 합계에 새 금액을 더하는 방식이 아니다. 새 입력과 변경된 의존성만 private 상태에 채택하고, 영향받은 키워드·월을 기존 `monthly_reports.cjs`와 전월 비교·insights 계산기로 다시 만든다. 변경하지 않은 공개 scope는 기존 partition 연결을 유지한다. 이 문서의 설계·사본 회귀·트랜잭션 시험은 운영 배포나 실제 최신 run의 화면 채택 완료 증거를 대신하지 않는다.
 
@@ -16,7 +16,7 @@
 - private 경로 `keyword_monthly_incremental/`에 업체 raw shard, 순서·식별 metadata, 물리행 순서의 history segment, 압축 checkpoint와 원문/저장 SHA를 둔다. 최초 이후에는 신규 delta와 필요한 private shard만 읽는다. 원본과 기존 회차 이력은 수정하지 않는다.
 - 신규 history event마다 run·keyword·manifest SHA·schedule occurrence·완료시각을 포함한 DB 증거를 고정한다. child가 capture한 manifest와 대조하고 부모의 최초 검증 및 `beforePromote`에서도 같은 증거 tuple을 다시 확인한다. 다른 신규 run의 manifest가 바뀌어도 먼저 확인한 run ID만으로 통과시키지 않는다.
 
-큐 활성시각과 v1/v2/v3 기존 원장은 보존한다. checkpoint 초기화가 필요하면 활성시각 이후의 실제 완료 자료 중 최신 한 건으로 초기화를 요청하며, 모든 과거 완료 작업을 새로 실행하지 않는다. 완료·실패·보류 이력은 버전별로 구분한다. 기존 72개 legacy 원장과 그중 실패/검수 필요 20개를 정상 완료로 바꾸거나 삭제하지 않는다.
+큐 활성시각과 v1/v2/v3/v4 기존 원장은 보존한다. checkpoint 초기화가 필요하면 활성시각 이후의 실제 완료 자료 중 최신 한 건으로 초기화를 요청하며, 모든 과거 완료 작업을 새로 실행하지 않는다. 완료·실패·보류 이력은 버전별로 구분한다. 기존 72개 legacy 원장과 그중 실패/검수 필요 20개를 정상 완료로 바꾸거나 삭제하지 않는다.
 
 ### 영향 범위와 계산 보존
 
@@ -28,7 +28,19 @@
 
 ### 게시와 복구
 
+v5의 전체 partition 의미 검증은 1GiB heap 상한과 네트워크 차단을 유지한 정규화 child 안에서 수행한다. 새 입력뿐 아니라 재사용할 기존 immutable generation도 같은 `inputPartition` 분석기로 검증하며, 정확한 초기 pointer/catalog, 입력 directory·index·projection 바이트 SHA, 노출 scope·cutoff, 자료 마감과 선택 digest를 작은 준비 descriptor에 묶는다. 부모는 child 종료·같은 PID·proof SHA·준비 결과 SHA를 확인한 뒤 이 descriptor와 실제 바이트를 대조한다. 준비 descriptor가 없거나 달라지면 부모의 전체 계산으로 우회하지 않는다.
+
+부모의 게시와 공개 readback은 projection의 압축 해제·정규화·당월/전월 snapshot 생성을 수행하지 않는다. 각 게시·readback 단계의 분석 횟수와 strict child 경로 전체의 부모 분석 횟수는 구분해서 기록한다. 일반 사본 publisher는 기존 의미 검증을 같은 프로세스에서 먼저 수행할 수 있으므로 그 경로의 전체 부모 분석 횟수를 0이라고 표현하지 않는다. 이 구조는 기존 웹 부모의 메모리 종료 원인이 특정 함수의 누수였다는 판정이 아니라, 실제로 확인된 큰 그래프 생성 경로를 한도가 있는 프로세스로 옮기는 변경이다.
+
 원본 입력 채택 checkpoint와 공개 bundle pointer는 별도 단계다. worker는 전용 lock, 기대하는 이전 pointer SHA, immutable 준비 증거, 게시 intent, 원자 교체와 공개 readback을 사용한다. 게시 직후 중단된 작업은 현재 catalog가 intent와 정확히 같고 보관된 준비 증거의 압축 SHA·원문 SHA 및 해당 과거 checkpoint SHA가 모두 검증될 때만 완료를 복구한다. 자료가 없거나 다르면 재계산·재게시로 성공을 추정하지 않는다.
+
+전용 worker lock은 v5에서 소유 프로세스의 boot/PID namespace·시작 tick과 공개 작업 ID를 기록한다. 소유 비밀 nonce와 작업 폴더 ID를 구분하며, 진단 결과에는 nonce·원문 잠금·nonce가 들어간 legacy 폴더 경로를 출력하지 않는다. 일반 시작 경로는 기존 lock이나 복구 claim을 나이만으로 제거하지 않는다.
+
+별도 검토한 사망 작업 복구는 정확한 큐 job ID와 저장 lock·manifest·같은 run/slot DB 완료·준비/격리 증거·source checkpoint·현재 발행 영수증을 먼저 대조한다. 현재 서버와 검증된 조상 프로세스 이외의 Node/Python, 살아 있는 소유자/자식, 수집·DB 후처리·증분 작업의 실행/대기, 보호 상태 또는 미완료 발행 intent는 보류 사유다. 기존 v2의 역사 이월과 현재 실행은 구분한다. 기존 schema1 lock에는 별도로 검토한 종료 사건 근거도 필요하다. 고정된 snapshot SHA의 dry-run을 통과한 뒤 모든 근거를 다시 읽어 확인한다.
+
+schema1의 과거 PID가 현재 검증된 서버·조상에서 재사용된 경우에는 별도 재사용 검토 대상으로만 표시한다. 고정 system `getconf CLK_TCK`, kernel boot 시각과 [`/proc/PID/stat`의 시작 tick](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html), 같은 time namespace 및 현재 wall/uptime 일치 검사를 거친다. 보수적인 현재 프로세스 시작 하한보다 독립 검토한 같은 과거 PID의 exit134 시각이 엄격히 앞설 때만 dry-run·복구를 허용한다. 동적 시계 표본은 snapshot SHA에 넣지 않으며 매번 새로 검증한다. chain 밖 live PID, schema2 재사용, 불명확한 시계·namespace·identity, 같은 시각 경계는 계속 보류한다.
+
+복구는 원본 lock을 삭제하지 않고 새로운 0700 private recovery 폴더로 보관한다. Linux [`renameat2(RENAME_NOREPLACE)`](https://man7.org/linux/man-pages/man2/rename.2.html)를 사용해 보관 목적지가 이미 있으면 덮어쓰지 않는다. 고정된 system Python의 단일 OS 호출에만 의존하고 환경·사용자 site·표준 입출력 전달을 차단한다. 지원 불명·실패에는 덮어쓰는 일반 rename으로 우회하지 않는다. 이동 전후 바이트 SHA·inode·권한을 대조하고 감사 영수증을 남긴다. 근거 변경이나 불완전 복구는 claim과 증거를 유지해 다시 보류하며, 원본·수집/DB/실패 원장을 수정하지 않는다.
 
 과거 완료 영수증 재사용은 그 source event를 이미 처리했다는 이력이다. 이후의 현재 pointer를 바꾸거나 현재 월의 최신 채택을 인증하지 않는다. 실제 run → 같은 DB 완료 → 정확한 작업/준비 영수증 → 현재 catalog/partition → 채택 관측 → 실제 UI를 별도로 확인한다. 화면 GET은 저장된 projection만 읽으며 수집·원본 정규화·게시를 시작하지 않는다. UI의 지표 정의·표 수치나 표시 식을 이 변경으로 수정하지 않는다.
 
@@ -123,7 +135,7 @@ raw 모드는 바뀌지 않는다.
 이미 있는 외부/소유권 불명 준비 폴더나 발행 불명확 상태는 무시·삭제하지 않는다.
 기존 실패 이력도 정상 완료로 고치지 않는다.
 
-v2 당시 중앙 연결자는 `keyword-monthly-refresh-compressed-v2` 큐 버전으로 신호를 기록했다. 현재 중앙 연결자는 `keyword-monthly-incremental-v4`를 사용하며 v1/v2/v3 기록을 보존한다.
+v2 당시 중앙 연결자는 `keyword-monthly-refresh-compressed-v2` 큐 버전으로 신호를 기록했다. 현재 중앙 연결자는 `keyword-monthly-incremental-v5`를 사용하며 v1/v2/v3/v4 기록을 보존한다.
 단독 큐의 기본 v1과 발행 sourceKey 계산 버전은 그대로다. 작업자는 자신의 버전만
 실행·중단 복구하고 다른 버전의 원장 파일은 보존한다. 전역 오류와 전체 건수도
 유지하면서 `currentVersionCounts`, `historicalCountsByVersion`,

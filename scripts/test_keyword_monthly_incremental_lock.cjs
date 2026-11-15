@@ -118,3 +118,79 @@ test("successful work is not reported successful when owned lock cleanup fails",
 test("owner identity failure occurs before creating a lock", async t => {
   const f = await fixture(t); await assert.rejects(L.acquireWorkerLock({ ...f.options, ownerIdentity: { ...identity(), processStartTicks: "invalid" } }), { code: "KEYWORD_INCREMENTAL_LOCK_OWNER_INVALID" }); assert.equal(await f.exists(), false);
 });
+
+const productionContext = changes => ({ bootId: "22222222-2222-4222-8222-222222222222", pidNamespace: "pid:[2345]", hostId: "d".repeat(64), ...changes });
+const productionRecord = changes => ({ schemaVersion: 2, token: crypto.randomUUID(), pid: 200, sourceKey: KEY,
+  jobId: crypto.randomUUID(), version: "keyword-monthly-incremental-v5", createdAt: AT,
+  owner: { ...productionContext(), startTicks: "700" }, ...changes });
+function productionReader(observed, changes = {}) {
+  return { context: async () => productionContext(), process: async pid => { assert.equal(pid, 200); return observed; },
+    peers() { assert.fail("diagnostics must not enumerate peers"); }, clockBasis() { assert.fail("diagnostics must not invoke clock helpers"); }, ...changes };
+}
+function assertSafeDiagnostic(d, record) {
+  assert.deepEqual(Object.keys(d).sort(), ["schemaVersion", "reasonCode", "ownerSchemaVersion", "ageMs", "sameInstance", "ownerProcessState"].sort());
+  assert.equal(d.ownerSchemaVersion, 2); assert.equal(d.ageMs, 0);
+  for (const secret of [record.token, record.jobId, record.sourceKey, record.owner.bootId, record.owner.pidNamespace, record.owner.hostId])
+    assert.equal(JSON.stringify(d).includes(secret), false);
+}
+for (const [observed, reason, state] of [
+  [{ pid: 200, startTicks: "700", state: "S" }, "OWNER_ACTIVE", "running"],
+  [null, "OWNER_NOT_RUNNING", "not_running"],
+  [{ pid: 200, startTicks: "701", state: "S" }, "OWNER_PID_REUSED", "running"]
+]) test(`operational schema2 is diagnosed as ${reason} without changing its lock`, async t => {
+  const f = await fixture(t), record = productionRecord(); await f.write(record); const before = await fs.stat(f.lockFile);
+  const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: productionReader(observed) });
+  assert.equal(d.reasonCode, reason); assert.equal(d.ownerProcessState, state); assert.equal(d.sameInstance, true); assertSafeDiagnostic(d, record);
+  assert.deepEqual(JSON.parse(await fs.readFile(f.lockFile)), record); const after = await fs.stat(f.lockFile);
+  assert.equal(after.ino, before.ino); assert.equal(after.mtimeMs, before.mtimeMs);
+});
+for (const change of [{ bootId: "33333333-3333-4333-8333-333333333333" }, { pidNamespace: "pid:[2346]" }, { hostId: "e".repeat(64) }])
+  test(`operational schema2 compares ${Object.keys(change)[0]} before probing a local PID`, async t => {
+    const f = await fixture(t), record = productionRecord(); await f.write(record);
+    const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: productionReader(null, {
+      context: async () => productionContext(change), process: async () => assert.fail("foreign instance must not use local PID evidence") }) });
+    assert.equal(d.reasonCode, "OWNER_OTHER_INSTANCE"); assert.equal(d.sameInstance, false); assert.equal(d.ownerProcessState, "unverified"); assertSafeDiagnostic(d, record);
+    assert.deepEqual(JSON.parse(await fs.readFile(f.lockFile)), record);
+  });
+test("operational schema2 unavailable context or process evidence stays unverified", async t => {
+  const f = await fixture(t), record = productionRecord(); await f.write(record);
+  const privateError = () => { throw Error("private diagnostic exception"); };
+  for (const [reader, reason, state] of [
+    [productionReader(null, { context: privateError }), "OWNER_IDENTITY_UNAVAILABLE", "unverified"],
+    [productionReader(null, { context: async () => ({ ...productionContext(), hostId: "invalid" }) }), "OWNER_IDENTITY_UNAVAILABLE", "unverified"],
+    [productionReader(null, { process: privateError }), "OWNER_STATE_UNAVAILABLE", "unavailable"],
+    [productionReader(undefined), "OWNER_STATE_UNAVAILABLE", "unavailable"],
+    [productionReader({ pid: 201, startTicks: "700" }), "OWNER_STATE_UNAVAILABLE", "unavailable"],
+    [productionReader({ pid: 200, startTicks: "invalid" }), "OWNER_STATE_UNAVAILABLE", "unavailable"],
+    [productionReader({ pid: 200, startTicks: "700", state: "Z" }), "OWNER_STATE_UNAVAILABLE", "unavailable"]
+  ]) {
+    const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: reader });
+    assert.equal(d.reasonCode, reason); assert.equal(d.ownerProcessState, state); assertSafeDiagnostic(d, record);
+    assert.equal(JSON.stringify(d).includes("private diagnostic"), false);
+  }
+});
+test("operational schema2 changing local context cannot prove an owner absent", async t => {
+  const f = await fixture(t), record = productionRecord(); await f.write(record); let contexts = 0;
+  const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: productionReader(null, {
+    context: async () => productionContext(++contexts === 1 ? {} : { pidNamespace: "pid:[9999]" }) }) });
+  assert.equal(contexts, 2); assert.equal(d.reasonCode, "OWNER_IDENTITY_UNAVAILABLE"); assert.equal(d.sameInstance, null); assert.equal(d.ownerProcessState, "unverified");
+  assertSafeDiagnostic(d, record); assert.deepEqual(JSON.parse(await fs.readFile(f.lockFile)), record);
+});
+test("invalid operational schema2 is preserved without querying process evidence", async t => {
+  const f = await fixture(t);
+  for (const record of [productionRecord({ jobId: "invalid" }), productionRecord({ version: "unrecognized" }), productionRecord({ owner: { ...productionContext(), startTicks: "invalid" } }), productionRecord({ privateExtra: "not allowed" })]) {
+    await f.write(record);
+    const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: {
+      context: async () => assert.fail("invalid lock must not query process context"), process: async () => assert.fail("invalid lock must not query PID") } });
+    assert.equal(d.reasonCode, "LOCK_INVALID"); assert.deepEqual(JSON.parse(await fs.readFile(f.lockFile)), record);
+  }
+});
+test("operational writer remains sole owner across diagnostic inspection and release", async t => {
+  const W = require("./lib/keyword_monthly_worker_lock.cjs"), f = await fixture(t);
+  const reader = { context: async () => productionContext(), process: async pid => ({ pid, ppid: 1, startTicks: "700", state: "S" }) };
+  const lock = await W.acquireWorkerLock({ directory: f.root, sourceKey: KEY, version: "keyword-monthly-incremental-v5", now: () => AT, fixture: true, processReader: reader });
+  const bytes = await fs.readFile(f.lockFile), record = JSON.parse(bytes);
+  const d = await L.inspectWorkerLock({ lockFile: f.lockFile, now: AT, diagnosticProcessReader: reader });
+  assert.equal(d.reasonCode, "OWNER_ACTIVE"); assertSafeDiagnostic(d, record); assert.deepEqual(await fs.readFile(f.lockFile), bytes);
+  await lock.release(); assert.equal(await f.exists(), false);
+});
