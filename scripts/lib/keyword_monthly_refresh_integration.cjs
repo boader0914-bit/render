@@ -102,7 +102,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
         readDeltaEvidence: async runId => {
           if (!RUN.test(runId || "")) fail("KEYWORD_INCREMENTAL_DELTA_RUN_INVALID");
           const row = await readPostprocess(runId);
-          if (!row || (row.status || row.state) !== "complete") return { status: "waiting", reasonCode: "KEYWORD_INCREMENTAL_DELTA_DB_PENDING" };
+          if (!row) return { status: "waiting", reasonCode: "KEYWORD_INCREMENTAL_DELTA_DB_PENDING" };
           const r = await readJson(path.join(dataDir, "outputs", runId, "manifest.json"), 1024 * 1024);
           return readCompletedKeywordEvidence({ dataDir, intent: { runId, keyword: r.value.keyword, manifestSha256: r.sha256, scheduleOccurrenceId: row.scheduleOccurrenceId || null }, readPostprocess, allowsDerivedUpdates });
         } });

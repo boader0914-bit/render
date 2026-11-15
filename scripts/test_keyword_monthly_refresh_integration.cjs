@@ -38,6 +38,21 @@ test("partial, company-mode, changed source and traversal cannot trigger refresh
   }
   await assert.rejects(call({ ...f.intent, runId: "../other" }), { code: "KEYWORD_REFRESH_INPUT_INVALID" });
 });
+
+test("secondary delta DB failures retain the existing failure gate instead of becoming an endless normal wait", async t => {
+  for (const status of ["failed", "held", "queued", "running", "complete"]) await t.test(status, async st => {
+    const f = await fixture(st); let callbacks, observed;
+    const row = { runId: "run_1", scheduleOccurrenceId: f.intent.scheduleOccurrenceId, status, finishedAt: at, result: { sourceManifestSha256: f.intent.manifestSha256 } };
+    const integration = createKeywordMonthlyRefreshIntegration({ dataDir: f.root, codeRoot: f.root, now: () => new Date(at), isCollectionIdle: () => true,
+      readPostprocess: async () => row, readPostprocessList: async () => ({ items: [] }), allowsDerivedUpdates: () => true, runWork: async work => work(),
+      createQueue: options => { callbacks = options; return { close: async () => {}, status: async () => ({}) }; },
+      refresh: async options => { observed = await options.readDeltaEvidence("run_1"); return { status: "staged" }; } });
+    try {
+      if (["failed", "held"].includes(status)) await assert.rejects(callbacks.refresh({}, {}), { code: "KEYWORD_REFRESH_DB_NOT_COMPLETE" });
+      else { await callbacks.refresh({}, {}); assert.equal(observed.status, status === "complete" ? "complete" : "waiting"); }
+    } finally { await integration.close(); }
+  });
+});
 test("current protections, pending work and unknown guards defer; expired hold remains history", async t => {
   const f = await fixture(t); assert.equal((await readStoredCollectionAdmission(f.root, at)).allowed, true);
   await f.write("collector/jobs.json", { version: 1, jobs: [], halted: null, reviewHold: { holdThrough: "2026-10-10" } });
