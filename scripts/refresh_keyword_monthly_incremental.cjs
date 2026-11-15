@@ -11,6 +11,7 @@ const { inspectWorkerLock, withWorkerLock } = require("./lib/keyword_monthly_inc
 const { preparedPublicationCandidate } = require("./lib/keyword_monthly_publication_candidate.cjs");
 const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_source_delta.cjs"), { events } = require("./lib/keyword_monthly_incremental_context.cjs");
 const { verifyInventory, verifyDependencies } = require("./lib/keyword_monthly_incremental_inputs.cjs");
+const failure = require("./lib/keyword_monthly_incremental_failure.cjs");
 const OWNER = "keyword_monthly_incremental_refresh", BASIS = "verified_incremental_source_checkpoint_and_dirty_partition_rebuild";
 const keyFor = e => H.hash(JSON.stringify([VERSION, e.runId, e.manifestSha256, e.keyword]));
 async function maybeRead(file, max) { try { return await H.read(file, max); } catch (e) { if (e.code === "ENOENT") return null; throw e; } }
@@ -106,17 +107,35 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       outboxInventorySha256: inventory.inventory, admittedRunIds: [...admittedRunIds], admittedEvidence: [...admittedEvidence.values()], expectedSourceStateSha256: current?.stateSha256 || null };
     const jobInput = path.join(jobRoot, "job-input.json"); await saveBytes(jobInput, Buffer.from(JSON.stringify(job)), 1024 * 1024);
     const node = await fs.realpath(process.execPath), guard = path.join(codeRoot, "scripts/reconstruct_keyword_monthly_incremental.cjs"), launcher = path.join(codeRoot, "scripts/launch_keyword_monthly_isolated.py");
-    const pins = await Promise.all([node, guard, launcher, ...["keyword_monthly_bundle.cjs", "keyword_monthly_analysis.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs"].map(file => path.join(codeRoot, "scripts/lib", file))].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
-    for (const file of [proofFile, preparationFile]) {
+    const pins = await Promise.all([node, guard, launcher, ...["keyword_monthly_bundle.cjs", "keyword_monthly_analysis.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs", "keyword_monthly_incremental_failure.cjs"].map(file => path.join(codeRoot, "scripts/lib", file))].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
+    for (const file of [proofFile, preparationFile, failure.failureFile(jobRoot)]) {
       try { await fs.lstat(file); throw H.fault("KEYWORD_INCREMENTAL_CHILD_RECEIPT_PREEXISTING"); }
       catch (e) { if (e.code !== "ENOENT") throw e; }
     }
     const execute = dependencies.fixture === true && dependencies.execute ? dependencies.execute : prep.runChild;
     await admission();
-    const child = await execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
+    let child;
+    try { child = await execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
       "--guard-name", "reconstruct_keyword_monthly_incremental.cjs", "--guard-sha256", pins[1].sha256, "--node-sha256", pins[0].sha256,
       "--node-max-old-space-size", "1024", "--", node, guard, "--input", jobInput, "--input-sha", H.hash(Buffer.from(JSON.stringify(job))),
-      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true });
+      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true }); }
+    catch (caught) {
+      const error = caught && typeof caught === "object" ? caught : H.fault("KEYWORD_PREP_CHILD_FAILED"), ended = failure.termination(error);
+      let childFailure = { status: "missing" };
+      if (ended.childPid) {
+        try {
+          const saved = await failure.readFailure({ jobRoot, inputSha256: H.hash(Buffer.from(JSON.stringify(job))), sourceKey, version: VERSION, pid: ended.childPid,
+            guardSha256: pins[1].sha256, nodeSha256: pins[0].sha256 });
+          if (saved) {
+            const proof = await H.read(proofFile, 65536); prep.isolation(proof.value, jobRoot, { "node-sha": pins[0].sha256, "guard-sha": pins[1].sha256 });
+            H.need(proof.value.pid === ended.childPid, "KEYWORD_INCREMENTAL_ISOLATION_BINDING_INVALID");
+            for (const pin of pins) H.need((await prep.fileHash(pin.file)).sha256 === pin.sha256, "KEYWORD_INCREMENTAL_CODE_CHANGED");
+            childFailure = saved; error.childCode = saved.code;
+          }
+        } catch (invalid) { childFailure = { status: "invalid", reasonCode: prep.safeChildCode(invalid.code) || "KEYWORD_INCREMENTAL_FAILURE_EVIDENCE_INVALID" }; }
+      } else childFailure = { status: "unavailable", reasonCode: "KEYWORD_INCREMENTAL_CHILD_PID_UNAVAILABLE" };
+      Object.assign(error, ended, { childFailure }); throw error;
+    }
     if (options.signal?.aborted || child.code === "KEYWORD_PREP_CHILD_ABORTED") throw Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
     H.need(child.exitCode === 0 && child.receiptOnly === true && child.stdout === null && child.stderrBytes === null
       && Number.isSafeInteger(child.pid) && child.pid > 0, "KEYWORD_INCREMENTAL_CHILD_INVALID");
@@ -174,12 +193,15 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     try { await removeOwnedTree(jobRoot, path.join(jobRoot, "refresh-owner.json"), token, sourceKey); } catch { result.cleanupNeedsVerification = true; }
     return result;
   } catch (e) {
+    const childTermination = failure.termination({ pid: e.childPid ?? e.pid, exitCode: e.childExitCode ?? e.exitCode, exitSignal: e.childExitSignal ?? e.exitSignal });
+    const childFailure = e.childFailure || null;
     const intent = await maybeRead(intentFile).catch(() => ({ unknown: true }));
     if (promoted || intent) throw Object.assign(H.fault("KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK"), { publicationState: "pointer_was_promoted_verify_current" });
     if (options.signal?.aborted || e.code === "KEYWORD_PREP_CHILD_ABORTED") e = Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
-    else if (prep.safeChildCode(e.childCode)) e = H.fault(e.childCode);
+    else if (prep.safeChildCode(e.childCode)) e = Object.assign(H.fault(e.childCode), childTermination, { childFailure });
     if (jobRoot) {
-      try { await H.writeNew(path.join(receiptDir, "failed-incremental-" + sourceKey + "-" + token + ".json"), { schemaVersion: 1, sourceKey, code: prep.safeChildCode(e.code) || "KEYWORD_INCREMENTAL_FAILED", publicationIntentAbsent: true, operatingPointerChanged: false, sourceCacheRetained: true, jobRoot, observedAt: clock() }); } catch {}
+      try { await H.writeNew(path.join(receiptDir, "failed-incremental-" + sourceKey + "-" + token + ".json"), { schemaVersion: 1, sourceKey, code: prep.safeChildCode(e.code) || "KEYWORD_INCREMENTAL_FAILED", publicationIntentAbsent: true, operatingPointerChanged: false, sourceCacheRetained: true, jobRoot, observedAt: clock(),
+        ...childTermination, ...(childFailure ? { childFailure } : {}) }); } catch {}
     }
     if (e.deferred === true && jobRoot) {
       await H.writeNew(path.join(receiptDir, "deferred-incremental-" + sourceKey + "-" + token + ".json"), { schemaVersion: 1, sourceKey, code: e.code, publicationIntentAbsent: true, sourceCacheRetained: true, observedAt: clock() });

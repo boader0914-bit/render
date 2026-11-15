@@ -15,6 +15,7 @@ const text = (v, max) => typeof v === "string" && v.length > 0 && v.length <= ma
 const samePath = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(k => a[k] === b[k]);
 const clone = v => JSON.parse(JSON.stringify(v));
+const operatorRetry = require("./keyword_monthly_failed_retry_authorization.cjs");
 const safeCode = error => /^[A-Z][A-Z0-9_]{1,119}$/.test(error?.code || "") ? error.code : "KEYWORD_REFRESH_UNAVAILABLE";
 const iso = v => typeof v === "string" && /^20\d\d-\d\d-\d\dT.*Z$/.test(v) && Number.isFinite(Date.parse(v));
 const integer = (v, fallback, min, max) => { v ??= fallback; if (!Number.isSafeInteger(v) || v < min || v > max) throw TypeError("Invalid refresh bound"); return v; };
@@ -81,7 +82,7 @@ function createKeywordMonthlyRefresh(options = {}) {
   }
   const idFor = intent => hash(JSON.stringify([intent.refreshVersion, intent.runId, intent.manifestSha256, intent.keyword, intent.scope, intent.scheduleOccurrenceId]));
   function publicRow(row) {
-    return clone(Object.fromEntries(["jobId", "intent", "status", "reasonCode", "createdAt", "updatedAt", "startedAt", "finishedAt", "nextAttemptAt", "recoveredAt", "attempts", "maxAttempts", "result","lockDiagnostic"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]])));
+    return clone(Object.fromEntries(["jobId", "intent", "status", "reasonCode", "createdAt", "updatedAt", "startedAt", "finishedAt", "nextAttemptAt", "recoveredAt", "attempts", "maxAttempts", "result","lockDiagnostic","oneShotRetry"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]])));
   }
   function validate(row, id) {
     need(plain(row) && row.schemaVersion === 1 && row.jobId === id && SHA.test(id) && STATES.has(row.status), "KEYWORD_REFRESH_RECORD_INVALID");
@@ -90,7 +91,8 @@ function createKeywordMonthlyRefresh(options = {}) {
     normalized.refreshVersion = version;
     need(JSON.stringify(normalized) === JSON.stringify(row.intent) && idFor(row.intent) === id, "KEYWORD_REFRESH_RECORD_INVALID");
     need(iso(row.createdAt) && iso(row.updatedAt) && ["startedAt", "finishedAt", "nextAttemptAt", "recoveredAt"].every(k => row[k] === null || iso(row[k]))
-      && Number.isSafeInteger(row.attempts) && row.attempts >= 0 && Number.isSafeInteger(row.maxAttempts) && row.maxAttempts >= 1 && row.maxAttempts <= 10 && row.attempts <= row.maxAttempts
+      && Number.isSafeInteger(row.attempts) && row.attempts >= 0 && Number.isSafeInteger(row.maxAttempts) && row.maxAttempts >= 1 && row.maxAttempts <= 10
+      && (Object.hasOwn(row,"oneShotRetry") ? operatorRetry.validRow(row) : row.attempts <= row.maxAttempts)
       && (row.reasonCode === null || /^[A-Z][A-Z0-9_]{1,119}$/.test(row.reasonCode)), "KEYWORD_REFRESH_RECORD_INVALID");
     if (row.result !== null) need(JSON.stringify(smallResult(row.result)) === JSON.stringify(row.result), "KEYWORD_REFRESH_RECORD_INVALID");
     if(Object.hasOwn(row,"lockDiagnostic"))need(smallLockDiagnostic(row.lockDiagnostic)!==null&&JSON.stringify(smallLockDiagnostic(row.lockDiagnostic))===JSON.stringify(row.lockDiagnostic),"KEYWORD_REFRESH_RECORD_INVALID");
@@ -221,6 +223,10 @@ function createKeywordMonthlyRefresh(options = {}) {
       const dueAt = row => deferredUntil.get(row.jobId) || row.nextAttemptAt;
       const at = stamp(), row = [...records.values()].filter(r => r.intent.refreshVersion === refreshVersion && ["queued", "deferred"].includes(r.status) && dueAt(r) <= at)
         .sort((a, b) => dueAt(a).localeCompare(dueAt(b)) || a.createdAt.localeCompare(b.createdAt) || a.jobId.localeCompare(b.jobId))[0]; if (!row) return null;
+      if (row.oneShotRetry) {
+        try { await operatorRetry.verifyAuthorization({ dataDir: root, row }); }
+        catch (e) { const end = stamp(); return locked(() => writeRecord({ ...row, status: "needs_verification", reasonCode: safeCode(e), updatedAt: end, finishedAt: end, nextAttemptAt: null })); }
+      }
       let admission;
       try { admission = await canProcess(publicRow(row)); } catch { return defer(row, "KEYWORD_REFRESH_ADMISSION_UNAVAILABLE"); }
       const allowed = admission === true || plain(admission) && admission.allowed === true;
@@ -230,6 +236,12 @@ function createKeywordMonthlyRefresh(options = {}) {
       catch (e) { const t = stamp(); return locked(() => writeRecord({ ...row, status: "needs_verification", reasonCode: safeCode(e), updatedAt: t, finishedAt: t, nextAttemptAt: null })); }
       if (!proof.ready) return defer(row, "KEYWORD_REFRESH_POSTPROCESS_NOT_COMPLETE");
       if (closed) return null;
+      // Admission/evidence reads may await other work. Re-pin the immutable
+      // one-shot authorization immediately before consuming its only attempt.
+      if (row.oneShotRetry) {
+        try { await operatorRetry.verifyAuthorization({ dataDir: root, row }); }
+        catch (e) { const end = stamp(); return locked(() => writeRecord({ ...row, status: "needs_verification", reasonCode: safeCode(e), updatedAt: end, finishedAt: end, nextAttemptAt: null })); }
+      }
       deferredUntil.delete(row.jobId);
       const began = stamp(), running = { ...row, status: "running", reasonCode: null, updatedAt: began, startedAt: began, nextAttemptAt: null, attempts: row.attempts + 1 };
       delete running.lockDiagnostic;
@@ -240,14 +252,14 @@ function createKeywordMonthlyRefresh(options = {}) {
       } catch (e) {
         if (storeError) throw e;
         const end = stamp(), uncertain = e?.publicationState === "pointer_was_promoted_verify_current" || /(?:PUBLICATION_NEEDS_READBACK|POINTER_CONFLICT|PUBLICATION_LOCKED)$/.test(e?.code || "");
-        if (!uncertain && e?.deferred === true && !Object.hasOwn(e, "publicationState")) {
+        if (!row.oneShotRetry && !uncertain && e?.deferred === true && !Object.hasOwn(e, "publicationState")) {
           // The runner rechecks admission after waiting for its background
           // memory lease. A verified pre-publication deferral is not a failed
           // preparation attempt and must not exhaust the retry allowance.
           return await locked(() => writeRecord({ ...running, status: "deferred", reasonCode: safeCode(e), attempts: row.attempts,
             startedAt: row.startedAt, updatedAt: end, finishedAt: null, nextAttemptAt: new Date(Date.parse(end) + idleIntervalMs).toISOString() }));
         }
-        const retry = !uncertain && e?.retryable === true && running.attempts < running.maxAttempts;
+        const retry = !row.oneShotRetry && !uncertain && e?.retryable === true && running.attempts < running.maxAttempts;
         const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** (running.attempts - 1));
         let lockDiagnostic=null;try{if(e?.code==="KEYWORD_INCREMENTAL_WORKER_LOCKED")lockDiagnostic=smallLockDiagnostic(e.lockDiagnostic);}catch{}
         return await locked(() => writeRecord({ ...running, status: retry ? "deferred" : "needs_verification", reasonCode: safeCode(e), updatedAt: end, finishedAt: retry ? null : end, nextAttemptAt: retry ? new Date(Date.parse(end) + delay).toISOString() : null,

@@ -2,6 +2,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
+const { EventEmitter } = require("node:events");
+const { KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS: DELIVERY } = require("./lib/keyword_monthly_prepared_results.cjs");
 function fixture(authorized = true, result = { status: "available", snapshot: {} }) {
   const calls = [];
   const service = { options: async () => { calls.push("options"); return { ...result, keywords: [] }; }, analyze: async input => { calls.push(input); return result; } };
@@ -53,4 +55,32 @@ test("private no-store applies before auth and on all success/error/method respo
       assert.equal(result.headers["Cache-Control"], "private, no-store"); assert.equal(result.headers.Vary, "Cookie");
     }
   }
+});
+
+async function nativeResult(result, route = "/api/keyword-monthly?keyword=synthetic&month=2026-09") {
+  const req = new EventEmitter(), res = new EventEmitter(); req.method = "GET";
+  res.headers = {}; res.setHeader = (key, value) => { res.headers[key] = value; };
+  res.writeHead = status => { res.status = status; }; res.end = body => { res.body = body; res.writableEnded = true; res.emit("finish"); };
+  const handler = createKeywordMonthlyHttpHandler({ service: { options: async () => result, analyze: async () => result },
+    readRefreshStatus: async () => result, requireAdmin: () => true, send: (target, status, body) => { target.writeHead(status); target.end(body); } });
+  await handler(req, res, new URL(route, "https://example.test"), {}); return res;
+}
+
+test("derived GET responses accept above 8MiB with wrappers but reject the final body above 32MiB", async () => {
+  const result = { status: "available", snapshot: { evidence: "x".repeat(9 * 1024 * 1024), observations: [{ sold: 3, estimatedRevenue: 450000 }] },
+    provenance: { inputSha256: "a".repeat(64) }, preparedResult: { status: "ready" } };
+  const success = await nativeResult(result); assert.equal(success.status, 200); assert.ok(Buffer.isBuffer(success.body));
+  assert.deepEqual(JSON.parse(success.body), result); assert.equal(success.headers["Cache-Control"], "private, no-store");
+  const empty = { status: "available", snapshot: { evidence: "" }, provenance: { source: "synthetic" } };
+  const boundary = { ...empty, snapshot: { evidence: "x".repeat(DELIVERY.responseBytes - Buffer.byteLength(JSON.stringify(empty))) } };
+  const exact = await nativeResult(boundary); assert.equal(exact.status, 200); assert.equal(exact.body.length, DELIVERY.responseBytes);
+  const overflow = await nativeResult({ ...boundary, preparedResult: { status: "ready" } });
+  assert.equal(overflow.status, 503); assert.equal(overflow.body.code, "KEYWORD_MONTHLY_RESPONSE_TOO_LARGE"); assert.equal(overflow.body.snapshot, null);
+});
+
+test("derived response allowance does not widen refresh diagnostics or query input limits", async () => {
+  const status = await nativeResult({ status: "available", evidence: "x".repeat(2 * 1024 * 1024) }, "/api/keyword-monthly/refresh-status");
+  assert.equal(status.status, 503); assert.equal(status.body.code, "KEYWORD_MONTHLY_RESPONSE_TOO_LARGE");
+  const input = await nativeResult({ status: "available" }, "/api/keyword-monthly?keyword=" + "x".repeat(4097) + "&month=2026-09");
+  assert.equal(input.status, 400); assert.equal(input.body.code, "KEYWORD_MONTHLY_INVALID_REQUEST");
 });

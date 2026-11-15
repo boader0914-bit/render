@@ -4,6 +4,8 @@ const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis } = require(
 const { publishKeywordMonthlyBundle, createKeywordMonthlyBundleAnalysis, loadBundle } = require("./lib/keyword_monthly_bundle.cjs");
 const { encodePreparedResult, decodePreparedResult, calculationFingerprint, KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS } = require("./lib/keyword_monthly_prepared_results.cjs");
 const { args } = require("./build_keyword_monthly_bundle.cjs");
+const { gzipSync } = require("node:zlib");
+const { boundedJsonBuffer } = require("./lib/bounded_company_response.cjs");
 const NOW = "2026-11-15T00:00:00.000Z", KEYWORD = "검수글램핑", QUERY = { keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-20" };
 const sha = value => crypto.createHash("sha256").update(value).digest("hex");
 function fixture(sold = 3) {
@@ -191,4 +193,43 @@ test("gzip result byte/decoded bounds, private fields, and CLI opt-in are valida
   const cli = ["--input", projection, "--output", path.join(path.dirname(projection), "cli"), "--now", NOW];
   assert.equal(args([...cli, "--prepare-results", "1"])["prepare-results"], "1");
   assert.throws(() => args([...cli, "--prepare-results", "true"]), /CLI_PREPARE_RESULTS/);
+});
+
+test("derived results above 8MiB round trip without losing observations or changing financial semantics", async t => {
+  const { projection, bundle } = await setup(t), result = await createKeywordMonthlyAnalysis({ projectionDir: projection, now: () => NOW }).analyze(QUERY);
+  result.snapshot.definitions.deliveryEvidence = Array.from({ length: 12 }, (_, index) => ({ index, note: String(index).repeat(800000) }));
+  const partition = bundle.catalog.partitions[0].key, saved = encodePreparedResult(result, { partition, compression: "gzip" });
+  assert.ok(saved.descriptor.uncompressedBytes > 8 * 1024 * 1024);
+  assert.ok(saved.descriptor.uncompressedBytes <= KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.decodedBytes);
+  const restored = decodePreparedResult({ bytes: saved.bytes }, saved.descriptor, { currentDay: "2026-11-15", now: NOW });
+  assert.deepEqual(restored.snapshot, result.snapshot);
+  for (const field of ["request", "activity", "latestAttempt", "lastSuccessfulAttempt"]) assert.deepEqual(restored[field], result[field]);
+  assert.equal(restored.snapshot.sources.observations.length, result.snapshot.sources.observations.length);
+  assert.ok(boundedJsonBuffer(restored, KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes).length > 8 * 1024 * 1024);
+  assert.equal(KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.encodedBytes, 8 * 1024 * 1024);
+  assert.equal(KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.nodes, 500000);
+  assert.equal(KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.decodedBytes + KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.wrapperBytes, KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes);
+});
+
+test("a full decoded budget leaves room for the final read wrapper and rejects a gzip expansion beyond 32MiB", async t => {
+  const { projection, bundle } = await setup(t), result = await createKeywordMonthlyAnalysis({ projectionDir: projection, now: () => NOW }).analyze(QUERY);
+  result.snapshot.definitions.deliveryEvidence = "";
+  const partition = bundle.catalog.partitions[0].key, base = encodePreparedResult(result, { partition, compression: "gzip" });
+  result.snapshot.definitions.deliveryEvidence = "x".repeat(KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.decodedBytes - base.descriptor.uncompressedBytes);
+  const saved = encodePreparedResult(result, { partition, compression: "gzip" });
+  assert.equal(saved.descriptor.uncompressedBytes, KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.decodedBytes);
+  const restored = decodePreparedResult({ bytes: saved.bytes }, saved.descriptor, { currentDay: "2026-11-15", now: NOW });
+  assert.ok(boundedJsonBuffer(restored, KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes).length <= KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes);
+  result.snapshot.definitions.deliveryEvidence += "x";
+  assert.throws(() => encodePreparedResult(result, { partition, compression: "gzip" }), /SIZE_LIMIT/);
+  const bomb = gzipSync(Buffer.alloc(KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes + 1, 120));
+  assert.ok(bomb.length < KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.encodedBytes);
+  assert.throws(() => decodePreparedResult({ bytes: bomb }, { ...saved.descriptor, bytes: bomb.length, sha256: sha(bomb) }, { currentDay: "2026-11-15", now: NOW }), /COMPRESSION_INVALID/);
+});
+
+test("compressed derived result artifacts retain the independent 8MiB stored-byte bound", async t => {
+  const { projection, bundle } = await setup(t), result = await createKeywordMonthlyAnalysis({ projectionDir: projection, now: () => NOW }).analyze(QUERY);
+  result.snapshot.definitions.deliveryEvidence = crypto.randomBytes(9 * 1024 * 1024).toString("base64");
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.decodedBytes);
+  assert.throws(() => encodePreparedResult(result, { partition: bundle.catalog.partitions[0].key, compression: "gzip" }), /SIZE_LIMIT/);
 });

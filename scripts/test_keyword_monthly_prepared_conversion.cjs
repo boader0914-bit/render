@@ -37,13 +37,15 @@ async function fixture(t, variant = {}) {
     const pid = process.pid, proof = { schemaVersion: 1, mode: "fixture_only", pid, expectedRoot: jobDir, guardName: K.GUARD, guardSha256: flag("--guard-sha256"), nodeSha256: flag("--node-sha256") };
     const proofRead = await K.writeNew(flag("--proof"), proof), isolation = { mode: "fixture_only", pid, proofSha256: proofRead.sha256 };
     const guards = installGuards(jobDir, { codeRoot, readOnlyRoots: [path.join(liveDir, "current.json"), path.join(liveDir, "generations", job.source.generation)] }), scratch = installScratchBudget(jobDir, K.LIMITS.scratchBytes);
+    const originalPrepare = B.prepareKeywordMonthlyBundle;
+    if (variant.encodingSizeFailure) B.prepareKeywordMonthlyBundle = async () => { throw K.fault("KEYWORD_MONTHLY_RESULT_SIZE_LIMIT"); };
     try {
       if (variant.deniedOriginalRead) await fs.readFile(path.join(dataDir, "outputs", "synthetic", "manifest.json"));
       const result = await K.compile(job, { isolation, fixture: true });
       assert.ok(Object.values(guards.metrics).every(value => value === 0));
       if (variant.badParity) result.parity[0].logicalSha256 = "0".repeat(64);
       await K.writeNew(path.join(jobDir, "child-complete.json"), { ...result, guardMetrics: guards.metrics, scratch: scratch.status() });
-    } finally { scratch.restore(); guards.restore(); }
+    } finally { B.prepareKeywordMonthlyBundle = originalPrepare; scratch.restore(); guards.restore(); }
     if (variant.mutateOldGeneration) {
       const loaded = await B.loadBundle(liveDir), part = loaded.catalog.partitions[0], file = path.join(loaded.generationDir, "partitions", part.key, "index.json"); await fs.appendFile(file, " ");
     }
@@ -66,6 +68,19 @@ test("CLI validates exact modes and exposes no fixture or unrestricted option", 
 test("all old scopes convert exactly through guarded fixture child, preserving source and issue bytes", async t => {
   const f = await fixture(t), original = await K.inventory((await B.loadBundle(f.liveDir)).generationDir), staged = await C.stage(f.request, f.deps);
   assert.equal(staged.scopeCount, 6); assert.equal(staged.preparedResultCount, 6); assert.equal(f.executions(), 1);
+  const sizesRead = await H.read(path.join(staged.jobDir, "legacy-result-sizes.json"), K.LIMITS.receiptBytes), sizes = sizesRead.value;
+  assert.equal(sizes.scopeCount, 6); assert.equal(sizes.results.length, 6);
+  const legacy = B.createKeywordMonthlyBundleAnalysis({ projectionDir: f.liveDir, now: () => NOW });
+  for (const row of sizes.results) {
+    assert.deepEqual(Object.keys(row).sort(), ["memory", "observationCount", "query", "resultJsonBytes"]);
+    assert.deepEqual(Object.keys(row.query).sort(), ["cutoffDate", "keyword", "month"]);
+    const result = await legacy.analyze(row.query);
+    assert.equal(row.resultJsonBytes, Buffer.byteLength(JSON.stringify(result))); assert.equal(row.observationCount, result.snapshot.sources.observations.length);
+    assert.ok(Object.values(row.memory).every(value => Number.isSafeInteger(value) && value >= 0));
+  }
+  assert.equal(sizes.maximumResultJsonBytes, Math.max(...sizes.results.map(row => row.resultJsonBytes)));
+  const child = await H.read(path.join(staged.jobDir, "child-complete.json"), K.LIMITS.receiptBytes);
+  assert.deepEqual(child.value.legacyResultSizes, { file: "legacy-result-sizes.json", sha256: sizesRead.sha256, bytes: sizesRead.bytes.length });
   assert.equal((await B.loadBundle(f.liveDir)).catalog.schemaVersion, 1); await K.assertInventory(original); await preserve(f);
   const result = await C.publish({ jobDir: staged.jobDir, completionSha256: staged.completionSha256, expectedCurrentSha256: f.request.expectedCurrentSha256 }, f.deps);
   assert.equal(result.status, "published"); assert.equal(result.parentProjectionAnalyses, 0); assert.equal(result.originalFreshnessVerified, false);
@@ -74,6 +89,19 @@ test("all old scopes convert exactly through guarded fixture child, preserving s
   for (const row of checked.child.value.parity) { const actual = await service.readPrepared(row.query); assert.equal(actual.preparedResult.status, "ready"); assert.equal(K.logicalHash(actual), row.logicalSha256); }
   assert.equal((await C.inspect(staged.jobDir)).status, "published_receipt_exists");
   await assert.rejects(C.stage({ ...f.request, expectedCurrentSha256: loaded.pointerRead.sha256 }, f.deps), /ALREADY_PREPARED/); assert.equal(f.executions(), 1);
+});
+
+test("payload-free legacy size evidence survives a later prepared encoding rejection without publishing", async t => {
+  const f = await fixture(t, { encodingSizeFailure: true }), pointer = await fs.readFile(path.join(f.liveDir, "current.json"));
+  await assert.rejects(C.stage(f.request, f.deps), /KEYWORD_MONTHLY_RESULT_SIZE_LIMIT/);
+  const operations = path.join(f.dataDir, "operations", "keyword-prepared-conversion-20261115"), entries = await fs.readdir(operations);
+  assert.equal(entries.length, 1);
+  const jobDir = path.join(operations, entries[0]), sizes = await H.read(path.join(jobDir, "legacy-result-sizes.json"), K.LIMITS.receiptBytes);
+  assert.equal(sizes.value.scopeCount, 6); assert.equal(sizes.value.results.length, 6);
+  assert.ok(sizes.value.results.every(row => row.resultJsonBytes > 0 && row.observationCount > 0));
+  assert.ok(!sizes.bytes.toString("utf8").includes("Synthetic conversion company"));
+  await assert.rejects(fs.access(path.join(jobDir, "publication-preparation.json")), { code: "ENOENT" });
+  assert.deepEqual(await fs.readFile(path.join(f.liveDir, "current.json")), pointer); await preserve(f);
 });
 test("stage is exclusive by deterministic operation id and never repeats a completed child", async t => {
   const f = await fixture(t); await C.stage(f.request, f.deps); await assert.rejects(C.stage(f.request, f.deps), /ALREADY_EXISTS/); assert.equal(f.executions(), 1); await preserve(f);

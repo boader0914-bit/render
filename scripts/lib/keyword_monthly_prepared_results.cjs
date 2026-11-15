@@ -6,10 +6,11 @@
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
 const { gzipSync, gunzipSync } = require("node:zlib");
 const VERSION = "keyword-monthly-prepared-result-v1";
-// Keep a final response below the HTTP layer's 8MiB cap after its fixed
+// Keep a final response below the HTTP layer's 32MiB cap after its fixed
 // provenance/generation wrapper is added. Original projection limits are not
 // widened or reduced by this independent derived-result delivery budget.
-const LIMITS = Object.freeze({ encodedBytes: 8 * 1024 * 1024, decodedBytes: 8 * 1024 * 1024 - 64 * 1024,
+const LIMITS = Object.freeze({ encodedBytes: 8 * 1024 * 1024, responseBytes: 32 * 1024 * 1024,
+  wrapperBytes: 64 * 1024, decodedBytes: 32 * 1024 * 1024 - 64 * 1024,
   results: 8192, nodes: 500000 });
 const SHA = /^[a-f0-9]{64}$/, MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");

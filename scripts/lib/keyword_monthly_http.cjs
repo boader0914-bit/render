@@ -5,11 +5,13 @@ const { createKeywordMonthlyQueryLifecycle } = require("./keyword_monthly_query_
 const { createKeywordMonthlyResponseBudget } = require("./keyword_monthly_response_budget.cjs");
 const { boundedJsonBuffer } = require("./bounded_company_response.cjs");
 const { runKeywordMonthlyMemoryAdmission } = require("./keyword_monthly_memory_admission.cjs");
+const { KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
 
 function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefreshStatus = null,
   queryLifecycle = createKeywordMonthlyQueryLifecycle(),
   statusLifecycle = createKeywordMonthlyQueryLifecycle({maxInFlight:1, timeoutMs:5000}),
-  responseBudget = createKeywordMonthlyResponseBudget(),
+  responseBudget = createKeywordMonthlyResponseBudget({maxResponseBytes:KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes,
+    maxReservedBytes:2*KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS.responseBytes}),
   statusResponseBudget = createKeywordMonthlyResponseBudget({maxResponseBytes:2*1024*1024,maxReservedBytes:4*1024*1024}) } = {}) {
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal}={}) {

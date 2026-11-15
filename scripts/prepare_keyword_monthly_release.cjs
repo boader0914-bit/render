@@ -114,7 +114,13 @@ function runChild(executable, argv, { cwd, timeout = LIMITS.timeout, outputBound
       proc.stderr.on("data", bytes => { stderrBytes += bytes.length; if (total + stderrBytes > outputBound) stop("KEYWORD_PREP_CHILD_OUTPUT_BOUND"); else errors.push(bytes); });
     }
     timer = setTimeout(() => stop("KEYWORD_PREP_CHILD_TIMEOUT"), timeout);
-    proc.on("close", (exitCode, exitSignal) => { if (denied) return end(denied === "KEYWORD_PREP_CHILD_ABORTED" ? aborted() : Object.assign(Error(denied), { code: denied })); if (startError) return end(Object.assign(Error("KEYWORD_PREP_CHILD_START"), { code: "KEYWORD_PREP_CHILD_START" })); if (exitCode !== 0 || exitSignal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", exitCode, childCode: childFailureDiagnostic(Buffer.concat(errors)) }));
+    proc.on("close", (exitCode, exitSignal) => {
+      const termination = { pid: Number.isSafeInteger(proc.pid) && proc.pid > 0 ? proc.pid : null,
+        exitCode: Number.isSafeInteger(exitCode) && exitCode >= 0 && exitCode <= 65535 ? exitCode : null,
+        exitSignal: typeof exitSignal === "string" && Object.hasOwn(require("node:os").constants.signals, exitSignal) ? exitSignal : null };
+      if (denied) return end(Object.assign(denied === "KEYWORD_PREP_CHILD_ABORTED" ? aborted() : Object.assign(Error(denied), { code: denied }), termination));
+      if (startError) return end(Object.assign(Error("KEYWORD_PREP_CHILD_START"), { code: "KEYWORD_PREP_CHILD_START", ...termination }));
+      if (exitCode !== 0 || exitSignal) return end(Object.assign(Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", ...termination, childCode: childFailureDiagnostic(Buffer.concat(errors)) }));
       if (receiptOnly) return end(null, { exitCode, pid: proc.pid, stdout: null, stderrBytes: null, receiptOnly: true });
       let value; try { value = JSON.parse(Buffer.concat(output).toString("utf8")); } catch { return end(Object.assign(Error("KEYWORD_PREP_CHILD_PROTOCOL"), { code: "KEYWORD_PREP_CHILD_PROTOCOL" })); }
       end(null, { exitCode, pid: proc.pid, stdout: value, stderrBytes, ...stderrPolicy(Buffer.concat(errors), proc.pid) }); });

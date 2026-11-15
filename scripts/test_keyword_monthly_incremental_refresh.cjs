@@ -8,6 +8,7 @@ const R = require("./refresh_keyword_monthly_incremental.cjs"), { createStore } 
 const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_source_delta.cjs"), { events } = require("./lib/keyword_monthly_incremental_context.cjs");
 const { metadataInventory, seedDependencies } = require("./lib/keyword_monthly_incremental_inputs.cjs");
 const { buildKeywordMonthlyProjection } = require("./lib/keyword_monthly_analysis.cjs");
+const failure = require("./lib/keyword_monthly_incremental_failure.cjs");
 const NOW = "2026-11-15T00:00:00.000Z", A = "fixture-keyword-a", OTHER = "fixture-keyword-b";
 async function json(file, value) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); }
 function source(keyword, sold = 1) {
@@ -53,13 +54,26 @@ async function fixture(t, variant = {}) {
     const directory = path.join(jobRoot, "fixture-projection"), updated = source(A, 2);
     await buildKeywordMonthlyProjection({ source: updated, sourceFingerprint: H.hash(JSON.stringify(updated)), outputDir: directory,
       materializedAt: NOW, dataThrough: NOW, publishMonths: ["2026-11"] });
-    const pid = process.pid + 100, proof = { mode: "seccomp", fixtureOnly: true, noNewPrivs: true, seccompMode: 2,
+    const pid = variant.childFailure ? process.pid : process.pid + 100, proof = { mode: "seccomp", fixtureOnly: true, noNewPrivs: true, seccompMode: 2,
       networkFdsClosed: true, expectedRoot: jobRoot, preflightOnly: false, environmentSanitizedForExec: true, unrestrictedFallbackAllowed: false, providerCalls: 0,
       guardSha256: variant.wrongGuardPin ? "0".repeat(64) : flag("--guard-sha256"), nodeSha256: variant.wrongNodePin ? "0".repeat(64) : flag("--node-sha256"), pid: variant.wrongProofPid ? pid + 1 : pid,
       kernelProbe: { tcpSocketDenied: true, udpSocketDenied: true, ipv6SocketDenied: true,
         syscallsDeniedWithEperm: Object.fromEntries(["socket", "socketpair", "connect", "sendto", "sendmsg"].map(name => [name, true])) },
       nonStandardFdsClosedBeforeExec: true, nonStandardFdsRemainingBeforeExec: 0 };
     if (!variant.missingProof) await json(proofFile, proof);
+    if (variant.childFailure) {
+      if (variant.childFailure !== "missing") {
+        const binding = await failure.captureBinding({ jobRoot, inputSha256: flag("--input-sha"), sourceKey: R.keyFor(evidence), version: R.VERSION, pid,
+          guardSha256: flag("--guard-sha256"), nodeSha256: flag("--node-sha256") });
+        await failure.writeFailure({ binding, codeRoot, error: Object.assign(new RangeError("DO_NOT_PERSIST arbitrary source value"), { code: "KEYWORD_INCREMENTAL_SYNTHETIC_FAILURE" }),
+          progress: { phase: "scope_normalize", scopeIndex: 12, plannedScopes: 73, completedParts: 12 }, startedAt: Date.now() - 10 });
+        if (variant.childFailure === "wrongPid") { const file = failure.failureFile(jobRoot), value = JSON.parse(await fs.readFile(file)); value.pid++; await fs.writeFile(file, JSON.stringify(value)); }
+        if (variant.childFailure === "wrongInput") await fs.appendFile(path.join(jobRoot, "job-input.json"), " ");
+        if (variant.childFailure === "privateField") { const file = failure.failureFile(jobRoot), value = JSON.parse(await fs.readFile(file)); value.password = "DO_NOT_PERSIST"; await fs.writeFile(file, JSON.stringify(value)); }
+      }
+      throw Object.assign(new Error("KEYWORD_PREP_CHILD_FAILED"), { code: "KEYWORD_PREP_CHILD_FAILED", pid, exitCode: variant.childFailure === "missing" ? null : 1,
+        exitSignal: variant.childFailure === "missing" ? "SIGKILL" : null, childCode: null });
+    }
     const scopes = [{ keyword: A, month: "2026-11", cutoffDate: "2026-11-15" }];
     const prepared = { schemaVersion: 1, version: R.VERSION, status: "complete", fixtureOnly: true, executionBasis: R.BASIS,
       capturedAt: variant.wrongCapturedAt ? "2026-11-14T00:00:00.000Z" : NOW, bootstrap: true, stateSha256: current.stateSha256, statePointerSha256: current.pointerSha256,
@@ -93,6 +107,19 @@ async function value(f, keyword, month) {
   const service = B.createKeywordMonthlyBundleAnalysis({ projectionDir: f.liveDir, now: () => NOW }), options = await service.options();
   return service.analyze({ keyword, month, cutoffDate: options.keywords.find(item => item.keyword === keyword).defaultCutoffs[month] });
 }
+
+for (const variant of ["valid", "wrongPid", "wrongInput", "privateField", "missing"]) test("failed child diagnostic is bounded and bound before adoption: " + variant, async t => {
+  const f = await fixture(t, { childFailure: variant }), pointer = await f.pointer(), source = await fs.readFile(path.join(f.dataDir, "history/observations.jsonl"));
+  await assert.rejects(R.refreshKeywordMonthlyIncremental(f.call, f.deps), { code: variant === "valid" ? "KEYWORD_INCREMENTAL_SYNTHETIC_FAILURE" : "KEYWORD_PREP_CHILD_FAILED" });
+  const dir = path.join(f.liveDir, "refresh-receipts"), names = (await fs.readdir(dir)).filter(n => n.startsWith("failed-incremental-")); assert.equal(names.length, 1);
+  const raw = await fs.readFile(path.join(dir, names[0]), "utf8"), record = JSON.parse(raw); assert.equal(raw.includes("DO_NOT_PERSIST"), false);
+  assert.equal(record.childPid, process.pid); assert.equal(record.childExitSignal, variant === "missing" ? "SIGKILL" : null); assert.equal(record.childExitCode, variant === "missing" ? null : 1);
+  assert.equal(record.childFailure.status, variant === "valid" ? "verified" : variant === "missing" ? "missing" : "invalid");
+  if (variant === "valid") { assert.equal(record.childFailure.progress.scopeIndex, 12); assert.equal(record.childFailure.memory.heapUsed > 0, true); assert.match(record.childFailure.receiptSha256, /^[a-f0-9]{64}$/); }
+  else assert.equal(record.childFailure.code, undefined);
+  assert.equal(f.publications(), 0); assert.deepEqual(await f.pointer(), pointer); assert.deepEqual(await fs.readFile(path.join(f.dataDir, "history/observations.jsonl")), source); await absent(f.lockFile);
+  await absent(path.join(dir, "intent-" + R.keyFor(f.evidence) + ".json"));
+});
 
 test("busy preflight creates no namespace, receipt or lock", async t => {
   const f = await fixture(t), pointer = await f.pointer();

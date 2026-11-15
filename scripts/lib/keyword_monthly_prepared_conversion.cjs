@@ -89,15 +89,24 @@ async function compile(job, { isolation, fixture = false } = {}) {
     cutoffDate: options.keywords?.find(row => row.keyword === scope.keyword)?.defaultCutoffs?.[scope.month] }));
   need(["available", "stale"].includes(options.status) && queries.length > 0 && queries.length <= LIMITS.scopes
     && queries.every(query => H.validDay(query.cutoffDate)), "KEYWORD_PREPARED_CONVERSION_SCOPE_UNAVAILABLE");
-  const parity = [], checkpoints = [];
+  const parity = [], checkpoints = [], resultSizes = [];
   const checkpoint = label => { const m = process.memoryUsage(); checkpoints.push({ label, heapUsed: m.heapUsed, rss: m.rss, external: m.external }); };
   const deadline = () => need(Date.now() - started < LIMITS.timeoutMs, "KEYWORD_PREPARED_CONVERSION_TIME_BOUND");
   for (let n = 0; n < queries.length; n++) {
     deadline(); let result = await legacy.analyze(queries[n]);
     need(["available", "stale"].includes(result.status) && result.snapshot && queryId(result.request) === queryId(queries[n]), "KEYWORD_PREPARED_CONVERSION_LEGACY_UNAVAILABLE");
+    const resultJsonBytes = Buffer.byteLength(JSON.stringify(result)), memory = process.memoryUsage();
+    resultSizes.push({ query: { ...queries[n] }, resultJsonBytes, observationCount: result.snapshot.sources.observations.length,
+      memory: { heapUsed: memory.heapUsed, heapTotal: memory.heapTotal, rss: memory.rss, external: memory.external, arrayBuffers: memory.arrayBuffers } });
     parity.push({ query: queries[n], status: result.status, logicalSha256: logicalHash(result), selectedDigest: result.snapshot.sources.digest,
       inputSha256: result.provenance.inputSha256, dataThrough: result.provenance.dataThrough }); result = null; checkpoint(`legacy_${n + 1}`);
   }
+  // Preserve bounded, payload-free size evidence even when a later encode
+  // rejects a result. Source rows, prices and customer data are not copied.
+  const resultSizesRead = await writeNew(path.join(job.jobDir, "legacy-result-sizes.json"), {
+    schemaVersion: 1, kind: "keyword_monthly_legacy_result_sizes", calculationFingerprint: job.calculationFingerprint,
+    scopeCount: resultSizes.length, maximumResultJsonBytes: Math.max(...resultSizes.map(row => row.resultJsonBytes)), results: resultSizes
+  });
   deadline(); const preparation = await B.prepareKeywordMonthlyBundle({ inputs, now: job.now, maxTotalBytes: LIMITS.generationBytes,
     prepareResults: true, preparedOutputDir: path.join(job.jobDir, "prepared-results") });
   const preparationRead = await writeNew(path.join(job.jobDir, "publication-preparation.json"), preparation);
@@ -117,6 +126,7 @@ async function compile(job, { isolation, fixture = false } = {}) {
     sourceInventorySha256: original.sha256, fixedClock: job.now, calculationFingerprint: job.calculationFingerprint,
     scopeCount: parity.length, preparedResultCount: preparation.preparedResults.descriptors.length, parity, paritySha256: hash(bytesFor(parity)),
     preparationSha256: preparationRead.sha256, candidate: { directory: candidateDir, ...verified }, publication,
+    legacyResultSizes: { file: "legacy-result-sizes.json", sha256: resultSizesRead.sha256, bytes: resultSizesRead.bytes.length },
     scopePlanSha256: scopePlanSha256(inputs, preparation.parts, job.now), isolation, elapsedMs: Date.now() - started,
     memory: { interpretation: "endpoint checkpoints only, not continuous peak", checkpoints },
     fixtureOnly: fixture, sourceWrites: 0, providerCalls: 0, appEntryExecutions: 0, issuedReportsChanged: false, originalFreshnessVerified: false };
