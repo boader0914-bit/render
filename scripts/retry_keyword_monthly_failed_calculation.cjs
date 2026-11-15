@@ -22,6 +22,68 @@ async function privateDirectory(file, fixture, create = false) {
   const st = await H.checked(file, true); need(fixture && process.platform === "win32" || st.uid === process.getuid() && (st.mode & 0o777) === 0o700, "KEYWORD_FAILED_RETRY_PRIVATE_SCOPE_REQUIRED"); return st;
 }
 async function syncDirectory(file) { if (process.platform !== "win32") { const h = await fs.open(file, C.O_RDONLY); try { await h.sync(); } finally { await h.close(); } } }
+async function streamIntegrity(file, expectedSha256, expectedBytes) {
+  const before = await H.checked(file); need(Number.isSafeInteger(expectedBytes) && expectedBytes > 0 && expectedBytes <= 32 * 1024 * 1024
+    && before.size === expectedBytes && H.SHA.test(expectedSha256 || ""), "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+  const handle = await fs.open(file, C.O_RDONLY | (C.O_NOFOLLOW || 0)), hash = crypto.createHash("sha256"); let offset = 0;
+  try { need(H.same(before, await handle.stat()), "KEYWORD_FAILED_RETRY_CHANGED"); const buffer = Buffer.alloc(1024 * 1024);
+    while (true) { const r = await handle.read(buffer, 0, Math.min(buffer.length, expectedBytes - offset + 1), offset); if (!r.bytesRead) break;
+      offset += r.bytesRead; need(offset <= expectedBytes, "KEYWORD_FAILED_RETRY_CHANGED"); hash.update(buffer.subarray(0, r.bytesRead)); }
+    need(offset === expectedBytes && H.same(before, await handle.stat()), "KEYWORD_FAILED_RETRY_CHANGED");
+  } finally { await handle.close(); }
+  need(H.same(before, await H.checked(file)) && hash.digest("hex") === expectedSha256, "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+}
+async function legacyPublicationIntegrity(dataDir, base, catalog, receipt) {
+  const fields = ["schemaVersion", "status", "generation", "bundleDir", "totalStoredBytes", "pointerSha256", "previousPointerSha256", "catalogSha256", "partitionCount", "scopeCount", "fixedValidationClock", "partitions",
+    "sourceProvenancePreserved", "originalEnvelopesRewritten", "providerCalls", "collectorStarted", "kosisReadOrChanged", "freshnessPolicy"];
+  need(exact(receipt, fields) && catalog.schemaVersion === 1 && receipt.bundleDir === path.join(dataDir, "keyword_monthly_analysis")
+    && Number.isSafeInteger(receipt.totalStoredBytes) && receipt.totalStoredBytes > 0 && receipt.totalStoredBytes <= 8 * 1024 ** 3
+    && (receipt.previousPointerSha256 === null || H.SHA.test(receipt.previousPointerSha256))
+    && receipt.freshnessPolicy === "Original child materializedAt/dataThrough/status retained; bundle assembly never refreshes historical source provenance.", "KEYWORD_FAILED_RETRY_LEGACY_RECEIPT_INVALID");
+  require("./lib/keyword_monthly_bundle.cjs").validateCatalog(catalog);
+  need(receipt.partitionCount === catalog.partitions.length && receipt.scopeCount === catalog.scopes.length && receipt.fixedValidationClock === catalog.createdAt
+    && Array.isArray(receipt.partitions) && receipt.partitions.length > 0 && receipt.partitions.length <= 512, "KEYWORD_FAILED_RETRY_LEGACY_RECEIPT_INVALID");
+  const indexes = new Map(), inventory = []; let checkedBytes = 0, projectionCount = 0;
+  for (const part of catalog.partitions) {
+    const directory = path.join(base, "partitions", part.key), index = await read(path.join(directory, "index.json"), 1024 * 1024), value = index.value;
+    need(index.sha256 === part.indexSha256 && index.bytes.length === part.indexBytes && value.schemaVersion === 1 && value.calculationVersion === "keyword-monthly-v1"
+      && H.SHA.test(value.sourceFingerprint || "") && value.provenance?.inputSha256 === value.sourceFingerprint && H.validIso(value.provenance.dataThrough)
+      && Array.isArray(value.keywords) && value.keywords.length > 0 && value.keywords.length <= 4096, "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+    indexes.set(part.key, { index, scopes: new Map() }); checkedBytes += index.bytes.length; inventory.push([part.key, "index.json", index.sha256, index.bytes.length]);
+    const names = new Set(), itemKeys = new Set();
+    for (const item of value.keywords) {
+      need(typeof item.keyword === "string" && item.keyword.length > 0 && item.keyword.length <= 300 && !itemKeys.has(item.keyword) && Array.isArray(item.scopes) && item.scopes.length <= 4096,
+        "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID"); itemKeys.add(item.keyword);
+      for (const scope of item.scopes) {
+        need(H.MONTH.test(scope.month || "") && scope.scopeKey === H.hash(bytes(["keyword-monthly-v1", item.keyword, scope.month])) && H.SHA.test(scope.sha256 || "")
+          && (scope.encoding === undefined || scope.encoding === "gzip") && ++projectionCount <= 8192, "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+        const name = scope.scopeKey + ".json" + (scope.encoding === "gzip" ? ".gz" : ""), id = JSON.stringify([item.keyword, scope.month]);
+        need(!names.has(name) && !indexes.get(part.key).scopes.has(id), "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID"); names.add(name); indexes.get(part.key).scopes.set(id, scope);
+        await streamIntegrity(path.join(directory, "projections", name), scope.sha256, scope.bytes); checkedBytes += scope.bytes;
+        need(checkedBytes <= receipt.totalStoredBytes, "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID"); inventory.push([part.key, name, scope.sha256, scope.bytes]);
+      }
+    }
+    const declared = await fs.readdir(path.join(directory, "projections"), { withFileTypes: true });
+    need(declared.length === names.size && declared.every(entry => entry.isFile() && !entry.isSymbolicLink() && names.has(entry.name)), "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+    need((await read(index.file, 1024 * 1024)).sha256 === index.sha256, "KEYWORD_FAILED_RETRY_CHANGED");
+  }
+  const validations = new Set(), usedParts = new Set();
+  for (const part of receipt.partitions) {
+    const saved = indexes.get(part.inputIndexSha256);
+    need(exact(part, ["inputIndexSha256", "inputIndexBytes", "validation"]) && saved && part.inputIndexBytes === saved.index.bytes.length
+      && Array.isArray(part.validation) && part.validation.length > 0 && part.validation.length <= 4096, "KEYWORD_FAILED_RETRY_LEGACY_RECEIPT_INVALID"); usedParts.add(part.inputIndexSha256);
+    for (const row of part.validation) {
+      const q = row?.query, id = JSON.stringify([q?.keyword, q?.month]);
+      need(exact(row, ["query", "status", "selectedDigest", "inputSha256", "dataThrough"]) && exact(q, ["keyword", "month", "cutoffDate"])
+        && H.validDay(q.cutoffDate) && ["available", "stale"].includes(row.status) && H.SHA.test(row.selectedDigest || "")
+        && row.inputSha256 === saved.index.value.sourceFingerprint && row.dataThrough === saved.index.value.provenance.dataThrough
+        && saved.scopes.has(id) && !validations.has(id) && catalog.scopes.some(scope => scope.partition === part.inputIndexSha256 && scope.keyword === q.keyword && scope.month === q.month),
+      "KEYWORD_FAILED_RETRY_LEGACY_RECEIPT_INVALID"); validations.add(id);
+    }
+  }
+  need(usedParts.size === catalog.partitions.length && validations.size === catalog.scopes.length && checkedBytes === receipt.totalStoredBytes, "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID");
+  return { basis: "legacy_writer_receipt_and_exact_saved_partition_bytes", partitionCount: indexes.size, projectionCount, checkedBytes, integritySha256: H.hash(bytes(inventory)) };
+}
 function optionsFor(o, fixture) {
   need(o && Object.keys(o).every(k => ["mode", "dataDir", "jobId", "expectedJobSha256", "failureId", "expectedFailureSha256", "expectedPublicPointerSha256", "expectedSourcePointerSha256", "reviewSha256", "diagnosticPurpose", "now"].includes(k)), "KEYWORD_FAILED_RETRY_OPTIONS_INVALID");
   H.absolute(o.dataDir); need(fixture || process.platform === "linux" && o.dataDir === "/var/data", "KEYWORD_FAILED_RETRY_CONTEXT_INVALID");
@@ -46,9 +108,15 @@ async function publication(dataDir, generation, expectedPointerSha256) {
   const base = path.join(dataDir, "keyword_monthly_analysis/generations", generation), catalog = await read(path.join(base, "catalog.json"), 1024 * 1024), receipt = await read(path.join(base, "publication-receipt.json"), 256 * 1024), r = receipt.value;
   need(r.schemaVersion === 1 && r.status === "published" && r.generation === generation && r.pointerSha256 === expectedPointerSha256 && r.catalogSha256 === catalog.sha256
     && r.sourceProvenancePreserved === true && r.originalEnvelopesRewritten === false && r.providerCalls === 0 && r.collectorStarted === false && r.kosisReadOrChanged === false
-    && H.validIso(r.fixedValidationClock) && H.SHA.test(r.semanticPrevalidationSha256 || ""), "KEYWORD_FAILED_RETRY_PUBLICATION_INVALID");
+    && H.validIso(r.fixedValidationClock), "KEYWORD_FAILED_RETRY_PUBLICATION_INVALID");
   need([1, 2].includes(catalog.value.schemaVersion) && catalog.value.kind === "keyword_monthly_partition_bundle" && Array.isArray(catalog.value.scopes), "KEYWORD_FAILED_RETRY_PUBLICATION_INVALID");
-  return { catalog, receipt };
+  let verification;
+  if (Object.hasOwn(r, "semanticPrevalidationSha256")) {
+    need(H.SHA.test(r.semanticPrevalidationSha256 || "") && (!Object.hasOwn(r, "publicationProjectionAnalyses") || r.publicationProjectionAnalyses === 0), "KEYWORD_FAILED_RETRY_PUBLICATION_INVALID");
+    verification = { basis: "semantic_prevalidation_receipt", integritySha256: null };
+  } else verification = await legacyPublicationIntegrity(dataDir, base, catalog.value, r);
+  need((await read(receipt.file, 256 * 1024)).sha256 === receipt.sha256 && (await read(catalog.file, 1024 * 1024)).sha256 === catalog.sha256, "KEYWORD_FAILED_RETRY_CHANGED");
+  return { catalog, receipt, verification };
 }
 async function inspect(options, dependencies = {}, ownedAudit = null) {
   const fixture = dependencies.fixture === true; optionsFor(options, fixture);
@@ -97,7 +165,8 @@ async function inspect(options, dependencies = {}, ownedAudit = null) {
     failureId, failureReceiptSha256: failure.sha256, jobInputSha256: input.sha256, failedIsolationSha256: proof.sha256, failedGuardSha256: p.guardSha256,
     currentGuardSha256: identity.guardSha256, codeFingerprint: identity.fingerprint, manifestSha256: manifest.sha256, dbReceiptSha256: db.sha256,
     publicPointerSha256: publicPointer.sha256, publicPublicationSha256: pub.receipt.sha256, sourcePointerSha256: sourcePointer.sha256, sourceStateSha256: source.stateSha256,
-    lastPublishedPointerSha256: last.pointerSha256, lastPublishedReceiptSha256: lastPublication.receipt.sha256, diagnosticPurpose: options.diagnosticPurpose ?? null };
+    lastPublishedPointerSha256: last.pointerSha256, lastPublishedReceiptSha256: lastPublication.receipt.sha256,
+    publicPublicationVerification: pub.verification, lastPublishedVerification: lastPublication.verification, diagnosticPurpose: options.diagnosticPurpose ?? null };
   return { status: "review_required", snapshot, reviewSha256: H.hash(bytes(snapshot)), restartRequired: true, changed: false };
 }
 async function retryFailedCalculation(options, dependencies = {}) {

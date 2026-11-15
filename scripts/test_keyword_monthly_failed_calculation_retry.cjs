@@ -42,6 +42,64 @@ async function fixture(t) {
 }
 function queue(f, refresh) { return require("./lib/keyword_monthly_refresh.cjs").createKeywordMonthlyRefresh({ dataDir: f.dataDir, refreshVersion: R.VERSION, now: () => new Date(NOW),
   readCompletedEvidence: async i => ({ ...i, status: "complete", quality: "complete", postprocessStatus: "complete" }), refresh }); }
+async function legacyFixture(t) {
+  const f = await fixture(t), keyword = f.row.intent.keyword, companyId = "synthetic_legacy_company", collectedAt = "2026-11-15T10:00:00.000Z", stayDate = "2026-11-20", runId = "synthetic_legacy_source";
+  const source = { companies: [{ companyId, primaryName: "Synthetic legacy", capacity: 5, capacitySource: "db_correction" }],
+    runs: [{ id: runId, keyword, collectedAt, collectionQuality: { status: "complete" } }],
+    observations: [{ companyId, keyword, runId, productType: "lodging", stayDate, collectedAt, inventoryEvidenceVersion: 4, supply: 5, sold: 2, publicBookings: 2,
+      phoneBookings: 0, publicRevenue: 200000, phoneRevenue: 0, estimatedRevenue: 200000, explicitBlockedBookings: 0, sharedDayUseExcluded: 0,
+      phoneMissingPriceBookings: 0, partial: false, missing: false, dayUsePresence: "absent", dayUseSharingStatus: "not_shared", capacityBasis: { count: 5, source: "db_correction" } }],
+    rankObservations: [], savedProductRecoveries: [], warnings: [], sourceDiagnostics: {} };
+  const directory = path.join(f.root, "legacy-prepared");
+  await require("./lib/keyword_monthly_analysis.cjs").buildKeywordMonthlyProjection({ source, sourceFingerprint: hash(bytes(source)), outputDir: directory, materializedAt: NOW, now: () => NOW });
+  // Run the actual historical publisher text, not a fixture that imitates the
+  // validator. Its fixed relative imports resolve to this test repository.
+  const Module = require("node:module"), filename = path.join(__dirname, "lib/keyword_monthly_bundle.cjs"), old = new Module(filename, module);
+  old.filename = filename; old.paths = Module._nodeModulePaths(path.dirname(filename));
+  old._compile(require("node:child_process").execFileSync("git", ["show", "aed4990:scripts/lib/keyword_monthly_bundle.cjs"], { cwd: path.resolve(__dirname, ".."), encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }), filename);
+  const result = await old.exports.publishKeywordMonthlyBundle({ inputs: [{ directory }], outputDir: path.join(f.dataDir, "keyword_monthly_analysis"), now: NOW, expectedCurrentSha256: f.options.expectedPublicPointerSha256 });
+  assert.equal(Object.hasOwn(result, "semanticPrevalidationSha256"), false); assert.equal(Object.hasOwn(result, "publicationProjectionAnalyses"), false);
+  const pointer = JSON.parse(await fs.readFile(f.pointerFile)), base = path.join(f.dataDir, "keyword_monthly_analysis/generations", pointer.generation), catalogFile = path.join(base, "catalog.json"), catalog = JSON.parse(await fs.readFile(catalogFile));
+  const input = JSON.parse(await fs.readFile(f.inputFile)); input.initialBundle = { generation: pointer.generation, pointerSha256: result.pointerSha256, catalogSha256: pointer.catalogSha256 }; await save(f.inputFile, input);
+  const originalState = JSON.parse(zlib.gunzipSync(await fs.readFile(f.stateFile))); originalState.lastPublished.generation = pointer.generation; originalState.lastPublished.pointerSha256 = result.pointerSha256;
+  const raw = bytes(originalState), compressed = zlib.gzipSync(raw), stateSha = hash(raw), newStateFile = path.join(f.namespace, "states", stateSha + ".json.gz"); await fs.writeFile(newStateFile, compressed, { mode: 0o600 });
+  const sourcePointer = JSON.parse(await fs.readFile(f.sourceFile)); Object.assign(sourcePointer, { stateSha256: stateSha, storageSha256: hash(compressed), storageBytes: compressed.length, rawBytes: raw.length }); await save(f.sourceFile, sourcePointer);
+  f.options.expectedPublicPointerSha256 = result.pointerSha256; f.options.expectedSourcePointerSha256 = hash(await fs.readFile(f.sourceFile)); f.stateFile = newStateFile;
+  f.publicationFile = path.join(base, "publication-receipt.json"); f.catalogFile = catalogFile;
+  const indexFile = path.join(base, "partitions", catalog.partitions[0].key, "index.json"), index = JSON.parse(await fs.readFile(indexFile)), scope = index.keywords[0].scopes[0];
+  f.partitionIndexFile = indexFile; f.projectionFile = path.join(path.dirname(indexFile), "projections", scope.scopeKey + ".json" + (scope.encoding === "gzip" ? ".gz" : ""));
+  return f;
+}
+test("actual aed4990 legacy publisher receipt is verified through exact saved bytes without inventing semantic prevalidation", async t => {
+  const f = await legacyFixture(t), before = await fs.readFile(f.publicationFile), r = await R.retryFailedCalculation(f.options, f.dependencies);
+  assert.equal(r.status, "review_required"); assert.equal(r.snapshot.publicPublicationVerification.basis, "legacy_writer_receipt_and_exact_saved_partition_bytes");
+  assert.equal(r.snapshot.publicPublicationVerification.partitionCount, 1); assert.equal(r.snapshot.publicPublicationVerification.projectionCount, 1);
+  assert.match(r.snapshot.publicPublicationVerification.integritySha256, /^[a-f0-9]{64}$/); assert.deepEqual(await fs.readFile(f.publicationFile), before);
+  const result = await R.retryFailedCalculation({ ...f.options, mode: "commit", reviewSha256: r.reviewSha256 }, f.dependencies);
+  assert.equal(result.status, "queued"); assert.equal(result.attempts, 3); assert.equal(result.maxAttempts, 3); assert.deepEqual(await fs.readFile(f.publicationFile), before);
+});
+for (const target of ["projectionFile", "partitionIndexFile"]) test(`legacy ${target} byte corruption prevents authorization`, async t => {
+  const f = await legacyFixture(t); await fs.appendFile(f[target], " ");
+  await assert.rejects(R.retryFailedCalculation(f.options, f.dependencies), { code: "KEYWORD_FAILED_RETRY_LEGACY_INTEGRITY_INVALID" }); await absent(path.join(f.dataDir, "operations"));
+});
+for (const [name, mutate] of [
+  ["wrong count", r => { r.partitionCount++; }], ["wrong total bytes", r => { r.totalStoredBytes++; }],
+  ["wrong source binding", r => { r.partitions[0].validation[0].inputSha256 = "0".repeat(64); }],
+  ["wrong scope", r => { r.partitions[0].validation[0].query.keyword = "wrong_keyword"; }],
+  ["invalid semantic SHA", r => { r.semanticPrevalidationSha256 = "not-a-sha"; }],
+  ["modern marker without semantic SHA", r => { r.publicationProjectionAnalyses = 0; }],
+  ["unknown receipt field", r => { r.trusted = true; }]
+]) test(`legacy ${name} cannot masquerade as valid historic publication`, async t => {
+  const f = await legacyFixture(t), receipt = JSON.parse(await fs.readFile(f.publicationFile)); mutate(receipt); await save(f.publicationFile, receipt);
+  await assert.rejects(R.retryFailedCalculation(f.options, f.dependencies)); await absent(path.join(f.dataDir, "operations"));
+});
+test("catalog2 never receives legacy receipt exception when semantic SHA is missing", async t => {
+  const f = await legacyFixture(t), catalog = JSON.parse(await fs.readFile(f.catalogFile)); catalog.schemaVersion = 2; catalog.preparedResults = []; await save(f.catalogFile, catalog);
+  const catSha = hash(await fs.readFile(f.catalogFile)), pointer = JSON.parse(await fs.readFile(f.pointerFile)); pointer.catalogSha256 = catSha; pointer.catalogBytes = bytes(catalog).length; await save(f.pointerFile, pointer);
+  const receipt = JSON.parse(await fs.readFile(f.publicationFile)); receipt.catalogSha256 = catSha; receipt.pointerSha256 = hash(await fs.readFile(f.pointerFile)); await save(f.publicationFile, receipt);
+  const input = JSON.parse(await fs.readFile(f.inputFile)); input.initialBundle.catalogSha256 = catSha; input.initialBundle.pointerSha256 = receipt.pointerSha256; await save(f.inputFile, input); f.options.expectedPublicPointerSha256 = receipt.pointerSha256;
+  await assert.rejects(R.retryFailedCalculation(f.options, f.dependencies), { code: "KEYWORD_FAILED_RETRY_LEGACY_RECEIPT_INVALID" }); await absent(path.join(f.dataDir, "operations"));
+});
 test("inspection pins failed source and current last-success publication without writing or admitting work", async t => {
   const f = await fixture(t), before = await fs.readFile(f.jobFile), r = await R.retryFailedCalculation(f.options, f.dependencies);
   assert.equal(r.status, "review_required"); assert.equal(r.snapshot.attempts, 3); assert.equal(r.snapshot.authorizedAttempt, 4); assert.equal(f.calls(), 0);
