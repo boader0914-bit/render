@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { test } = require("node:test");
 const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
+const { createKeywordMonthlyRequestDiagnostics } = require("./lib/keyword_monthly_request_diagnostics.cjs");
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "web/index.html"), "utf8");
@@ -112,14 +113,18 @@ test("keyword view suppresses hidden KOSIS status, region reads and late paints"
 test("production prepared reads own the existing analytical lease until the full query resolves", async () => {
   const declaration = serverSource.match(/^const keywordMonthlyAnalysis = Object\.freeze\(\{[^]*?^\}\);/m)?.[0];
   assert.ok(declaration); let leased = false; const calls = [];
-  const context = vm.createContext({ keywordMonthlyPreparedAnalysis: {
+  const diagnostics = createKeywordMonthlyRequestDiagnostics({onLog:null});
+  const context = vm.createContext({ keywordMonthlyRequestDiagnostics:diagnostics, keywordMonthlyPreparedAnalysis: {
     async options() { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); return "options"; },
     async analyze(input) { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); assert.equal(leased, true); return input; }
-  }, async runAnalyticalWork(operation, options) { assert.equal(leased, false); leased = true; calls.push(options.kind); try { return await operation(); } finally { leased = false; } } });
+  }, async runAnalyticalWork(operation, options) { assert.equal(leased, false); assert.equal(typeof options.onTaskTiming,"function"); leased = true; calls.push(options.kind);
+    try { return await operation({timing:{queueWaitMs:0}}); }
+    finally { leased = false; options.onTaskTiming({outcome:"completed",queueWaitMs:0,leaseMs:1}); } } });
   const service = vm.runInContext(declaration + "\nkeywordMonthlyAnalysis", context);
-  assert.equal(await service.options(), "options"); assert.equal(leased, false);
-  const query = { keyword: "가평글램핑", month: "2026-10" }; assert.equal(await service.analyze(query), query); assert.equal(leased, false);
+  assert.equal(await diagnostics.run("options",()=>service.options()), "options"); assert.equal(leased, false);
+  const query = { keyword: "가평글램핑", month: "2026-10" }; assert.equal(await diagnostics.run("data",()=>service.analyze(query)), query); assert.equal(leased, false);
   assert.deepEqual(calls, ["keyword_monthly_options", "keyword_monthly_analysis"]);
+  assert.ok(diagnostics.status().recent.every(record=>record.workStarted&&record.workFinished&&record.taskTimingObserved&&record.queueWaitAtStartMs===0));
 });
 test("Git-normalized collection, pacing, protection and held runtime sources remain at approved release", () => {
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",

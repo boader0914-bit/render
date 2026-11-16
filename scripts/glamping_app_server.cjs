@@ -51,6 +51,7 @@ const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_ca
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
+const { createKeywordMonthlyRequestDiagnostics } = require("./lib/keyword_monthly_request_diagnostics.cjs");
 const { createSearchDemandStore } = require("./lib/search_demand_store.cjs");
 const { createSearchDemandProviders } = require("./lib/search_demand_providers.cjs");
 const { createSearchDemandScheduler } = require("./lib/search_demand_scheduler.cjs");
@@ -900,12 +901,14 @@ const keywordMonthlyRefreshIntegration = createKeywordMonthlyRefreshIntegration(
 });
 // Keep one complete analytical allocation under the existing application lease.
 // Concurrent admin queries cannot retain several decoded history graphs.
+const keywordMonthlyRequestDiagnostics = createKeywordMonthlyRequestDiagnostics();
 const keywordMonthlyAnalysis = Object.freeze({
-  options: () => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.options(), { kind: "keyword_monthly_options" }),
-  analyze: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.analyze(input), { kind: "keyword_monthly_analysis" })
+  options: () => runAnalyticalWork(keywordMonthlyRequestDiagnostics.work(() => keywordMonthlyPreparedAnalysis.options()), { kind: "keyword_monthly_options", ...keywordMonthlyRequestDiagnostics.schedulerOptions() }),
+  analyze: input => runAnalyticalWork(keywordMonthlyRequestDiagnostics.work(() => keywordMonthlyPreparedAnalysis.analyze(input)), { kind: "keyword_monthly_analysis", ...keywordMonthlyRequestDiagnostics.schedulerOptions() })
 });
 const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
   service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send,
+  readAdmission: () => readPreparedConversionAdmission({ dataDir: DATA_DIR }), requestDiagnostics: keywordMonthlyRequestDiagnostics,
   readRefreshStatus: () => keywordMonthlyRefreshIntegration.status()
 });
 // Search demand uses its own immutable metadata, queue and provider budgets.
