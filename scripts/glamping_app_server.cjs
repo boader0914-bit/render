@@ -903,6 +903,10 @@ const keywordMonthlyRefreshIntegration = createKeywordMonthlyRefreshIntegration(
 // Keep one complete analytical allocation under the existing application lease.
 // Concurrent admin queries cannot retain several decoded history graphs.
 const keywordMonthlyAnalysis = Object.freeze({
+  // A bounded publication-pointer read does not acquire the analytical lease.
+  // It signals a prepared generation, never original/result freshness.
+  version: () => keywordMonthlyPreparedAnalysis.version(),
+  readPrepared: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.readPrepared(input), { kind: "keyword_monthly_analysis" }),
   options: () => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.options(), { kind: "keyword_monthly_options" }),
   analyze: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.analyze(input), { kind: "keyword_monthly_analysis" })
 });

@@ -231,6 +231,13 @@
       publicRevenue: observed && known(value.publicRevenue) ? value.publicRevenue : null, phoneRevenue: observed && known(value.phoneRevenue) ? value.phoneRevenue : null,
       coverageRate: known(value.coverageRate) ? value.coverageRate : null, observed };
   }
+  function preparedVersion(value) {
+    return value?.schemaVersion === 1 && value.status === "available" && value.readOnly === true
+      && value.networkAttempted === false && value.originalFreshnessVerified === false
+      && /^[a-f0-9]{64}$/.test(value.revision || "") && /^[a-f0-9]{32}$/.test(value.generation || "")
+      && dateValid(value.currentDay) && typeof value.publishedAt === "string" && Number.isFinite(Date.parse(value.publishedAt))
+      ? { revision: value.revision, generation: value.generation, publishedAt: value.publishedAt, currentDay: value.currentDay } : null;
+  }
   function calendarCells(month, daily, product) {
     if (!MONTH.test(month || "") || !PRODUCTS[product]) return [];
     const [year, part] = month.split("-").map(Number), firstWeekday = new Date(Date.UTC(year, part - 1, 1)).getUTCDay();
@@ -284,6 +291,9 @@
     const schedule = options.setTimeout || win.setTimeout?.bind(win) || (typeof setTimeout === "function" ? setTimeout : null);
     const unschedule = options.clearTimeout || win.clearTimeout?.bind(win) || (typeof clearTimeout === "function" ? clearTimeout : null);
     const Abort = options.AbortController || win.AbortController || (typeof AbortController === "function" ? AbortController : null);
+    const autoIntervalMs = Number.isSafeInteger(options.autoRefreshIntervalMs) && options.autoRefreshIntervalMs >= 250 ? Math.min(options.autoRefreshIntervalMs, 300000) : 30000;
+    const autoTimeoutMs = Number.isSafeInteger(options.autoRefreshTimeoutMs) && options.autoRefreshTimeoutMs > 0 ? options.autoRefreshTimeoutMs : 5000;
+    let autoTimer = null, autoTask = null, autoEpoch = 0, autoDueAt = 0, autoFailures = 0, autoText = "", autoErrorCode = "", composingSearch = null;
     let draft = { ...initialView.draft }, appliedSelection = null, draftRevision = 0, cutoffMode = "auto", draftCutoffMode = "auto", listQuery = "", listPage = 1, mobileView = "list", expanded = {}, scopes = [], resultTarget = null, workspace = null, listPanel = null, detailPanel = null;
     const PAGE_SIZE = 20;
     const chartRoots = new Set();
@@ -305,6 +315,7 @@
     for (const [key, info] of Object.entries(PRODUCTS)) { const node = button(info.label, () => { product = key; rememberScope(); render(); }, "kma-product-button"); productButtons[key] = node; productTabs.append(node); }
     panel.append(productTabs);
     const notice = el("p", "mr-notice kma-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite"); panel.append(notice);
+    const autoNotice = el("p", "kma-note kma-auto-status"); autoNotice.hidden = true; autoNotice.setAttribute("role", "status"); autoNotice.setAttribute("aria-live", "polite"); panel.append(autoNotice);
     const refreshNotice = el("div", "kma-note kma-refresh-status"), refreshDetails = el("details", "kma-refresh-history");
     refreshNotice.hidden = true; panel.append(refreshNotice);
     const errors = el("div", "mr-error kma-error"); errors.hidden = true; errors.setAttribute("role", "alert"); panel.append(errors);
@@ -476,6 +487,8 @@
         persistView();
       }
       search.addEventListener("input", () => { listQuery = search.value.slice(0, 200); listPage = 1; listRows(); rememberScope(); });
+      search.addEventListener("compositionstart", () => { composingSearch = search; });
+      search.addEventListener("compositionend", () => { if (composingSearch === search) composingSearch = null; });
       listRows(); resultTarget = detailPanel;
     }
     function renderDashboard(model, info) {
@@ -566,6 +579,7 @@
       notice.textContent = retained ? loading ? "같은 조회 조건의 마지막 정상 저장 자료를 표시하며 최신 상태를 확인하고 있습니다." : resumeNeeded ? "같은 조회 조건의 마지막 정상 저장 자료입니다. 화면 복귀 시 중단된 최신 상태 확인을 다시 진행합니다." : "최신 조회를 완료하지 못했습니다. 아래는 같은 조회 조건의 마지막 정상 저장 자료이며 최신 반영 완료를 뜻하지 않습니다."
         : loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
       if (restoreNotice && !loading) notice.textContent = `${restoreNotice} ${notice.textContent}`;
+      renderAutomaticNotice();
       const automatic = catalog?.refreshStatus;
       refreshNotice.hidden = !allowed() || !automatic;
       refreshNotice.replaceChildren();
@@ -668,10 +682,118 @@
       if (reasons.length) table(sources, ["제외 사유", "관측 수"], reasons.map(([reason, count]) => [reasonLabels[reason] || reason, number(count)]), "제외 관측을 정상 0건으로 바꾸지 않음");
       warnings(sources, (snapshot.sources?.excludedRuns || []).map(row => ({ message: `${row.id || "수집 기록"} · ${row.reason || row.status || "제외 사유 미확인"}` })));
     }
-    function cancel() { sequence++; active?.abort(); active = null; pendingLoad = null; loading = false; phase = ""; }
+    function renderAutomaticNotice() {
+      autoNotice.hidden = !allowed() || paused || !autoText;
+      autoNotice.textContent = autoNotice.hidden ? "" : autoText;
+      autoNotice.className = `kma-note kma-auto-status${autoErrorCode ? " kma-auto-warning" : ""}`;
+      autoNotice.setAttribute("aria-busy", String(Boolean(autoTask)));
+    }
+    function stopAutomatic() {
+      if (autoTimer !== null) unschedule?.(autoTimer);
+      autoTimer = null; autoEpoch++; autoTask?.controller?.abort(); autoTask = null;
+    }
+    const displayedRevision = () => payload && payload === lastGoodPayload && sameScope(payload, selected())
+      && /^[a-f0-9]{64}$/.test(payload.provenance?.currentPointerSha256 || "") ? payload.provenance.currentPointerSha256 : null;
+    function captureResultFocus() {
+      const node = doc.activeElement; let owner = node;
+      while (owner && owner !== results) owner = owner.parentNode;
+      if (owner !== results || !node) return null;
+      const key = node.name ? ["name", node.name] : node.dataset?.companyId ? ["company", node.dataset.companyId]
+        : ["BUTTON", "SUMMARY"].includes(node.tagName) ? ["label", node.tagName, node.textContent] : null;
+      return key ? { key, start: node.selectionStart, end: node.selectionEnd, direction: node.selectionDirection } : null;
+    }
+    function restoreResultFocus(saved) {
+      if (!saved) return;
+      const stack = [...results.children]; let target = null;
+      while (stack.length) {
+        const node = stack.pop(), key = saved.key;
+        if (key[0] === "name" ? node.name === key[1] : key[0] === "company" ? node.dataset?.companyId === key[1]
+          : node.tagName === key[1] && node.textContent === key[2]) { target = node; break; }
+        stack.push(...node.children);
+      }
+      if (!target || target.disabled || !target.getClientRects().length) return;
+      try {
+        target.focus?.({ preventScroll: true });
+        if (Number.isInteger(saved.start) && Number.isInteger(saved.end)) target.setSelectionRange?.(saved.start, saved.end, saved.direction || "none");
+      } catch { /* An unavailable focus API cannot invalidate a verified result. */ }
+    }
+    const canCheckAutomatically = () => options.autoRefresh !== false && !destroyed && visible() && !loading && !pendingLoad
+      && Boolean(catalog && appliedSelection && ["keyword", "month", "cutoffDate"].every(key => appliedSelection[key] === selected()[key])
+        && dateValid(cutoffDate) && catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month)));
+    function armAutomatic() {
+      if (!schedule || autoTimer !== null || autoTask || !canCheckAutomatically()) return;
+      if (!autoDueAt) autoDueAt = now() + autoIntervalMs;
+      autoTimer = schedule(() => { autoTimer = null; void checkAutomatic(); }, Math.max(0, autoDueAt - now()));
+      // Node-hosted UI tests must not keep a process alive; browsers return a number.
+      autoTimer?.unref?.();
+    }
+    async function checkAutomatic() {
+      if (!canCheckAutomatically() || autoTask) return;
+      const token = sequence, epoch = autoEpoch, prior = selected(), mode = cutoffMode;
+      const task = { controller: Abort ? new Abort() : null, editRevision: draftRevision, overwriteDraft: !draftHasChanges() };
+      autoTask = task;
+      const valid = () => current(token) && epoch === autoEpoch && autoTask === task;
+      try {
+        const rawVersion = await get("/api/keyword-monthly/version", token, task.controller, autoTimeoutMs);
+        if (!valid()) return;
+        const version = preparedVersion(rawVersion);
+        if (!version) throw failure("KEYWORD_MONTHLY_VERSION_UNAVAILABLE");
+        if (version.revision !== displayedRevision()) {
+          autoText = payload && payload === lastGoodPayload ? "기존 저장 자료를 표시하며 새 준비 결과를 확인하고 있습니다." : "저장된 새 준비 결과를 확인하고 있습니다."; autoErrorCode = ""; renderAutomaticNotice();
+          const rawCatalog = await get("/api/keyword-monthly/options", token, task.controller);
+          if (!valid()) return;
+          const nextCatalog = normalizeOptions(rawCatalog, kstDay(now()));
+          const row = nextCatalog.keywords.find(item => item.keyword === prior.keyword);
+          if (!["available", "stale"].includes(nextCatalog.status) || nextCatalog.provenance?.currentPointerSha256 !== version.revision)
+            throw failure("KEYWORD_MONTHLY_PUBLICATION_CHANGED");
+          if (!row?.stayMonths.includes(prior.month)) throw failure("KEYWORD_MONTHLY_AUTO_SCOPE_UNAVAILABLE");
+          const nextSelection = { ...prior, cutoffDate: mode === "auto" ? cutoffFor(nextCatalog, prior.keyword, prior.month) : prior.cutoffDate };
+          const supported = row.supportedCutoffs?.[prior.month];
+          if (!dateValid(nextSelection.cutoffDate) || nextSelection.cutoffDate > nextCatalog.currentDay
+            || supported && supported !== nextSelection.cutoffDate) throw failure("KEYWORD_MONTHLY_AUTO_CUTOFF_UNAVAILABLE");
+          const value = await get(`/api/keyword-monthly?${new URLSearchParams(nextSelection)}`, token, task.controller, timeoutMs, true);
+          if (!valid()) return;
+          if (!value) throw failure("KEYWORD_MONTHLY_AUTO_RESULT_UNAVAILABLE");
+          if (value.provenance?.currentPointerSha256 !== version.revision) throw failure("KEYWORD_MONTHLY_PUBLICATION_CHANGED");
+          if (value.status !== "available" || !buildViewModel(value, nextSelection, nextCatalog.currentMonth).usable)
+            throw failure("KEYWORD_MONTHLY_AUTO_RESULT_UNAVAILABLE", 0, safeCodes(value));
+          if (composingSearch?.isConnected && doc.activeElement === composingSearch) {
+            autoFailures = 0; autoErrorCode = ""; autoText = "입력 중에는 기존 화면을 유지하고 다음 확인 때 새 준비 결과를 표시합니다."; return;
+          }
+          // Stage everything above. Only a verified response for the same epoch
+          // may replace the visible result, its options and its source marker.
+          const scrollX = win.scrollX, scrollY = win.scrollY, resultFocus = captureResultFocus();
+          catalog = nextCatalog; cutoffDate = nextSelection.cutoffDate; appliedSelection = selected();
+          payload = lastGoodPayload = value; error = errorCode = "";
+          if (task.overwriteDraft && task.editRevision === draftRevision) { draft = selected(); draftCutoffMode = cutoffMode; }
+          autoText = "새 준비 결과를 반영했습니다. 이후 변경도 자동으로 확인합니다."; autoErrorCode = "";
+          rememberScope(); render(); restoreResultFocus(resultFocus);
+          try { if (Number.isFinite(scrollX) && Number.isFinite(scrollY)) win.scrollTo?.(scrollX, scrollY); } catch { /* Retain the verified result if scrolling is unavailable. */ }
+        } else if (autoErrorCode || !autoText) {
+          autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; autoErrorCode = "";
+        }
+        autoFailures = 0;
+      } catch (cause) {
+        if (valid()) {
+          autoFailures++;
+          autoErrorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR";
+          const scopeFailure = ["KEYWORD_MONTHLY_AUTO_SCOPE_UNAVAILABLE", "KEYWORD_MONTHLY_AUTO_CUTOFF_UNAVAILABLE"].includes(autoErrorCode);
+          autoText = payload && payload === lastGoodPayload
+            ? `${scopeFailure ? "선택 조건의 새 준비 결과가 없어" : "새 준비 결과 확인을 완료하지 못해"} 기존 저장 자료를 유지합니다. 잠시 후 다시 확인합니다. (${autoErrorCode})`
+            : `새 준비 결과를 확인하지 못했습니다. 잠시 후 다시 확인합니다. (${autoErrorCode})`;
+        }
+      } finally {
+        if (autoTask === task) {
+          autoTask = null; autoDueAt = now() + Math.min(autoIntervalMs * 2 ** Math.min(autoFailures, 20), 300000);
+          renderAutomaticNotice(); armAutomatic();
+        }
+      }
+    }
+    function cancel() { stopAutomatic(); composingSearch = null; autoText = autoErrorCode = ""; autoFailures = 0; autoDueAt = 0; sequence++; active?.abort(); active = null; pendingLoad = null; loading = false; phase = ""; }
     function clearPrivate(reason = "관리자 로그인이 필요합니다.", erasePersistence = true) {
       if (erasePersistence) selectionStorage.revoke();
       cancel(); paused = true; resumeNeeded = false; resumeRequest = null; catalog = null; payload = lastGoodPayload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null; pendingRestore = false;
+      autoText = autoErrorCode = ""; autoFailures = 0; autoDueAt = 0;
       product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; restoreAttempted = false; restoreNotice = ""; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
     }
     const failure = (code, status = 0, details = []) => Object.assign(new Error(code), { code, status, details });
@@ -709,14 +831,14 @@
         : "저장 자료를 확인하지 못했습니다. 잠시 후 다시 조회해 주세요.";
       return `${label}${suffix ? ` (${suffix})` : ""}`;
     }
-    async function get(url, token) {
-      const controller = active;
+    async function get(url, token, controller = active, requestLimitMs = timeoutMs, preparedOnly = false) {
+      const readCurrent = () => current(token) && controller?.signal?.aborted !== true;
       let timer = null, timedOut = false;
       const read = (async () => {
         let response;
-        try { response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, ...(controller ? { signal: controller.signal } : {}) }); }
-        catch { if (!current(token) || timedOut) return null; throw failure("KEYWORD_MONTHLY_NETWORK_ERROR"); }
-        if (!current(token) || timedOut) return null;
+        try { response = await request(url, { method: "GET", credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json", ...(preparedOnly ? { "X-Keyword-Monthly-Prepared-Only": "1" } : {}) }, ...(controller ? { signal: controller.signal } : {}) }); }
+        catch { if (!readCurrent() || timedOut) return null; throw failure("KEYWORD_MONTHLY_NETWORK_ERROR"); }
+        if (!readCurrent() || timedOut) return null;
         const status = Number.isInteger(response?.status) ? response.status : 0;
         if ([401, 403].includes(status) || response?.redirected === true && /\/login(?:[?#]|$)/.test(String(response.url || ""))) { clearPrivate(); return null; }
         const contentType = typeof response?.headers?.get === "function" ? response.headers.get("content-type") || "" : null;
@@ -727,15 +849,15 @@
         if (!jsonType) throw failure("KEYWORD_MONTHLY_RESPONSE_NOT_JSON", status);
         let value;
         try { value = await response.json(); }
-        catch { if (!current(token) || timedOut) return null; throw failure(response?.ok ? "KEYWORD_MONTHLY_INVALID_JSON" : `KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status); }
-        if (!current(token) || timedOut) return null;
+        catch { if (!readCurrent() || timedOut) return null; throw failure(response?.ok ? "KEYWORD_MONTHLY_INVALID_JSON" : `KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status); }
+        if (!readCurrent() || timedOut) return null;
         if (!response?.ok) throw failure(`KEYWORD_MONTHLY_HTTP_${status || "ERROR"}`, status, safeCodes(value));
         if (!value || typeof value !== "object" || Array.isArray(value)) throw failure("KEYWORD_MONTHLY_INVALID_JSON", status);
         return value;
       })();
       try {
         if (!schedule || !unschedule) return await read;
-        return await Promise.race([read, new Promise((resolve, reject) => { timer = schedule(() => { timedOut = true; controller?.abort(); reject(failure("KEYWORD_MONTHLY_TIMEOUT")); }, timeoutMs); })]);
+        return await Promise.race([read, new Promise((resolve, reject) => { timer = schedule(() => { timedOut = true; controller?.abort(); reject(failure("KEYWORD_MONTHLY_TIMEOUT")); }, requestLimitMs); })]);
       } finally { if (timer !== null) unschedule?.(timer); }
     }
     function applyViewContext(requested) {
@@ -825,7 +947,7 @@
             else if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null;
           }
         } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); } }
-        finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; render(); } }
+        finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; autoDueAt = now() + autoIntervalMs; if (canCheckAutomatically()) autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; render(); armAutomatic(); } }
       })();
       return task.promise;
     }
@@ -864,6 +986,7 @@
     filters.addEventListener("submit", event => { event.preventDefault(); void applyDraft(true); });
     const onVisibility = () => {
       if (!visible()) {
+        stopAutomatic(); autoDueAt = Math.max(autoDueAt, now() + autoIntervalMs);
         if (loading) {
           resumeRequest = { context: phase === "options" ? pendingLoad?.context || pendingContext : externalSelection(), renewCatalog: phase === "options", applyInput: pendingLoad?.applyInput === true, restored: pendingLoad?.restored === true };
           resumeNeeded = true; cancel(); render();
@@ -872,17 +995,17 @@
         const resume = resumeRequest; resumeNeeded = false; resumeRequest = null;
         if (resume) void load(resume.context, { renewCatalog: resume.renewCatalog, applyInput: resume.applyInput, restored: resume.restored });
         else if (catalog) void load(); else void open(pendingContext);
-      }
+      } else armAutomatic();
     };
-    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (visible() && !catalog && !loading && !error) void open(pendingContext); }) : null;
+    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (!visible()) stopAutomatic(); else if (!catalog && !loading && !error) void open(pendingContext); else armAutomatic(); }) : null;
     observer?.observe(doc.body, { attributes: true, attributeFilter: ["class"] }); doc.addEventListener("visibilitychange", onVisibility);
     const controller = { open, refresh: () => load(), pause() { rememberScope(); cancel(); paused = true; resumeNeeded = false; resumeRequest = null; payload = null; render(); }, clear: clearPrivate,
-      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded)) }),
+      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded || autoTask || autoErrorCode)), automatic: { checking: Boolean(autoTask), failureCount: autoFailures, revision: displayedRevision(), errorCode: autoErrorCode } }),
       destroy() { if (destroyed) return; clearPrivate("", false); destroyed = true; observer?.disconnect(); doc.removeEventListener("visibilitychange", onVisibility); panel.replaceChildren(); controllers.delete(controller); instances.delete(parent); } };
     controllers.add(controller); instances.set(parent, controller);
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;
   }
-  const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, identityReviewView, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel, createSelectionStorage,
+  const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, identityReviewView, preparedVersion, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel, createSelectionStorage,
     async configure(session, flags) {
       if (!selectionStorage.matches(session, flags)) for (const controller of controllers) controller.clear();
       return selectionStorage.configure(session, flags);

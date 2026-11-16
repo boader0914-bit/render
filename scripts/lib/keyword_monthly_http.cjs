@@ -46,6 +46,11 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     if (!requireAdmin(session, req, res)) return true;
     try {
       if (req.method !== "GET") { send(res, 405, { code: "KEYWORD_MONTHLY_METHOD_NOT_ALLOWED", error: "저장된 월별 키워드 자료 조회만 지원합니다.", readOnly: true, networkAttempted: false }); return true; }
+      if (url.pathname === `${base}/version`) {
+        if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
+        if (typeof service.version !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_VERSION_UNAVAILABLE", statusCode: 503 });
+        await deliver(req,res,"version",async()=>{const result=await service.version();return {http:result.status==="available"?200:503,body:result};},{statusRead:true});return true;
+      }
       if (url.pathname === `${base}/refresh-status` && typeof readRefreshStatus === "function") {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         await deliver(req,res,"refresh-status",async()=>({http:200,body:{...(await readRefreshStatus()),phaseDiagnostics:getAnalyticalPhaseDiagnostics().status(),
@@ -63,13 +68,16 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
         });return true;
       }
       if (url.pathname !== base) { send(res, 404, { code: "KEYWORD_MONTHLY_NOT_FOUND" }); return true; }
+      const preparedOnly = Object.hasOwn(req.headers || {}, "x-keyword-monthly-prepared-only");
+      if (preparedOnly && req.headers["x-keyword-monthly-prepared-only"] !== "1") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
+      if (preparedOnly && typeof service.readPrepared !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_PREPARED_READ_UNAVAILABLE", statusCode: 503 });
       const keys = [...url.searchParams.keys()];
       if (keys.some(key => !["keyword", "month", "cutoffDate"].includes(key)) || new Set(keys).size !== keys.length
         || keys.some(key => !url.searchParams.get(key))) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
       const input = Object.fromEntries(url.searchParams);
       if (Buffer.byteLength(JSON.stringify(input)) > 4096) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
       const identity = JSON.stringify([input.keyword, input.month, input.cutoffDate ?? null]);
-      await deliver(req,res,`analyze:${identity}`,async()=>{const result=await service.analyze(input);return {http:result.status==="needs_verification"?503:200,body:result};});
+      await deliver(req,res,`${preparedOnly?"prepared":"analyze"}:${identity}`,async()=>{const result=await (preparedOnly?service.readPrepared(input):service.analyze(input));return {http:result.status==="needs_verification"?503:200,body:result};});
     } catch (error) {
       if (req.aborted || res.destroyed) return true;
       const status = error.statusCode === 400 ? 400 : 503;

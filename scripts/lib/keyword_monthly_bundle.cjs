@@ -155,6 +155,20 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
   const optionsFlights = new Map();
   const basic = () => { const currentDay = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10); return { schemaVersion: 1, readOnly: true, networkAttempted: false, currentDay, currentMonth: currentDay.slice(0, 7) }; };
   const absent = (error, request) => ({ ...basic(), status: "needs_verification", ...(request ? { request, snapshot: null } : { keywords: [] }), diagnostics: [safeError(error)], provenance: null, activity: null, latestAttempt: null, lastSuccessfulAttempt: null });
+  async function version() {
+    const common = { schemaVersion: 1, currentDay: basic().currentDay, readOnly: true, networkAttempted: false, originalFreshnessVerified: false };
+    try {
+      // This is a publication notification only. Never open the catalog,
+      // indexes, results, original sources or a legacy analysis from this path.
+      const file = path.join(directory, "current.json"), first = await readFile(file, LIMITS.pointerBytes), pointer = validatePointer(json(first));
+      const final = await readFile(file, LIMITS.pointerBytes); validatePointer(json(final));
+      ensure(final.sha256 === first.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      return { ...common, status: "available", revision: first.sha256, generation: pointer.generation, publishedAt: pointer.publishedAt };
+    } catch (error) {
+      return { ...common, status: "needs_verification", revision: null, generation: null, publishedAt: null,
+        diagnostics: [error?.code === "ENOENT" ? "KEYWORD_MONTHLY_BUNDLE_POINTER_MISSING" : safeError(error)] };
+    }
+  }
   async function open() { try { return await loadBundle(directory); } catch (error) { if (error.code === "ENOENT") {
       // Only a genuinely absent pointer permits the unchanged legacy reader.
       try { await fs.lstat(path.join(directory, "current.json")); } catch (missing) { if (missing.code === "ENOENT") return null; throw missing; }
@@ -259,7 +273,7 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
         bundle: { generation: bundle.pointer.generation, partition: scope.partition, catalogSha256: bundle.catalogRead.sha256 } };
     } catch (error) { if (error.statusCode === 400) throw error; return absent(error, input); }
   }
-  return Object.freeze({ options, readPrepared, analyze });
+  return Object.freeze({ options, readPrepared, analyze, version });
 }
 async function ensureDirectory(directory) {
   try { await checkPath(directory, true); } catch (error) { if (error.code !== "ENOENT") throw error; await checkPath(path.dirname(directory), true); await fs.mkdir(directory, { mode: 0o700 }); await checkPath(directory, true); }

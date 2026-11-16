@@ -1,4 +1,6 @@
 .keyword-monthly-analysis{color:var(--text-primary,#172235);min-width:0;--kma-muted:var(--text-secondary,#5e6975);--kma-border:var(--border-subtle,#dce4df);--kma-surface:var(--surface-card,#fff);--kma-control:var(--surface-control,#f3f6f3)}
+.keyword-monthly-analysis .kma-auto-status{margin:0 0 8px;min-height:22px;overflow-wrap:anywhere}
+.keyword-monthly-analysis .kma-auto-status.kma-auto-warning{padding:9px 12px;border:1px solid var(--kma-border);border-inline-start:3px solid var(--warning,#b47a26);border-radius:8px;background:var(--kma-control);color:var(--text-primary,#172235)}
 .keyword-monthly-analysis .kma-identity-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
 .keyword-monthly-analysis .kma-identity-count{gap:5px;padding:12px;border:1px solid var(--kma-border);border-radius:9px;background:var(--kma-control)}
 .keyword-monthly-analysis .kma-identity-count>strong{font-size:20px;line-height:1.25}

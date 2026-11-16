@@ -42,7 +42,8 @@ class Element {
   append(...values) { for (const node of values) { node.parentNode = this; this.children.push(node); } }
   replaceChildren(...values) { this._text = ""; this.children = []; this.append(...values); }
   setAttribute(key, value) { this.attributes[key] = String(value); }
-  focus() { this.ownerDocument.activeElement = this; }
+  focus(settings) { this.ownerDocument.activeElement = this; this.focusOptions = settings; }
+  setSelectionRange(start, end, direction = "none") { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
   scrollIntoView(settings) { this.ownerDocument.scrolls.push({ node: this, settings }); }
   addEventListener(key, callback) { (this.listeners[key] ||= []).push(callback); }
   get isConnected() { let root = this; while (root.parentNode) root = root.parentNode; return root === this.ownerDocument.body; }
@@ -53,18 +54,20 @@ const descendants = node => [node, ...node.children.flatMap(descendants)];
 const text = node => descendants(node).map(item => item.textContent).join(" ");
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
-function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, storage, session, customerView = false } = {}) {
+function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs,
+  setTimeout: schedule = setTimeout, clearTimeout: unschedule = clearTimeout, now = () => Date.parse(NOW), storage, session, customerView = false } = {}) {
   const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
-  const window = { fetch: request, setTimeout, clearTimeout, AbortController, sessionStorage: storage,
+  const window = { fetch: request, setTimeout: schedule, clearTimeout: unschedule, AbortController, sessionStorage: storage,
     crypto: require("node:crypto").webcrypto, TextEncoder, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
   vm.runInNewContext(dashboardScript, { window });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
-  const api = window.KeywordMonthlyAnalysis, ready = session ? api.configure(session, { customerView }) : Promise.resolve(false), controller = api.mount(parent, { autoStart: false, fetch: request, requestTimeoutMs, now: () => Date.parse(NOW) });
+  const api = window.KeywordMonthlyAnalysis, ready = session ? api.configure(session, { customerView }) : Promise.resolve(false), controller = api.mount(parent, {
+    autoStart: false, fetch: request, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs, setTimeout: schedule, clearTimeout: unschedule, now });
   return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls,
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); },
@@ -1087,6 +1090,332 @@ test("a genuine zero identity review is visible and malformed review values stay
   for (const invalid of [null, { ...zero, totalRows: 1 }, { ...zero, privateToken: "unsafe" }, { ...zero, reasonCounts: { SOURCE_ID_UNKNOWN: 0 } }, { ...zero, totalRows: 100000001 }]) assert.equal(uiModule.identityReviewView(invalid).status, "invalid");
   payload.snapshot.quality.identityReview = { ...zero, totalRows: 99 }; await ui.controller.refresh();
   const block = ui.find("kma-identity-review")[0]; assert.equal(block.attributes["data-identity-review-status"], "invalid"); assert.equal(ui.find("kma-identity-count").length, 0); assert.match(text(block), /미확인을 0건으로 바꾸지 않습니다/);
+});
+
+// An injected clock exercises the production timer lifetime without sleeping
+// thirty seconds or leaving recurring work alive after each isolated test.
+function automaticClock() {
+  let instant = Date.now(), nextId = 0;
+  const tasks = new Map();
+  return {
+    now: () => instant,
+    setTimeout(callback, delay) { const id = ++nextId; tasks.set(id, { callback, at: instant + Math.max(0, Number(delay) || 0) }); return id; },
+    clearTimeout(id) { tasks.delete(id); },
+    nextDelay() { return tasks.size ? Math.min(...[...tasks.values()].map(task => task.at - instant)) : null; },
+    async advance(milliseconds) {
+      const target = instant + milliseconds;
+      for (let steps = 0; ; steps++) {
+        assert.ok(steps < 1000, "Automatic timer rescheduled without a bounded delay");
+        const entry = [...tasks.entries()].filter(([, task]) => task.at <= target).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+        if (!entry) break;
+        instant = entry[1].at; tasks.delete(entry[0]); entry[1].callback(); await settle();
+      }
+      instant = target; await settle();
+    }
+  };
+}
+const AUTO_A = "a".repeat(64), AUTO_B = "b".repeat(64), AUTO_C = "c".repeat(64);
+function automaticVersion(revision, currentDay = "2026-10-30") {
+  return { schemaVersion: 1, status: "available", revision, generation: revision.slice(0, 32), publishedAt: NOW, currentDay,
+    readOnly: true, networkAttempted: false, originalFreshnessVerified: false };
+}
+function automaticOptions(revision, day = "2026-10-30") {
+  const catalog = optionsFixture(); catalog.currentDay = day;
+  catalog.provenance = { currentPointerSha256: revision };
+  catalog.bundle = { generation: revision.slice(0, 32) };
+  for (const row of catalog.keywords) row.defaultCutoffs = { "2026-09": "2026-09-30", "2026-10": day, "2026-11": day };
+  return catalog;
+}
+function automaticPayload(revision, selection = { keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, companies = 3) {
+  const value = selection.keyword === KEYWORD && selection.month === "2026-10" ? dashboardPayload(companies) : payloadFixture(selection);
+  value.request = { ...selection };
+  value.snapshot.request = { type: "keyword", targetId: selection.keyword, month: selection.month, cutoffDate: selection.cutoffDate };
+  value.resultId = revision;
+  value.provenance = { ...value.provenance, dataThrough: `${selection.cutoffDate}T00:00:00Z`, currentPointerSha256: revision };
+  value.bundle = { generation: revision.slice(0, 32) };
+  return value;
+}
+async function automaticUi(t, { handle, interval = 250, timeout = 1000, companies = 3 } = {}) {
+  const clock = automaticClock(), source = { revision: AUTO_A, day: "2026-10-30", optionsRevision: null, payloadRevision: null }, counts = { version: 0, options: 0, data: 0 };
+  const ui = mockUi({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    autoRefreshIntervalMs: interval, autoRefreshTimeoutMs: timeout, session: liveSession(), request: async (url, settings) => {
+      const kind = url.endsWith("/version") ? "version" : url.endsWith("/options") ? "options" : "data"; counts[kind]++;
+      const selection = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+      const overridden = handle ? await handle({ kind, url, settings, selection, source, counts, clock }) : undefined;
+      if (overridden !== undefined) return overridden;
+      return jsonResponse(kind === "version" ? automaticVersion(source.revision, source.day)
+        : kind === "options" ? automaticOptions(source.optionsRevision || source.revision, source.day)
+          : automaticPayload(source.payloadRevision || source.revision, selection, companies));
+    } });
+  t.after(() => ui.controller.destroy()); await ui.ready; await ui.controller.open(); await settle();
+  return { ...ui, clock, source, counts };
+}
+const automaticVisibleState = ui => {
+  const state = clone(ui.controller.state());
+  return Object.fromEntries(["selection", "draft", "applied", "cutoffMode", "product", "benchmarkCompanyId", "listQuery", "listPage", "mobileView", "expanded", "loading", "status", "errorCode"].map(key => [key, state[key]]));
+};
+
+test("automatic prepared refresh polls only a lightweight version when the published pointer is unchanged", async t => {
+  const ui = await automaticUi(t), baseline = automaticVisibleState(ui), charts = ui.chartCalls.length;
+  assert.deepEqual(ui.counts, { version: 0, options: 1, data: 1 });
+  await ui.clock.advance(249); assert.equal(ui.counts.version, 0);
+  await ui.clock.advance(1); assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
+  await ui.clock.advance(500); assert.deepEqual(ui.counts, { version: 3, options: 1, data: 1 });
+  assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(ui.chartCalls.length, charts);
+  assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 0);
+  assert.ok(ui.calls.every(call => call.settings.method === "GET" && call.settings.credentials === "same-origin" && call.settings.cache === "no-store" && !call.settings.body));
+});
+
+test("automatic prepared refresh sends the prepared-only header solely on its staged data GET", async t => {
+  const ui = await automaticUi(t), header = "X-Keyword-Monthly-Prepared-Only";
+  assert.ok(ui.calls.every(call => !Object.hasOwn(call.settings.headers, header)), "Initial manual options and data retain their existing contract");
+  ui.source.revision = AUTO_B; await ui.clock.advance(250);
+  assert.equal(ui.controller.state().automatic.revision, AUTO_B);
+  const preparedCalls = ui.calls.filter(call => Object.hasOwn(call.settings.headers, header));
+  assert.equal(preparedCalls.length, 1); assert.equal(preparedCalls[0].settings.headers[header], "1");
+  assert.equal(new URL(preparedCalls[0].url, "https://local.test").pathname, "/api/keyword-monthly");
+  assert.equal(preparedCalls[0].settings.method, "GET"); assert.equal(preparedCalls[0].settings.body, undefined);
+  for (const call of ui.calls.filter(call => /\/(?:version|options)$/.test(call.url))) assert.equal(Object.hasOwn(call.settings.headers, header), false);
+  const before = ui.calls.length; await ui.controller.refresh();
+  assert.equal(ui.calls.length, before + 1); assert.equal(Object.hasOwn(ui.calls.at(-1).settings.headers, header), false, "An explicit manual read may use the ordinary GET contract");
+  assert.equal(ui.calls.filter(call => Object.hasOwn(call.settings.headers, header)).length, 1);
+});
+
+test("automatic prepared refresh watches initial missing or503 results without claiming stored normal data", async t => {
+  for (const initialFailure of ["missing", "503"]) {
+    let ready = false;
+    const ui = await automaticUi(t, { handle: ({ kind, source, selection }) => {
+      if (kind !== "data" || ready) return;
+      return initialFailure === "503" ? jsonResponse({ code: "KEYWORD_MONTHLY_PREPARED_UNAVAILABLE", status: "needs_verification", snapshot: null }, 503)
+        : jsonResponse({ ...automaticPayload(source.revision, selection), status: "missing", snapshot: null, diagnostics: ["KEYWORD_MONTHLY_SCOPE_NOT_PREPARED"] });
+    } });
+    const selection = clone(ui.controller.state().selection);
+    assert.ok(selection.keyword); assert.ok(ui.controller.state().applied); assert.equal(ui.controller.state().automatic.revision, null);
+    assert.equal(ui.find("kma-metric").length, 0); assert.equal(ui.controller.state().showingStored, false);
+    ui.source.revision = AUTO_B;
+    for (const [delay, failureCount, nextDelay] of [[250, 1, 500], [500, 2, 1000]]) {
+      await ui.clock.advance(delay);
+      assert.equal(ui.controller.state().automatic.revision, null, "A missing result's provenance is not an applied normal revision");
+      assert.equal(ui.controller.state().automatic.failureCount, failureCount); assert.equal(ui.clock.nextDelay(), nextDelay);
+      assert.equal(ui.find("kma-metric").length, 0); assert.equal(ui.controller.state().showingStored, false);
+      assert.deepEqual(clone(ui.controller.state().selection), selection);
+      assert.doesNotMatch(text(ui.find("kma-auto-status")[0]), /기존 저장 자료를 유지|기존 저장 자료를 표시/);
+    }
+    assert.deepEqual(ui.counts, { version: 2, options: 3, data: 3 });
+    ready = true; await ui.clock.advance(1000);
+    assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.equal(ui.controller.state().automatic.failureCount, 0);
+    assert.equal(ui.controller.state().automatic.errorCode, ""); assert.equal(ui.controller.state().errorCode, "");
+    assert.equal(ui.controller.state().status, "available"); assert.ok(ui.find("kma-metric").length > 0);
+    const applied = ui.controller.state().selection;
+    for (const key of ["keyword", "month", "cutoffDate", "cutoffMode", "product"]) assert.equal(applied[key], selection[key], key);
+    assert.equal(ui.clock.nextDelay(), 250);
+    assert.deepEqual(ui.counts, { version: 3, options: 4, data: 4 });
+  }
+});
+
+test("automatic prepared refresh stages a new normal pointer then preserves live choices drafts and disclosures", async t => {
+  const gate = deferred(); let staged = false;
+  const ui = await automaticUi(t, { companies: 43, handle: ({ kind, source, selection }) => {
+    if (kind === "data" && source.revision === AUTO_B) { staged = true; return gate.promise; }
+  } });
+  ui.source.revision = AUTO_B; await ui.clock.advance(250); assert.equal(staged, true);
+  assert.equal(ui.controller.state().automatic.checking, true); assert.equal(ui.controller.state().automatic.revision, AUTO_A);
+  assert.equal(ui.controller.state().loading, false);
+  await ui.button("데이유즈").fire("click"); ui.field("benchmarkCompany").value = "company-25"; await ui.field("benchmarkCompany").fire("change");
+  const search = ui.field("companySearch"); assert.ok(search); search.value = "비교"; await search.fire("input");
+  const next = ui.button("다음 업체"); assert.ok(next); await next.fire("click");
+  const details = ui.find("kma-support-details")[0] || descendants(ui.parent).find(node => node.tagName === "DETAILS");
+  assert.ok(details); details.open = true; await details.fire("toggle");
+  ui.field("cutoffDate").value = "2026-10-25"; await ui.field("cutoffDate").fire("input");
+  const state = automaticVisibleState(ui), beforeRequests = ui.calls.length;
+  gate.resolve(jsonResponse(automaticPayload(AUTO_B, clone(ui.controller.state().applied), 43))); await settle();
+  assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.equal(ui.controller.state().automatic.checking, false);
+  assert.deepEqual(automaticVisibleState(ui), state); assert.equal(ui.calls.length, beforeRequests);
+  assert.equal(ui.controller.state().product, "dayuse"); assert.equal(ui.controller.state().benchmarkCompanyId, "company-25");
+  assert.equal(ui.controller.state().draft.cutoffDate, "2026-10-25"); assert.ok(Object.values(ui.controller.state().expanded).includes(true));
+});
+
+test("automatic prepared refresh advances automatic cutoff but leaves an explicit cutoff fixed", async t => {
+  const automatic = await automaticUi(t), explicit = await automaticUi(t);
+  await explicit.controller.open({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-29", cutoffMode: "explicit" });
+  for (const ui of [automatic, explicit]) { ui.source.revision = AUTO_B; ui.source.day = "2026-10-31"; await ui.clock.advance(250); }
+  assert.equal(automatic.controller.state().selection.cutoffDate, "2026-10-31"); assert.equal(automatic.controller.state().cutoffMode, "auto");
+  assert.equal(explicit.controller.state().selection.cutoffDate, "2026-10-29"); assert.equal(explicit.controller.state().cutoffMode, "explicit");
+  assert.equal(explicit.controller.state().automatic.revision, AUTO_B);
+});
+
+test("automatic prepared refresh rejects mismatched option and payload revisions without changing normal state", async t => {
+  for (const mismatched of ["options", "data"]) {
+    const ui = await automaticUi(t), baseline = automaticVisibleState(ui), heading = text(ui.find("kma-dashboard-metrics")[0]);
+    ui.source.revision = AUTO_B; ui.source[mismatched === "options" ? "optionsRevision" : "payloadRevision"] = AUTO_C;
+    await ui.clock.advance(250);
+    assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(text(ui.find("kma-dashboard-metrics")[0]), heading);
+    assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 1);
+    assert.ok(ui.controller.state().automatic.errorCode); assert.ok(ui.find("kma-auto-status").some(node => !node.hidden));
+  }
+});
+
+test("automatic prepared refresh keeps last good data for HTTP malformed missing stale and mismatched new results", async t => {
+  const failures = [
+    () => htmlFailure(502), () => jsonResponse({ code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, 503),
+    () => ({ ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => { throw Error("PRIVATE_PARSE_DETAIL"); } }),
+    () => jsonResponse({ ...automaticPayload(AUTO_B), status: "missing", snapshot: null }),
+    () => jsonResponse({ ...automaticPayload(AUTO_B), status: "stale", diagnostics: ["PROJECTION_EXPIRED"] }),
+    () => jsonResponse(automaticPayload(AUTO_B, { keyword: OTHER, month: "2026-10", cutoffDate: "2026-10-30" })),
+    () => { const value = automaticPayload(AUTO_B); value.snapshot.daily.push(value.snapshot.daily[0]); return jsonResponse(value); }
+  ];
+  for (const response of failures) {
+    const ui = await automaticUi(t, { handle: ({ kind, source }) => kind === "data" && source.revision === AUTO_B ? response() : undefined });
+    const baseline = automaticVisibleState(ui), normal = text(ui.find("kma-dashboard-metrics")[0]); ui.source.revision = AUTO_B;
+    await ui.clock.advance(250);
+    assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(text(ui.find("kma-dashboard-metrics")[0]), normal);
+    assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 1);
+    assert.doesNotMatch(ui.text(), /PRIVATE_PARSE_DETAIL/);
+  }
+});
+
+test("automatic prepared refresh refuses an unavailable selected scope or explicit cutoff without switching defaults", async t => {
+  for (const changed of ["scope", "cutoff"]) {
+    const ui = await automaticUi(t, { handle: ({ kind, source }) => {
+      if (kind !== "options" || source.revision !== AUTO_B) return;
+      const catalog = automaticOptions(AUTO_B);
+      if (changed === "scope") catalog.keywords = catalog.keywords.filter(row => row.keyword !== KEYWORD);
+      else catalog.keywords[0].supportedCutoffs = { "2026-10": "2026-10-30" };
+      return jsonResponse(catalog);
+    } });
+    if (changed === "cutoff") await ui.controller.open({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-29", cutoffMode: "explicit" });
+    const baseline = automaticVisibleState(ui), dataReads = ui.counts.data; ui.source.revision = AUTO_B; await ui.clock.advance(250);
+    assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(ui.counts.data, dataReads);
+    assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.ok(ui.controller.state().automatic.errorCode);
+  }
+});
+
+test("automatic prepared refresh cancels on manual scope changes and ignores an obsolete failed or unauthorized response", async t => {
+  for (const response of [htmlFailure(503), htmlFailure(401)]) {
+    const gate = deferred(); let signal;
+    const ui = await automaticUi(t, { handle: ({ kind, source, settings }) => {
+      if (kind === "data" && source.revision === AUTO_B) { signal = settings.signal; return gate.promise; }
+    } });
+    ui.source.revision = AUTO_B; await ui.clock.advance(250); assert.ok(signal); assert.equal(signal.aborted, false);
+    ui.source.revision = AUTO_C;
+    await ui.controller.open({ keyword: OTHER, month: "2026-10", cutoffDate: "2026-10-30", cutoffMode: "explicit" });
+    assert.equal(signal.aborted, true); gate.resolve(response); await settle();
+    assert.equal(ui.controller.state().selection.keyword, OTHER); assert.equal(ui.controller.state().paused, false);
+    assert.equal(ui.controller.state().errorCode, ""); assert.equal(ui.controller.state().automatic.errorCode, "");
+    assert.match(ui.text(), /경남 글램핑 업체/);
+  }
+});
+
+test("automatic prepared refresh remains one flight during slow checks and repeated visibility events", async t => {
+  const gate = deferred(); let signal;
+  const ui = await automaticUi(t, { timeout: 5000, handle: ({ kind, settings }) => {
+    if (kind === "version") { signal = settings.signal; return gate.promise; }
+  } });
+  await ui.clock.advance(250); assert.equal(ui.counts.version, 1); assert.equal(ui.controller.state().automatic.checking, true);
+  for (let index = 0; index < 3; index++) ui.listeners.visibilitychange();
+  await ui.clock.advance(1000); assert.equal(ui.counts.version, 1); assert.equal(signal.aborted, false);
+  gate.resolve(jsonResponse(automaticVersion(AUTO_A))); await settle(); assert.equal(ui.controller.state().automatic.checking, false);
+  assert.equal(ui.clock.nextDelay(), 250);
+});
+
+test("automatic prepared refresh stops hidden inactive destroyed and revoked controllers including late responses", async t => {
+  for (const action of ["hidden", "inactive", "paused", "role", "customer", "clear", "destroy"]) {
+    const gate = deferred(); let signal;
+    const ui = await automaticUi(t, { handle: ({ kind, settings }) => {
+      if (kind === "version") { signal = settings.signal; return gate.promise; }
+    } });
+    await ui.clock.advance(250); assert.ok(signal);
+    if (action === "hidden") { ui.doc.hidden = true; ui.listeners.visibilitychange(); }
+    else if (action === "inactive") { ui.parent.screenHidden = true; ui.listeners.visibilitychange(); }
+    else if (action === "paused") ui.controller.pause();
+    else if (action === "role" || action === "customer") { ui.doc.body.className = action === "role" ? "role-b2b" : "role-admin admin-user-view"; ui.observers[0].callback(); }
+    else if (action === "clear") ui.api.clear(); else ui.controller.destroy();
+    assert.equal(signal.aborted, true, action); const before = ui.calls.length;
+    gate.resolve(jsonResponse(automaticVersion(AUTO_B))); await ui.clock.advance(10000);
+    assert.equal(ui.calls.length, before, action); assert.equal(ui.controller.state().automatic.checking, false, action);
+    if (["role", "customer", "clear", "destroy"].includes(action)) assert.equal(ui.find("kma-metric").length, 0, action);
+  }
+});
+
+test("automatic prepared refresh erases private data before parsing authoritative authentication failures", async t => {
+  for (const status of [401, 403, "redirect"]) {
+    let bodyReads = 0;
+    const ui = await automaticUi(t, { handle: ({ kind }) => kind === "version" ? {
+      ...htmlFailure(status === "redirect" ? 200 : status), ...(status === "redirect" ? { redirected: true, url: "https://local.test/login?expired=1" } : {}),
+      json: async () => { bodyReads++; throw Error("PRIVATE_AUTH_BODY"); }
+    } : undefined });
+    await ui.clock.advance(250); assert.equal(bodyReads, 0); assert.equal(ui.controller.state().paused, true);
+    assert.equal(ui.controller.state().selection.keyword, ""); assert.equal(ui.find("kma-metric").length, 0);
+    const before = ui.calls.length; await ui.clock.advance(10000); assert.equal(ui.calls.length, before);
+  }
+});
+
+test("automatic prepared refresh backs off boundedly then resets after recovery without visibility retry bypass", async t => {
+  let failing = true;
+  const ui = await automaticUi(t, { handle: ({ kind }) => kind === "version" && failing ? htmlFailure(503) : undefined });
+  await ui.clock.advance(250); assert.equal(ui.controller.state().automatic.failureCount, 1); assert.equal(ui.clock.nextDelay(), 500);
+  const before = ui.counts.version;
+  for (let index = 0; index < 3; index++) { ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); }
+  await settle(); assert.equal(ui.counts.version, before); assert.equal(ui.clock.nextDelay(), 500);
+  let delay = 500;
+  for (let count = 2; count <= 13; count++) {
+    await ui.clock.advance(delay); delay = Math.min(300000, 250 * 2 ** count);
+    assert.equal(ui.controller.state().automatic.failureCount, count); assert.equal(ui.clock.nextDelay(), delay);
+  }
+  failing = false; await ui.clock.advance(delay);
+  assert.equal(ui.controller.state().automatic.failureCount, 0); assert.equal(ui.controller.state().automatic.errorCode, ""); assert.equal(ui.clock.nextDelay(), 250);
+});
+
+test("automatic prepared refresh times out an abort-ignoring version read without accepting its late publication", async t => {
+  const gate = deferred(); let signal;
+  const ui = await automaticUi(t, { timeout: 100, handle: ({ kind, settings }) => {
+    if (kind === "version") { signal = settings.signal; return gate.promise; }
+  } });
+  await ui.clock.advance(250); await ui.clock.advance(100);
+  assert.equal(signal.aborted, true); assert.equal(ui.controller.state().automatic.checking, false);
+  assert.equal(ui.controller.state().automatic.failureCount, 1); assert.ok(ui.controller.state().automatic.errorCode);
+  const before = ui.calls.length; gate.resolve(jsonResponse(automaticVersion(AUTO_B))); await settle();
+  assert.equal(ui.calls.length, before); assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().loading, false);
+});
+
+test("automatic prepared refresh restores the active company search and caret after replacing result DOM", async t => {
+  const ui = await automaticUi(t, { companies: 43 }), search = ui.field("companySearch");
+  search.value = "비교 업체 2"; await search.fire("input"); search.focus(); search.setSelectionRange(2, 5, "backward");
+  const baseline = automaticVisibleState(ui); ui.source.revision = AUTO_B; await ui.clock.advance(250);
+  const restored = ui.field("companySearch"); assert.notEqual(restored, search, "The new result really replaced the search element");
+  assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.deepEqual(automaticVisibleState(ui), baseline);
+  assert.equal(ui.doc.activeElement, restored); assert.equal(restored.value, "비교 업체 2");
+  assert.deepEqual([restored.selectionStart, restored.selectionEnd, restored.selectionDirection], [2, 5, "backward"]);
+  assert.equal(restored.focusOptions?.preventScroll, true); assert.equal(ui.doc.scrolls.length, 0);
+});
+
+test("automatic prepared refresh defers publication during Korean IME composition then applies after composition ends", async t => {
+  const ui = await automaticUi(t), search = ui.field("companySearch");
+  search.focus(); await search.fire("compositionstart"); search.value = "비"; await search.fire("input"); search.setSelectionRange(1, 1);
+  const baseline = automaticVisibleState(ui); ui.source.revision = AUTO_B; await ui.clock.advance(250);
+  assert.equal(ui.field("companySearch"), search, "An active composition must keep its existing DOM input");
+  assert.equal(ui.doc.activeElement, search); assert.deepEqual(automaticVisibleState(ui), baseline);
+  assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 0);
+  assert.equal(ui.controller.state().automatic.errorCode, ""); assert.equal(ui.controller.state().automatic.checking, false);
+  assert.match(text(ui.find("kma-auto-status")[0]), /입력 중/); assert.equal(ui.clock.nextDelay(), 250);
+  assert.deepEqual(ui.counts, { version: 1, options: 2, data: 2 });
+  await search.fire("compositionend"); search.value = "비교"; await search.fire("input"); search.setSelectionRange(2, 2);
+  await ui.clock.advance(249); assert.equal(ui.controller.state().automatic.revision, AUTO_A);
+  await ui.clock.advance(1);
+  assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.equal(ui.controller.state().automatic.failureCount, 0);
+  assert.equal(ui.controller.state().listQuery, "비교"); assert.notEqual(ui.field("companySearch"), search);
+  assert.equal(ui.doc.activeElement, ui.field("companySearch")); assert.deepEqual([ui.doc.activeElement.selectionStart, ui.doc.activeElement.selectionEnd], [2, 2]);
+  assert.deepEqual(ui.counts, { version: 2, options: 3, data: 3 });
+});
+
+test("automatic prepared refresh rejects malformed or unverified version metadata without reading a financial result", async t => {
+  for (const patch of [{ schemaVersion: 2 }, { status: "needs_verification" }, { revision: "invalid" }, { generation: "invalid" },
+    { publishedAt: "invalid" }, { currentDay: "2026-02-30" }, { readOnly: false }, { networkAttempted: true }, { originalFreshnessVerified: true }]) {
+    const ui = await automaticUi(t, { handle: ({ kind }) => kind === "version" ? jsonResponse({ ...automaticVersion(AUTO_B), ...patch }) : undefined });
+    const baseline = automaticVisibleState(ui); await ui.clock.advance(250);
+    assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 }); assert.deepEqual(automaticVisibleState(ui), baseline);
+    assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 1);
+  }
 });
 test("unknown safe reason codes remain bounded readable text without markup execution", async () => {
   const review = identityReviewFixture({ reasonCounts: { FUTURE_LINK_REASON: 5 } });
