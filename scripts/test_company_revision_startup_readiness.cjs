@@ -23,7 +23,9 @@ function fixture({ failure = null, absent = false } = {}) {
     return { secret: "private prepared company graph must not be logged" };
   };
   const context = {
-    Promise, Object, Number, Math, Date, Buffer, PORT: 10000, HOST: "127.0.0.1", process: { env: {} },
+    Promise, Object, Number, Math, Date, Buffer, PORT: 10000, HOST: "127.0.0.1", process: { platform: "linux", env: {} },
+    path, DATA_DIR: "/var/data", ROOT: "/opt/render/project/src",
+    runFixedB3BootRetirement: async input => { assert.equal(input.policySha256,"8bd1fbe886fe769635f0ff46333e39b5e3ebfeb0b555a411d467a79ceebce57a");return {status:"not_target",policySha256:input.policySha256,completionReceiptSha256:null,actualCommitRuntimeAudit:{source:"git_metadata",available:false,commit:null},runtimeDeploymentId:null}; },
     console: { log: (...args) => logs.push(args), warn: (...args) => warnings.push(args), error() {} },
     seedOutputsFromRepo: async () => calls.push("seed"), collectorBrokerReady: Promise.resolve(),
     collectionRotationScheduler: { status: async () => calls.push("coordination"), start: async () => calls.push("rotation-start") },

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "codex_review_of_official_platform_documentation",
+  "reviewedBy": "codex_root_operator",
+  "reviewedAt": "2026-11-16T06:13:22.339Z",
+  "sourceUrl": "https://render.com/docs/disks#disk-limitations-and-considerations",
+  "accessedInThisTask": true,
+  "facts": {
+    "persistentDiskAccessibleBySingleRuntimeInstance": true,
+    "redeployStopsExistingInstanceBeforeBringingUpNew": true,
+    "predeployBuildAndOneOffJobsCannotAccessPersistentDisk": true
+  },
+  "limitations": [
+    "This is a source-backed operator review, not a provider-signed per-process termination attestation.",
+    "The documented contract is combined with the actual mounted-disk observation and the frozen operation evidence."
+  ]
+}

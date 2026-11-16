@@ -1,4 +1,7 @@
 const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
+const { inspect: inspectFixedB3Guard } = require("./lib/fixed_b3_maintenance_observation.cjs");
+const { inspectB3Maintenance: inspectFixedB3Details } = require("./lib/fixed_b3_maintenance_details.cjs");
+const { runFixedB3BootRetirement } = require("./lib/fixed_b3_maintenance_boot_shim.cjs");
 let startupAnalyticalStatus = () => null;
 const applicationStartup = createApplicationStartupLifetime({ readAnalyticalStatus: () => startupAnalyticalStatus() });
 applicationStartup.begin("module_initialization");
@@ -20865,6 +20868,67 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
     // Restore persisted coordination before any existing scheduler can dispatch.
     await applicationStartup.phase("collector_coordination", () => collectorBrokerReady);
     await applicationStartup.phase("rotation_state", () => collectionRotationScheduler.status());
+    // Fixed read-only B3 observation; this is never lease release permission.
+    let fixedB3Observation = null;
+    try {
+      const observation = await inspectFixedB3Guard();
+      fixedB3Observation = observation;
+      try { console.info("application_startup_b3_observation", JSON.stringify({ ...observation, readOnly: true, retirementAuthorized: false })); } catch {}
+    } catch (error) {
+      try { console.info("application_startup_b3_observation", JSON.stringify({ verifiedInputs: false,
+        code: /^B3_[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "B3_UNVERIFIED", readOnly: true, retirementAuthorized: false })); } catch {}
+    }
+    // Normal guarded readiness continues even if the diagnostic is unavailable.
+    // Fixed read-only B3 details; only the already observed frozen guard.
+    if (fixedB3Observation?.verifiedInputs?.runner === true && fixedB3Observation.verifiedInputs.request === true
+      && fixedB3Observation.verifiedInputs.fixtureOnly === false && fixedB3Observation.exactExpectedOperationMatch === true
+      && fixedB3Observation.contextEqual === false
+      && fixedB3Observation.guardStat?.sha256 === "c12d01111b959d1c54a22a04b46c2f12602d557039eb3d8d60b836c42cf0ced8") {
+      try {
+        const details = await inspectFixedB3Details({ dataDir: DATA_DIR, codeRoot: ROOT });
+        if (details?.marker?.sha256 !== fixedB3Observation.guardStat.sha256) throw Object.assign(new Error(), { code: "B3_INSPECT_KNOWN_GUARD_CHANGED" });
+        try { console.info("application_startup_b3_details", JSON.stringify({ ...details, readOnly: true, retirementAuthorized: false })); } catch {}
+      } catch (error) {
+        try { console.info("application_startup_b3_details", JSON.stringify({ status: "held",
+          code: /^B3_INSPECT_[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "B3_INSPECT_UNAVAILABLE", readOnly: true, retirementAuthorized: false })); } catch {}
+      }
+    }
+    // End fixed read-only B3 details; normal guarded readiness is unchanged.
+    // Reviewed fixed B3 retirement is critical; an uncertain outcome cannot
+    // advance readiness. Only a logging failure is noncritical here.
+    if (process.platform === "linux" && DATA_DIR === "/var/data" && ROOT === "/opt/render/project/src") {
+      // Fixed read-only B3 parent metadata; never a permission-policy change.
+      try {
+        const parents = [];
+        for (const parentPath of ["/", "/opt", "/opt/render", "/opt/render/project", "/opt/render/project/src", "/opt/render/project/src/config", "/opt/render/project/src/scripts", "/opt/render/project/src/scripts/lib", "/var", "/var/data"]) {
+          let row = { path: parentPath, uid: null, gid: null, mode: null, isDir: null, symlink: null, realpathEqual: null };
+          try {
+            const metadata = await fsp.lstat(parentPath);
+            row = { path: parentPath, uid: Number.isSafeInteger(metadata.uid) ? metadata.uid : null,
+              gid: Number.isSafeInteger(metadata.gid) ? metadata.gid : null, mode: Number.isSafeInteger(metadata.mode) ? metadata.mode & 0o7777 : null,
+              isDir: metadata.isDirectory(), symlink: metadata.isSymbolicLink(), realpathEqual: null };
+            try { row.realpathEqual = await fsp.realpath(parentPath) === parentPath; } catch {}
+          } catch {}
+          parents.push(row);
+        }
+        try { console.info("application_startup_b3_parent_metadata", JSON.stringify({ readOnly: true, parents })); } catch {}
+      } catch {}
+      // End fixed read-only B3 parent metadata; critical checks stay unchanged.
+      const fixedB3Retirement = await runFixedB3BootRetirement({
+        dataDir: DATA_DIR, codeRoot: ROOT,
+        policyPath: path.join(ROOT, "config/reviewed-b3-maintenance-retirement-20261116.json"),
+        policySha256: "8bd1fbe886fe769635f0ff46333e39b5e3ebfeb0b555a411d467a79ceebce57a"
+      });
+      try { console.info("application_startup_b3_retirement", JSON.stringify({ status: fixedB3Retirement.status,
+        auditRoot: fixedB3Retirement.auditRoot, policySha256: fixedB3Retirement.policySha256,
+        completionReceiptSha256: fixedB3Retirement.completionReceiptSha256,
+        actualCommitRuntimeAudit: fixedB3Retirement.actualCommitRuntimeAudit, runtimeDeploymentId: null,
+        coordinationMetadataChanged: fixedB3Retirement.status === "archived" })); } catch {}
+    } else {
+      try { console.info("application_startup_b3_retirement", JSON.stringify({ status: "not_applicable_runtime",
+        retirementAttempted: false, coordinationMetadataChanged: false })); } catch {}
+    }
+    // End critical reviewed B3 retirement; normal maintenance guards remain.
     // Build/reopen the compact saved-company read model before readiness and
     // before the large history/aggregate bootstraps can compete for memory.
     // This reads saved data only; failures remain explicit API errors, not zero.
