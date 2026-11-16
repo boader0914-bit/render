@@ -16,7 +16,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout,
   onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false, cooperativeCompanyMonthYield = false,
   cooperativeMinRunMs = 250, cooperativeMinProgress = 1, externalAdmission = null,
-  externalAdmissionTimeoutMs = 1500 } = {}) {
+  externalAdmissionTimeoutMs = 1500, savedReadCheckpointWaitMs = 1500 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
     || sampleMemory !== null && typeof sampleMemory !== "function"
     || !Number.isFinite(highWatermark) || highWatermark <= 0 || highWatermark > 1
@@ -31,12 +31,14 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
     || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1
     || externalAdmission !== null && typeof externalAdmission !== "function"
-    || !Number.isSafeInteger(externalAdmissionTimeoutMs) || externalAdmissionTimeoutMs < 1 || externalAdmissionTimeoutMs > 10000) {
+    || !Number.isSafeInteger(externalAdmissionTimeoutMs) || externalAdmissionTimeoutMs < 1 || externalAdmissionTimeoutMs > 10000
+    || !Number.isSafeInteger(savedReadCheckpointWaitMs) || savedReadCheckpointWaitMs < 1 || savedReadCheckpointWaitMs > 1500) {
     throw new TypeError("Invalid analytical scheduler options");
   }
   const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
   let checkpointReader = null;
-  let active = null, savedReadPermit = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
+  let active = null, savedReadPermit = null, savedReadReservation = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
+  const savedCheckpointCapability = Symbol("keyword-monthly-saved-checkpoint"), savedCheckpointKind = "keyword-monthly-saved-read";
   let externalChecking = false, externalCancel = null, lastExternalAttemptAt = null;
   const maintenance = { enabled: externalAdmission !== null, checking: false, paused: false, reasonCode: null,
     checks: 0, held: 0, failures: 0 };
@@ -305,6 +307,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   function dispatch(queue) { accountWaiting(); return launch(queue.shift()); }
   async function drainCheckpointReads(owner) {
+    // A sibling branch of the same industry owner must stop at its boundary
+    // too. The saved callback itself runs without a cooperative scope.
+    const existingReader = checkpointReader;
+    if (existingReader?.kind === savedCheckpointKind && existingReader.ownerId === owner.id) await existingReader.done;
     if (checkpointReader || closed || maintenance.paused || active !== owner || !owner.active || owner.checkpointScope?.nonInterruptibleDepth !== 0) return;
     // At most four small callbacks per boundary. Even a continuous stream of
     // proof readers must let the background operation advance to its next
@@ -334,6 +340,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (closed || task.signal?.aborted || owner.controller.signal.aborted) { failure = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted(); failed = true; }
       recordTask(task, failure, accountWaiting(), failed);
       if (failed) task.reject(failure); else task.resolve(value);
+      // A bounded monthly DTO is larger than a proof. Lend at most once at
+      // this boundary, then let the industry's own work advance.
+      if (task.kind === savedCheckpointKind) break;
     }
   }
   function pumpOwned() {
@@ -437,11 +446,12 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       timing.enqueued++; queue.push(task); task.attach(); pump();
     });
   }
-  function runCheckpointRead(operation, { kind = "company-month-cached-verification", signal, onTaskTiming: taskCallback = null } = {}) {
+  function runCheckpointRead(operation, { kind = "company-month-cached-verification", signal, onTaskTiming: taskCallback = null } = {}, capability = null) {
     // This explicit application capability is for cache-only verification and
     // one bounded derived certificate publication. It must never reconstruct
     // sources, rebuild an index, collect, or enqueue/await other analytical work.
     if (typeof operation !== "function" || kind !== "company-month-cached-verification"
+      && !(capability === savedCheckpointCapability && kind === savedCheckpointKind)
       || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")
       || taskCallback !== null && typeof taskCallback !== "function") return Promise.reject(new TypeError("Invalid checkpoint read"));
     if (context.getStore()?.savedRead && context.getStore().active) return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_NESTED_WORK"));
@@ -493,10 +503,82 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (owner.savedReadWindow === window) owner.savedReadWindow = null;
     }
   }
+  function acquireIndustrySavedReadPermit(owner) {
+    // The reservation owns no graph and must not fence the owner out of the
+    // checkpoint it needs to reach. Only the actual loan claims the permit.
+    const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
+      controller, priority: "foreground", kind: "keyword_monthly_saved_read", running: false, invoked: false };
+    savedReadReservation = token;
+    let admissionTimer = null, loan = null, began = false, released = false, resolveRelease;
+    const releaseGate = new Promise(resolve => { resolveRelease = resolve; });
+    const clearAdmissionTimer = () => { if (admissionTimer !== null) { clearTimeoutImpl(admissionTimer); admissionTimer = null; } };
+    const sameOwner = () => active === owner && owner.active && owner.kind === "industry-build"
+      && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0;
+    return Object.freeze({
+      acceptsNewResponses: () => token.active && !closed && sameOwner() && !owner.controller.signal.aborted,
+      run(operation) {
+        if (!token.active || token.invoked || typeof operation !== "function") return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_INVALID"));
+        token.invoked = true;
+        let resolveReady, rejectReady;
+        const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+        try {
+          admissionTimer = setTimeoutImpl(() => { if (!began) controller.abort(); }, savedReadCheckpointWaitMs);
+          admissionTimer?.unref?.();
+          loan = runCheckpointRead(async info => {
+            // Generic proof loans remain unchanged. This private capability
+            // can start only under the exact eligible industry owner captured
+            // at reservation time, never a later owner or an atomic section.
+            const borrower = context.getStore();
+            if (!sameOwner() || !borrower?.checkpointRead || borrower.ownerId !== owner.id
+              || closed || externalChecking || maintenance.paused || controller.signal.aborted)
+              throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+            began = true; clearAdmissionTimer();
+            if (savedReadReservation !== token || savedReadPermit) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+            savedReadReservation = null; accountWaiting(); savedReadPermit = token;
+            token.running = true;
+            let failure;
+            try {
+              const result = await context.run(token, () => runWithCooperativeWork(null, () => operation(info)));
+              token.running = false; resolveReady(result);
+            } catch (error) { token.running = false; failure = error; rejectReady(error); }
+            // HTTP encoding, every shared socket, ignored cancellation and
+            // the real producer cleanup all remain inside this loan. Ready
+            // does not authorize the suspended industry owner to resume.
+            await releaseGate;
+            if (failure) throw failure;
+          }, { kind: savedCheckpointKind, signal: controller.signal }, savedCheckpointCapability);
+          loan.then(() => {}, error => {
+            if (!began) {
+              token.active = false;
+              if (savedReadReservation === token) savedReadReservation = null;
+            }
+            rejectReady(!began && error?.code === "ANALYTICAL_WORK_ABORTED" ? fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY") : error);
+          }).finally(clearAdmissionTimer);
+        } catch (error) {
+          clearAdmissionTimer(); token.active = false;
+          if (savedReadReservation === token) savedReadReservation = null;
+          rejectReady(error);
+        }
+        return ready;
+      },
+      release() {
+        if (released) return;
+        if (token.running) throw fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_ACTIVE");
+        released = true; token.active = false; clearAdmissionTimer();
+        if (savedReadReservation === token) { savedReadReservation = null; controller.abort(); }
+        if (savedReadPermit === token) { accountWaiting(); savedReadPermit = null; }
+        resolveRelease(); settleIdle(); pump();
+      },
+      waitForRelease: () => loan || Promise.resolve()
+    });
+  }
   function acquireSavedReadPermit() {
     if (closed) throw fault("ANALYTICAL_WORK_CLOSED");
-    if (savedReadPermit) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
+    if (savedReadPermit || savedReadReservation) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
     const window = active?.savedReadWindow;
+    if (!externalChecking && !maintenance.paused && !checkpointReader && active?.kind === "industry-build"
+      && active.priority === "background" && active.cooperative && active.checkpointScope?.nonInterruptibleDepth === 0)
+      return acquireIndustrySavedReadPermit(active);
     if (externalChecking || maintenance.paused || checkpointReader || active && !(active.kind === "keyword_monthly_refresh"
       && active.priority === "background" && window?.accepting)) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
@@ -525,7 +607,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   function status() {
     return { closed, active: Boolean(active || savedReadPermit), activePriority: active?.priority || savedReadPermit?.priority || null, activeKind: active?.kind || savedReadPermit?.kind || null,
-      savedRead: { active: Boolean(savedReadPermit), childWaitWindowOpen: Boolean(active?.savedReadWindow?.accepting),
+      savedRead: { active: Boolean(savedReadPermit), checkpointPending: Boolean(savedReadReservation), childWaitWindowOpen: Boolean(active?.savedReadWindow?.accepting),
         childWaitWindowDraining: Boolean(active?.savedReadWindow && !active.savedReadWindow.accepting) },
       queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
       queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,

@@ -5,6 +5,7 @@ const {publishKeywordMonthlyBundle,createKeywordMonthlyBundleAnalysis,loadBundle
 const {createKeywordMonthlySavedReadService}=require("./lib/keyword_monthly_saved_read_service.cjs");
 const {createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
 const {createKeywordMonthlyHttpHandler}=require("./lib/keyword_monthly_http.cjs");
+const {createSourceReadScheduler}=require("./lib/source_read_scheduler.cjs");
 const NOW="2026-11-16T00:00:00.000Z",KEYWORD="가상검수글램핑",QUERY={keyword:KEYWORD,month:"2026-10",cutoffDate:"2026-10-20"};
 const hash=bytes=>crypto.createHash("sha256").update(bytes).digest("hex");
 async function fixture(t){
@@ -46,5 +47,29 @@ test("corrupt prepared bytes and changed source-index SHA remain failures inside
     assert.ok(path.resolve(file).startsWith(path.resolve(f.root)+path.sep));
     await fs.writeFile(file,"{}");const saved=createKeywordMonthlyBundleAnalysis({projectionDir:f.output,now:()=>NOW,runLegacyAnalysis:()=>{legacy++;throw Error("forbidden fallback");}});
     try{const result=await http(saved,scheduler).read();assert.equal(result.status,503);assert.equal(result.body.status,"needs_verification");assert.equal(legacy,0);assert.equal(scheduler.status().savedRead.active,false);}finally{await scheduler.close();}
+  }
+});
+
+test("actual prepared DTO, generation and source SHA guards remain intact inside the industry checkpoint loan",async t=>{
+  for(const mode of ["unchanged","pointer","result","index"]){
+    const f=await fixture(t),scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),source=createSourceReadScheduler();let proceed,finish,entered;
+    const ready=new Promise(resolve=>{entered=resolve;}),checkpoint=new Promise(resolve=>{proceed=resolve;}),ending=new Promise(resolve=>{finish=resolve;});
+    const background=scheduler.run(async()=>{entered();await checkpoint;await source.checkpoint({priority:"background"});await ending;},{kind:"industry-build",priority:"background"});await ready;
+    if(["result","index"].includes(mode)){
+      const descriptor=f.bundle.catalog.preparedResults.find(row=>row.month===QUERY.month),file=mode==="result"?path.join(f.bundle.generationDir,"results",descriptor.sha256+".json"+(descriptor.encoding==="gzip"?".gz":"")):path.join(f.bundle.generationDir,"partitions",f.bundle.catalog.partitions[0].key,"index.json");
+      assert.ok(path.resolve(file).startsWith(path.resolve(f.root)+path.sep));await fs.writeFile(file,"{}");
+    }
+    let legacy=0,mutated=false;const saved=createKeywordMonthlyBundleAnalysis({projectionDir:f.output,now:()=>NOW,runLegacyAnalysis:()=>{legacy++;throw Error("forbidden fallback");},
+      measure:async(phase,_metadata,operation)=>{const result=await operation();if(mode==="pointer"&&phase==="keyword_prepared_result_parse"&&!mutated){mutated=true;await fs.writeFile(path.join(f.output,"current.json"),JSON.stringify({...f.bundle.pointer,publishedAt:"2026-11-16T00:00:01.000Z"}));}return result;}});
+    const api=http(saved,scheduler),oldFetch=globalThis.fetch,oldOpen=fs.open,oldWrite=fs.writeFile;
+    globalThis.fetch=()=>{throw Error("saved loan called provider");};fs.open=async function(file,...args){assert.ok(!String(file).includes(path.sep+"projections"+path.sep));return oldOpen.call(this,file,...args);};
+    if(mode==="unchanged")fs.writeFile=async()=>{throw Error("saved loan wrote a file");};
+    try{
+      const pending=api.read();for(let n=0;n<100&&!scheduler.status().savedRead.checkpointPending;n++)await new Promise(resolve=>setImmediate(resolve));assert.equal(scheduler.status().savedRead.checkpointPending,true);proceed();
+      const result=await pending;assert.equal(result.status,mode==="unchanged"?200:503);assert.equal(legacy,0);
+      if(mode==="unchanged"){assert.equal(result.body.snapshot.summary.lodging.sold,2);assert.equal(result.body.snapshot.summary.dayuse.sold,null);}
+      else assert.equal(result.body.status,"needs_verification");
+      assert.equal(scheduler.status().savedRead.active,false);assert.equal(scheduler.status().timing.checkpointReadCompleted,1);
+    }finally{fs.open=oldOpen;fs.writeFile=oldWrite;globalThis.fetch=oldFetch;proceed();finish();await background;await scheduler.close();}
   }
 });
