@@ -307,7 +307,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   function dispatch(queue) { accountWaiting(); return launch(queue.shift()); }
   async function drainCheckpointReads(owner) {
-    // A sibling branch of the same industry owner must stop at its boundary
+    // A sibling branch of the same background owner must stop at its boundary
     // too. The saved callback itself runs without a cooperative scope.
     const existingReader = checkpointReader;
     if (existingReader?.kind === savedCheckpointKind && existingReader.ownerId === owner.id) await existingReader.done;
@@ -341,7 +341,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       recordTask(task, failure, accountWaiting(), failed);
       if (failed) task.reject(failure); else task.resolve(value);
       // A bounded monthly DTO is larger than a proof. Lend at most once at
-      // this boundary, then let the industry's own work advance.
+      // this boundary, then let the background owner's own work advance.
       if (task.kind === savedCheckpointKind) break;
     }
   }
@@ -503,7 +503,14 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (owner.savedReadWindow === window) owner.savedReadWindow = null;
     }
   }
-  function acquireIndustrySavedReadPermit(owner) {
+  function canLendSavedReadCheckpoint(owner) {
+    // Only these explicitly opted-in background calculations expose the safe
+    // source checkpoints. Foreground repairs, bootstrap and atomic publication
+    // never become readers' lenders merely because they have a checkpoint scope.
+    return Boolean(owner && ["industry-build", "company-month"].includes(owner.kind)
+      && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0);
+  }
+  function acquireCheckpointSavedReadPermit(owner) {
     // The reservation owns no graph and must not fence the owner out of the
     // checkpoint it needs to reach. Only the actual loan claims the permit.
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
@@ -521,8 +528,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     let admissionTimer = null, loan = null, began = false, released = false, resolveRelease;
     const releaseGate = new Promise(resolve => { resolveRelease = resolve; });
     const clearAdmissionTimer = () => { if (admissionTimer !== null) { clearTimeoutImpl(admissionTimer); admissionTimer = null; } };
-    const sameOwner = () => active === owner && owner.active && owner.kind === "industry-build"
-      && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0;
+    const sameOwner = () => active === owner && owner.active && canLendSavedReadCheckpoint(owner);
     return Object.freeze({
       acceptsNewResponses: () => token.active && !closed && sameOwner() && !owner.controller.signal.aborted
         && (began || admissionTime() !== null),
@@ -538,7 +544,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
           admissionTimer?.unref?.();
           loan = runCheckpointRead(async info => {
             // Generic proof loans remain unchanged. This private capability
-            // can start only under the exact eligible industry owner captured
+            // can start only under the exact eligible background owner captured
             // at reservation time, never a later owner, expired reservation or
             // atomic section. A delayed timer is not admission authority.
             const borrower = context.getStore();
@@ -556,7 +562,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
             } catch (error) { token.running = false; failure = error; rejectReady(error); }
             // HTTP encoding, every shared socket, ignored cancellation and
             // the real producer cleanup all remain inside this loan. Ready
-            // does not authorize the suspended industry owner to resume.
+            // does not authorize the suspended background owner to resume.
             await releaseGate;
             if (failure) throw failure;
           }, { kind: savedCheckpointKind, signal: controller.signal }, savedCheckpointCapability);
@@ -589,9 +595,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (closed) throw fault("ANALYTICAL_WORK_CLOSED");
     if (savedReadPermit || savedReadReservation) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
     const window = active?.savedReadWindow;
-    if (!externalChecking && !maintenance.paused && !checkpointReader && active?.kind === "industry-build"
-      && active.priority === "background" && active.cooperative && active.checkpointScope?.nonInterruptibleDepth === 0)
-      return acquireIndustrySavedReadPermit(active);
+    if (!externalChecking && !maintenance.paused && !checkpointReader && canLendSavedReadCheckpoint(active))
+      return acquireCheckpointSavedReadPermit(active);
     if (externalChecking || maintenance.paused || checkpointReader || active && !(active.kind === "keyword_monthly_refresh"
       && active.priority === "background" && window?.accepting)) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,

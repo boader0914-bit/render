@@ -45,3 +45,11 @@ node scripts/convert_keyword_monthly_prepared.cjs --mode inspect --job-dir <jobD
 이 명령은 읽기 전용이다. `publish-intent`가 있거나 포인터가 이미 바뀐 상태에서는 같은 게시를 다시 실행하지 않는다. 정확한 새 세대·게시 영수증을 별도로 검수하며, 불명확한 결과를 이전 포인터로 자동 복원하거나 작업 폴더·유지보수 marker를 자동 삭제하지 않는다. 프로세스가 정상 종료하면 자신이 만든 marker만 정확한 바이트·inode로 확인해 해제한다. 프로세스 강제 종료로 남은 marker는 별도 운영 검토 대상이다.
 
 운영 검수는 최초·반복·전체 새로고침·후속 자동 갱신을 나누어 측정하고, `sourceRevalidated:false`/`originalFreshnessVerified:false`를 실제 최신 원본 반영 완료와 구별한다.
+
+## 배경 집계 중 저장 자료 조회
+
+명시적으로 cooperative checkpoint를 사용하는 `industry-build`와 `company-month`의 background 작업은 atomic 구간 밖에서 저장 목록·준비 결과 조회에 실행권을 잠시 빌려줄 수 있다. 원래 작업을 취소하거나 재시작하지 않으며, 같은 owner와 기존 절대 1,500ms 진입 마감을 실제 실행 직전에도 확인한다. foreground 수정·bootstrap·job 준비·발행 atomic 구간에는 적용하지 않는다.
+
+메모리와 유지보수 보호는 그대로 적용한다. 준비 결과의 읽기·인코딩·공유 HTTP 응답과 취소를 무시한 실제 producer가 모두 끝나기 전에는 원래 집계를 재개하지 않는다. 진입 마감 안에 안전 checkpoint를 만나지 못하면 기존 자료를 유지하며 `KEYWORD_MONTHLY_ANALYTICAL_BUSY`로 보류할 수 있다. 이 수정은 모든 503 응답을 제거하거나 새 집계를 시작하는 동작이 아니다.
+
+자동 조회는 준비 결과만 읽는다. 준비 결과가 없으면 기존 화면을 유지하고 다음 확인을 기다리며, 전체 계산으로 자동 대체하지 않는다. 실제 운영 검수는 배경 작업 종류, 응답 포인터, 수치·선택 보존, 최종 응답 이후 대여 자원 회수와 원래 작업의 진행을 함께 확인한다.

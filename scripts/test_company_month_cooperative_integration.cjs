@@ -80,6 +80,46 @@ test("a real company-month job yields current and previous sources, preserves it
   t.diagnostic(JSON.stringify({ foregroundWaitMs: waits.map(value => Math.round(value)), sourcePrefixReads: p.counters.history, acceptedCandidateHits: p.sources.sourceReadMetrics().companySourceCandidates.acceptedHits, yields: p.scheduler.status().timing.yielded }));
 });
 
+test("a saved read preserves the real processing company job and releases it to complete exactly once", { timeout: 20000 }, async t => {
+  const f = await fixture(t), previous = await f.seed(), p = f.pipeline("saved-checkpoint", { candidates: true, companyYield: true });
+  const entered = f.newGate(), resume = f.newGate(), reading = f.newGate(), finishRead = f.newGate(); let held = false, settled = false;
+  p.hooks.publication = async () => { if (!held) { held = true; entered.resolve(); await resume.promise; } };
+  const queued = await p.service.queueCompany(ID, { months: ["2026-09"], reason: "fixture-safe-saved-read" });
+  const running = p.service.drain().then(value => { settled = true; return value; });
+  await bounded(entered.promise, "real company month did not reach its safe publication boundary");
+  const queueFile = path.join(f.root, "company_integrated", "queue.json"), beforeBytes = await fs.readFile(queueFile), before = JSON.parse(beforeBytes), processing = before.jobs[ID];
+  assert.equal(processing.status, "processing"); assert.equal(processing.generation, queued.generation); assert.equal(processing.queueOrder, queued.queueOrder);
+  assert.equal(processing.attempts, (queued.attempts || 0) + 1); assert.equal(p.scheduler.status().activeKind, "company-month");
+  const permit = p.scheduler.acquireSavedReadPermit();
+  const ready = permit.run(async () => {
+    assert.deepEqual(await fs.readFile(queueFile), beforeBytes, "borrowing cannot update or replace the durable company job");
+    const saved = await fs.readFile(f.monthFile); assert.deepEqual(saved, previous); reading.resolve(); await finishRead.promise;
+    assert.deepEqual(await fs.readFile(queueFile), beforeBytes); return saved;
+  });
+  try {
+    resume.resolve(); await bounded(reading.promise, "saved read did not borrow the real company checkpoint");
+    assert.equal(settled, false); assert.equal(p.scheduler.status().savedRead.active, true);
+    assert.deepEqual(await fs.readFile(queueFile), beforeBytes); assert.deepEqual(await fs.readFile(f.monthFile), previous);
+    finishRead.resolve(); assert.deepEqual(await ready, previous); await turn();
+    assert.equal(settled, false, "ready does not release a still-owned saved response");
+    assert.deepEqual(await fs.readFile(queueFile), beforeBytes, "the last response cannot requeue, delete or reorder the company job");
+  } finally {
+    resume.resolve(); finishRead.resolve(); await ready.catch(() => {}); permit.release(); await permit.waitForRelease();
+  }
+  const completed = await bounded(running, "the original company job did not complete after the saved response released"), after = JSON.parse(await fs.readFile(queueFile));
+  assert.deepEqual(Object.keys(after.jobs), Object.keys(before.jobs)); assert.equal(after.queueSequence, before.queueSequence);
+  for (const key of ["generation", "queueOrder", "attempts", "reason"]) assert.equal(after.jobs[ID][key], processing[key], `saved read changed ${key}`);
+  assert.equal(after.jobs[ID].status, "idle"); assert.equal(completed.jobs[0].status, "idle"); assert.deepEqual(after.jobs[ID].months, []);
+  const tasks = p.scheduler.status().timing.recent.filter(row => row.kind === "company-month");
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].outcome, "completed"); assert.equal(tasks[0].attempt, 1);
+  assert.equal(p.scheduler.status().timing.restarted, 0); assert.equal(p.scheduler.status().timing.yielded, 0); assert.equal(p.scheduler.status().timing.failed, 0);
+  assert.deepEqual(p.counters.history, { "2026-09": 1, "2026-08": 1 }); assert.deepEqual(p.counters.recalculations, { "2026-09": 1, "2026-08": 1 });
+  const final = await p.service.get(ID, { month: "2026-09" }); assert.equal(final.status, "ready");
+  assert.equal(final.snapshot.daily.find(row => row.date === "2026-09-29").lodging.sold, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(queueFile)), after, "normal saved-result lookup cannot add another company job");
+  t.diagnostic(JSON.stringify({ generation: processing.generation, queueOrder: processing.queueOrder, attempts: processing.attempts, completedCompanyTasks: tasks.length, jobGenerationAndQueuePreserved: true }));
+});
+
 for (const mutation of ["review", "history"]) test(`a ${mutation} edit during a yielded company job cannot publish a mixed old-month ready proof`, { timeout: 20000 }, async t => {
   const f = await fixture(t), previous = await f.seed(), p = f.pipeline("changed", { candidates: true, companyYield: true }), entered = f.newGate(), resume = f.newGate(); let held = false;
   p.hooks.publication = async () => { if (!held) { held = true; entered.resolve(); await resume.promise; } };

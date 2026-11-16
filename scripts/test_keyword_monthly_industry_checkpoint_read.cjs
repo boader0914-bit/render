@@ -1,6 +1,6 @@
 "use strict";
-const test=require("node:test"),assert=require("node:assert/strict"),{EventEmitter}=require("node:events");
-const {createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
+const rawTest=require("node:test"),assert=require("node:assert/strict"),{EventEmitter}=require("node:events");
+const {createAnalyticalWorkScheduler:createScheduler}=require("./lib/analytical_work_scheduler.cjs");
 const {createSourceReadScheduler}=require("./lib/source_read_scheduler.cjs");
 const {runNonInterruptibleCooperativeWork}=require("./lib/cooperative_work_checkpoint.cjs");
 const {createKeywordMonthlySavedReadService}=require("./lib/keyword_monthly_saved_read_service.cjs");
@@ -12,7 +12,12 @@ const {createKeywordMonthlyRequestDiagnostics}=require("./lib/keyword_monthly_re
 const gate=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let n=0;n<100;n++){if(fn())return;await turn();}assert.fail("bounded synthetic progress did not settle");}
-const scope={kind:"industry-build",priority:"background"};
+// The saved DTO owns the same checkpoint-to-final-response lifetime under both
+// explicitly enabled owners. Keep all admission and cancellation cases shared.
+for(const ownerKind of ["industry-build","company-month"]){
+const test=(name,...args)=>rawTest(`${ownerKind}: ${name}`,...args);
+const createAnalyticalWorkScheduler=options=>createScheduler({cooperativeCompanyMonthYield:ownerKind==="company-month",...options});
+const scope={kind:ownerKind,priority:"background"};
 function clock(){let at=0;const timers=new Map();return {now:()=>at,set(ms){at=ms;},jump(ms){at+=ms;},setTimeoutImpl(fn,ms){const h={unref(){}};timers.set(h,{fn,due:at+ms,ms});return h;},clearTimeoutImpl:h=>timers.delete(h),
   async advance(ms){at+=ms;for(const [h,t]of [...timers])if(t.due<=at){timers.delete(h);t.fn();}for(let n=0;n<8;n++)await turn();},timers};}
 function response(){const res=new EventEmitter();res.setHeader=()=>{};res.writeHead=status=>{res.status=status;};res.end=value=>{res.body=value;res.writableEnded=true;};res.finish=()=>res.emit("finish");res.destroy=()=>{res.destroyed=true;res.emit("close");};return res;}
@@ -35,7 +40,7 @@ function system({saved={},memory=async op=>op(),admission=async()=>{},schedulerO
   return {scheduler,service,budget,lifecycle,calls,request};
 }
 
-test("an exact industry checkpoint lends a saved-only token without restarting or concurrently advancing its owner",async()=>{
+test("an exact source checkpoint lends a saved-only token without restarting or concurrently advancing its owner",async()=>{
   const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;
   assert.equal(scheduler.status().savedRead.active,false);assert.equal(scheduler.status().savedRead.checkpointPending,true);
   const ready=permit.run(async()=>{reads++;await assert.rejects(scheduler.run(()=>assert.fail("nested graph")),{code:"KEYWORD_MONTHLY_SAVED_READ_NESTED_WORK"});
@@ -44,6 +49,21 @@ test("an exact industry checkpoint lends a saved-only token without restarting o
   let resumed=false;bg.resumed.promise.then(()=>{resumed=true;});await turn();assert.equal(resumed,false);assert.equal(scheduler.status().activeCheckpointReadKind,"keyword-monthly-saved-read");
   permit.release();await permit.waitForRelease();await bg.resumed.promise;assert.equal(resumed,true);bg.finish.resolve();await bg.done;
   assert.equal(bg.attempts(),1);assert.equal(scheduler.status().timing.restarted,0);assert.equal(scheduler.status().timing.checkpointReadCompleted,1);await scheduler.close();
+});
+
+test("options and prepared data borrow successive safe checkpoints of the same background calculation",async()=>{
+  const s=system(),source=createSourceReadScheduler(),entered=gate(),boundaries=[gate(),gate()],passed=[gate(),gate()];let attempts=0;
+  const work=s.scheduler.run(async()=>{attempts++;entered.resolve();for(let n=0;n<2;n++){await boundaries[n].promise;await source.checkpoint(scope);passed[n].resolve();}return "complete";},scope);
+  await entered.promise;
+  for(const [n,route] of ["options","data"].entries()){
+    const r=s.request(route,"synthetic",route==="data"?{"x-keyword-monthly-prepared-only":"1"}:{});
+    await until(()=>s.scheduler.status().savedRead.checkpointPending);boundaries[n].resolve();await until(()=>r.res.body);
+    assert.equal(r.res.status,200);assert.equal(s.scheduler.status().activeKind,ownerKind);assert.equal(s.scheduler.status().savedRead.active,true);
+    if(route==="data"){assert.equal(body(r.res).snapshot.value,null);assert.equal(body(r.res).snapshot.actualZero,0);}
+    r.res.finish();await r.done;await passed[n].promise;
+  }
+  assert.equal(await work,"complete");assert.equal(attempts,1);assert.equal(s.calls.options,1);assert.equal(s.calls.prepared,1);assert.equal(s.calls.legacy,0);
+  assert.equal(s.scheduler.status().timing.restarted,0);await s.scheduler.close();
 });
 
 test("two shared HTTP sockets retain the loan until the final response budget really releases",async()=>{
@@ -72,7 +92,7 @@ test("a closed socket during asynchronous encoding keeps the actual producer and
   encoding.resolve();await bg.resumed.promise;assert.equal(s.budget.status().reservedBytes,0);bg.finish.resolve();await bg.done;await s.scheduler.close();
 });
 
-test("not_prepared releases and settles its loan before queuing legacy work and cannot deadlock its industry owner",async()=>{
+test("not_prepared releases and settles its loan before queuing legacy work and cannot deadlock its background owner",async()=>{
   let fallback=false;const s=system({saved:{readPrepared:async()=>({preparedResult:{status:"not_prepared"}}),analyze:async()=>{fallback=true;assert.equal(s.scheduler.status().activeCheckpointReadKind,null);assert.equal(s.scheduler.status().savedRead.active,false);return {status:"available",snapshot:{legacy:true}};}}});
   const bg=await industry(s.scheduler),r=s.request();await until(()=>s.scheduler.status().savedRead.checkpointPending);bg.proceed.resolve();await bg.resumed.promise;
   await until(()=>s.service.status().fallback===1);assert.equal(fallback,false);assert.equal(s.service.status().active,true);assert.equal(s.scheduler.status().savedRead.active,false);
@@ -87,9 +107,11 @@ test("the admission deadline is exactly bounded and removes only a queued loan w
   permit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;assert.equal(bg.attempts(),1);await scheduler.close();
 });
 
-test("wrong owners, foreground industry, noncooperative industry and atomic publication refuse this capability",async()=>{
-  for(const [kind,priority,cooperativeYield]of [["company-bootstrap","background",true],["industry-build","foreground",true],["industry-build","background",false]]){
-    const scheduler=createAnalyticalWorkScheduler({cooperativeYield}),entered=gate(),finish=gate(),done=scheduler.run(async()=>{entered.resolve();await finish.promise;},{kind,priority});await entered.promise;
+test("wrong owners, foreground work, noncooperative work and atomic publication refuse this capability",async()=>{
+  for(const [kind,priority,cooperativeYield,cooperativeCompanyMonthYield]of [["company-bootstrap","background",true,true],["company-job-prepare","background",true,true],
+    ["company-month-repair","foreground",true,true],["company-month","foreground",true,true],["company-month","background",true,false],
+    ["industry-build","foreground",true,true],["industry-build","background",false,true]]){
+    const scheduler=createAnalyticalWorkScheduler({cooperativeYield,cooperativeCompanyMonthYield}),entered=gate(),finish=gate(),done=scheduler.run(async()=>{entered.resolve();await finish.promise;},{kind,priority});await entered.promise;
     assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});finish.resolve();await done;await scheduler.close();
   }
   const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),bg=await industry(scheduler,{atomic:true});assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
@@ -108,7 +130,7 @@ test("memory pressure arriving after reservation is sampled at the actual checkp
   await bg.resumed.promise;assert.equal(s.service.status().active,false);bg.finish.resolve();await bg.done;await s.scheduler.close();
 });
 
-test("maintenance that appears between reservation and decode fails closed while leaving the industry owner intact",async()=>{
+test("maintenance that appears between reservation and decode fails closed while leaving the background owner intact",async()=>{
   let held=false;const s=system({admission:async()=>{if(held)throw Object.assign(new Error(),{code:"KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE"});}}),bg=await industry(s.scheduler),r=s.request();
   await until(()=>s.scheduler.status().savedRead.checkpointPending);held=true;bg.proceed.resolve();await r.done;assert.equal(body(r.res).code,"KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE");assert.equal(s.calls.prepared,0);
   await bg.resumed.promise;bg.finish.resolve();await bg.done;assert.equal(bg.attempts(),1);await s.scheduler.close();
@@ -124,18 +146,27 @@ test("closing cancels a queued loan and an active loan still drains its ignored 
   }
 });
 
-test("the existing encoded response bound rejects an oversized prepared DTO before resuming the industry owner",async()=>{
+test("the existing encoded response bound rejects an oversized prepared DTO before resuming the background owner",async()=>{
   const s=system({budgetBytes:128,saved:{readPrepared:async()=>({status:"available",snapshot:{text:"x".repeat(1024)}})}}),bg=await industry(s.scheduler),r=s.request();
   await until(()=>s.scheduler.status().savedRead.checkpointPending);bg.proceed.resolve();await r.done;assert.equal(body(r.res).code,"KEYWORD_MONTHLY_RESPONSE_TOO_LARGE");await bg.resumed.promise;
   assert.equal(s.budget.status().reservedBytes,0);assert.equal(s.service.status().active,false);bg.finish.resolve();await bg.done;await s.scheduler.close();
 });
 
-test("another async branch of the same industry owner cannot pass its checkpoint while the saved loan is held",async()=>{
+test("another async branch of the same background owner cannot pass its checkpoint while the saved loan is held",async()=>{
   const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),source=createSourceReadScheduler(),entered=gate(),proceed=gate(),borrowed=gate();let siblingPassed=false;
   const work=scheduler.run(async()=>{entered.resolve();await proceed.promise;const lender=source.checkpoint(scope);await borrowed.promise;
     const sibling=source.checkpoint(scope).then(()=>{siblingPassed=true;});await Promise.all([lender,sibling]);return "complete";},scope);
   await entered.promise;const permit=scheduler.acquireSavedReadPermit(),ready=permit.run(()=>{borrowed.resolve();return {};});proceed.resolve();await ready;await turn();await turn();assert.equal(siblingPassed,false);
   permit.release();await permit.waitForRelease();assert.equal(await work,"complete");assert.equal(siblingPassed,true);await scheduler.close();
+});
+
+test("a sibling atomic publication waits for the borrowed saved response to release before entering",async()=>{
+  const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),source=createSourceReadScheduler(),entered=gate(),proceed=gate(),borrowed=gate();let atomicEntered=false;
+  const work=scheduler.run(async()=>{entered.resolve();await proceed.promise;const lender=source.checkpoint(scope);await borrowed.promise;
+    const publication=runNonInterruptibleCooperativeWork(async()=>{assert.equal(scheduler.status().savedRead.active,false);atomicEntered=true;});
+    await Promise.all([lender,publication]);return "complete";},scope);
+  await entered.promise;const permit=scheduler.acquireSavedReadPermit(),ready=permit.run(()=>{borrowed.resolve();return {};});proceed.resolve();await ready;
+  await turn();assert.equal(atomicEntered,false);permit.release();await permit.waitForRelease();assert.equal(await work,"complete");assert.equal(atomicEntered,true);await scheduler.close();
 });
 
 test("the admission clock never releases a started loan or its ignored operation",async()=>{
@@ -153,7 +184,7 @@ test("maintenance found while a loan is queued prevents admission and the deadli
 });
 
 
-test("automatic prepared-only responses borrow the industry checkpoint through the final response and never calculate a missing preparation",{timeout:5000},async()=>{
+test("automatic prepared-only responses borrow the source checkpoint through the final response and never calculate a missing preparation",{timeout:5000},async()=>{
   const read=gate(),s=system({saved:{readPrepared:async()=>{s.calls.prepared++;await read.promise;return {status:"missing",snapshot:null,preparedResult:{status:"not_prepared"}};}}}),bg=await industry(s.scheduler);
   const headers={"x-keyword-monthly-prepared-only":"1"},first=s.request("data","synthetic",headers),second=s.request("data","synthetic",headers);
   await until(()=>s.scheduler.status().savedRead.checkpointPending);assert.equal(s.calls.prepared,0);bg.proceed.resolve();await until(()=>s.calls.prepared===1);
@@ -166,7 +197,7 @@ test("automatic prepared-only responses borrow the industry checkpoint through t
   assert.equal(s.service.status().producers,0);assert.equal(s.service.status().active,false);bg.finish.resolve();await bg.done;assert.equal(bg.attempts(),1);await s.scheduler.close();
 });
 
-test("pointer-only version notifications bypass both a queued and an active industry loan without joining the saved graph",{timeout:5000},async()=>{
+test("pointer-only version notifications bypass both a queued and an active background loan without joining the saved graph",{timeout:5000},async()=>{
   let versions=0;const read=gate(),s=system({saved:{version:async()=>{versions++;return {status:"available",revision:"a".repeat(64),originalFreshnessVerified:false};},
     readPrepared:async()=>{s.calls.prepared++;await read.promise;return {status:"available",snapshot:{value:null,actualZero:0}};}}}),bg=await industry(s.scheduler);
   const automatic=s.request("data","synthetic",{"x-keyword-monthly-prepared-only":"1"});await until(()=>s.scheduler.status().savedRead.checkpointPending);
@@ -221,3 +252,4 @@ test("an invalid observed queue clock cannot reopen the same reservation after t
     permit.release();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();
   }
 });
+}
