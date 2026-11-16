@@ -33,6 +33,8 @@ function payloadFixture(selection = { keyword: KEYWORD, month: "2026-10", cutoff
     latestAttempt: { status: "failed", observedAt: "2026-10-30T00:00:00Z", errorCode: "PROVIDER_BLOCKED" }, lastSuccessfulAttempt: { status: "complete", observedAt: "2026-10-20T00:00:00Z" },
     provenance: { materializedAt: NOW, dataThrough: "2026-10-30T00:00:00Z", inputSha256: "a".repeat(64), originalFreshnessVerified: false, observationScope: "selected_only", intermediateObservationsComplete: false }, diagnostics: [] };
 }
+const identityReviewFixture = (extra = {}) => ({ schemaVersion: 1, basis: "raw_unresolved_identity_rows", totalRows: 18, alreadyRepresentedRows: 10, recoveredRows: 3, unresolvedRows: 5,
+  reasonCounts: { SOURCE_ID_UNKNOWN: 3, COUNTERPART_TIME_MISMATCH: 2 }, evidenceDigest: "a".repeat(64), catalogDigest: "b".repeat(64), ...extra });
 
 class Element {
   constructor(tag, doc) { this.tagName = tag.toUpperCase(); this.ownerDocument = doc; this.children = []; this.listeners = {}; this.attributes = {}; this.className = ""; this._text = ""; this.value = ""; this.disabled = false; this.hidden = false; this.dataset = {}; this.classList = { contains: key => this.className.split(/\s+/).includes(key) }; }
@@ -462,7 +464,7 @@ test("real pinned Data checkedPayload accepts every emitted chart config and rej
 
 test("supporting tables stay accessible in collapsed details while prior comparison remains visible", async () => {
   const ui = mockUi(); await ui.controller.open(); await settle();
-  assert.equal(ui.find("kma-supporting-details").length, 5);
+  assert.equal(ui.find("kma-supporting-details").length, 6);
   assert.equal(ui.find("kma-supporting-details").every(node => node.tagName === "DETAILS" && !node.open), true);
   assert.match(text(ui.find("kma-supporting-details")[0]), /업체 동일가중 참고 평균|공급 가중/);
   assert.equal(ui.find("kma-comparison")[0].parentNode.className, "kma-detail-panel");
@@ -1049,4 +1051,57 @@ test("verified session configuration is awaited before role UI and failed sessio
   calls.length = 0; const denied = Error("SESSION_DENIED"); context.fetchJson = async () => { throw denied; };
   await assert.rejects(context.load(), error => error === denied);
   assert.ok(calls.some(x => x[0] === "selection" && x[1] === null));
+});
+
+test("identity review is initially folded, uses observation units and expands without GET or aggregate changes", async () => {
+  const payload = payloadFixture(); payload.snapshot.quality.identityReview = identityReviewFixture(); const originalSummary = clone(payload.snapshot.summary);
+  const ui = mockUi({ request: async url => jsonResponse(url.endsWith("/options") ? optionsFixture() : payload) }); await ui.controller.open();
+  const block = ui.find("kma-identity-review")[0], details = block.parentNode;
+  assert.equal(details.tagName, "DETAILS"); assert.equal(details.open, false); assert.equal(block.attributes["data-identity-review-status"], "ready");
+  assert.equal(ui.find("kma-identity-count").length, 3); assert.match(text(block), /기존 관측자료에 반영.*10건.*업체번호 연결 보완.*3건.*연결 확인 필요.*5건/);
+  assert.match(text(block), /관측기록/); assert.match(text(block), /객실수·예약수·월 합산건수와 다릅니다/);
+  assert.match(text(block), /원본 업체번호 연결 근거 없음.*3건/); assert.match(text(block), /대응 관측시각 불일치.*2건/);
+  const before = ui.calls.length; details.open = true; await details.fire("toggle"); assert.equal(ui.calls.length, before);
+  assert.deepEqual(payload.snapshot.summary, originalSummary); assert.equal(ui.controller.state().selection.keyword, KEYWORD);
+});
+test("historical review absence remains unclassified instead of displaying three normal zero counts", async () => {
+  const payload = payloadFixture(); payload.snapshot.quality.sourceDiagnostics = { unmatchedCompanyRows: 3710 };
+  const ui = mockUi({ request: async url => jsonResponse(url.endsWith("/options") ? optionsFixture() : payload) }); await ui.controller.open();
+  const block = ui.find("kma-identity-review")[0]; assert.equal(block.attributes["data-identity-review-status"], "legacy");
+  assert.match(text(block), /세부 분류 전.*3,710건/); assert.equal(ui.find("kma-identity-count").length, 0); assert.match(text(block), /0건으로 표시하지 않습니다/);
+});
+test("actual3710 already represented classification is not shown as reservations or final monthly adoption", async () => {
+  const payload = payloadFixture(); payload.snapshot.quality.identityReview = identityReviewFixture({ totalRows: 3710, alreadyRepresentedRows: 3710, recoveredRows: 0, unresolvedRows: 0, reasonCounts: {} });
+  payload.snapshot.summary.lodging.revenuePartial = true; payload.snapshot.quality.warnings = ["가격 미확인 근거는 유지합니다."];
+  const ui = mockUi({ request: async url => jsonResponse(url.endsWith("/options") ? optionsFixture() : payload) }); await ui.controller.open();
+  const block = ui.find("kma-identity-review")[0]; assert.match(text(block), /기존 관측자료에 반영.*3,710건/); assert.match(text(block), /월 최종값은 최신 유효 관측 기준으로 선택합니다/);
+  assert.match(text(block), /업체번호 연결 보완.*0건.*연결 확인 필요.*0건/); assert.doesNotMatch(text(block), /3,710실|3,710원|월 최종합계에 모두/);
+  assert.match(ui.text(), /가격 확인 부분 소계/); assert.match(ui.text(), /가격 미확인 근거는 유지합니다/);
+});
+test("a genuine zero identity review is visible and malformed review values stay unknown", async () => {
+  const zero = identityReviewFixture({ totalRows: 0, alreadyRepresentedRows: 0, recoveredRows: 0, unresolvedRows: 0, reasonCounts: {} });
+  assert.equal(uiModule.identityReviewView(zero).status, "ready");
+  const payload = payloadFixture(); payload.snapshot.quality.identityReview = zero;
+  const ui = mockUi({ request: async url => jsonResponse(url.endsWith("/options") ? optionsFixture() : payload) }); await ui.controller.open();
+  assert.equal(ui.find("kma-identity-count").length, 3); assert.ok(ui.find("kma-identity-count").every(item => /0건/.test(text(item))));
+  for (const invalid of [null, { ...zero, totalRows: 1 }, { ...zero, privateToken: "unsafe" }, { ...zero, reasonCounts: { SOURCE_ID_UNKNOWN: 0 } }, { ...zero, totalRows: 100000001 }]) assert.equal(uiModule.identityReviewView(invalid).status, "invalid");
+  payload.snapshot.quality.identityReview = { ...zero, totalRows: 99 }; await ui.controller.refresh();
+  const block = ui.find("kma-identity-review")[0]; assert.equal(block.attributes["data-identity-review-status"], "invalid"); assert.equal(ui.find("kma-identity-count").length, 0); assert.match(text(block), /미확인을 0건으로 바꾸지 않습니다/);
+});
+test("unknown safe reason codes remain bounded readable text without markup execution", async () => {
+  const review = identityReviewFixture({ reasonCounts: { FUTURE_LINK_REASON: 5 } });
+  const payload = payloadFixture(); payload.snapshot.quality.identityReview = review;
+  const ui = mockUi({ request: async url => jsonResponse(url.endsWith("/options") ? optionsFixture() : payload) }); await ui.controller.open();
+  assert.match(text(ui.find("kma-identity-review")[0]), /기타 연결 근거 확인 · FUTURE_LINK_REASON.*5건/);
+  assert.equal(uiModule.identityReviewView({ ...review, reasonCounts: { '<img src=x onerror="unsafe">': 5 } }).status, "invalid");
+});
+test("identity review disclosure survives F5 with the same applied company/month/product and no extra requests", async () => {
+  const storage = memorySelectionStorage(), session = liveSession();
+  const request = async url => { if (url.endsWith("/options")) return jsonResponse(optionsFixture()); const q = new URL(url, "https://local.test"), payload = payloadFixture(Object.fromEntries(q.searchParams)); payload.snapshot.quality.identityReview = identityReviewFixture(); return jsonResponse(payload); };
+  const first = mockUi({ storage, session, request }); await first.ready; await first.controller.open();
+  first.field("benchmarkCompany").value = "a"; await first.field("benchmarkCompany").fire("change");
+  const block = first.find("kma-identity-review")[0]; block.parentNode.open = true; await block.parentNode.fire("toggle");
+  const before = clone(first.controller.state().selection); assert.equal(first.calls.length, 2); first.controller.destroy();
+  const again = mockUi({ storage, session, request }); await again.ready; await again.controller.open();
+  assert.deepEqual(clone(again.controller.state().selection), before); assert.equal(again.find("kma-identity-review")[0].parentNode.open, true); assert.equal(again.calls.length, 2);
 });

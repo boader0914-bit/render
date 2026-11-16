@@ -36,7 +36,8 @@ async function normalizePair({ wiring, keyword, month, cutoffDate, capturedAt, c
     for (const row of safe.companies) companies.set(row.companyId, row); for (const row of safe.runs) runs.set(row.id || row.runId, row);
     source.observations.push(...safe.observations); source.savedProductRecoveries.push(...safe.savedProductRecoveries);
     for (const row of safe.rankObservations) { const id = fingerprint(row); if (!ranks.has(id)) { ranks.add(id); source.rankObservations.push(row); } }
-    source.monthlySourceMetadata[request.month] = { warnings: safe.warnings || [], sourceDiagnostics: safe.sourceDiagnostics || {}, globalWarnings: safe.globalWarnings || [], globalDiagnostics: safe.globalDiagnostics || {} };
+    source.monthlySourceMetadata[request.month] = { warnings: safe.warnings || [], sourceDiagnostics: safe.sourceDiagnostics || {}, globalWarnings: safe.globalWarnings || [], globalDiagnostics: safe.globalDiagnostics || {},
+      ...(Object.hasOwn(safe, "identityReview") ? { identityReview: safe.identityReview } : {}) };
     if (safe.specialDays) source.specialDays = safe.specialDays;
     records.push({ request, sourceFingerprint: fingerprint(safe), snapshotFingerprint: fingerprint(actual),
       counts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(k => [k, (safe[k] || []).length])) });

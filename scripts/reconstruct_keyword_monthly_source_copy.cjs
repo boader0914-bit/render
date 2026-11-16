@@ -6,6 +6,7 @@ const { safeJson, checkedPath } = require("./lib/keyword_monthly_source_copy.cjs
 const { installReadOnlyOutputs } = require("./lib/keyword_monthly_readonly_outputs.cjs");
 const { installScratchBudget } = require("./lib/keyword_monthly_scratch_budget.cjs");
 const { installCompressedHistory } = require("./lib/keyword_monthly_compressed_history.cjs");
+const { normalizeMonthlyReportIdentityReview } = require("./lib/monthly_reports.cjs");
 const MAX_SOURCE_BYTES = require("./lib/keyword_monthly_source_budget.cjs").KEYWORD_MONTHLY_SOURCE_BUDGET.normalizedJsonBytes, MAX_ROWS = 50000, MAX_TIME_MS = 15 * 60 * 1000;
 const SHA = /^[a-f0-9]{64}$/, PRIVATE = /(?:token|secret|password|cookie|authorization|private|rawPayload|guest|customer|contact|address|account|kosis|context)/i;
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex"), clone = value => JSON.parse(JSON.stringify(value));
@@ -142,7 +143,7 @@ function installGuards(copyRoot, { codeRoot = null, originalOutputs = null, read
 }
 function publicSource(value, removed, location = "") {
   if (Array.isArray(value)) return value.map(item => publicSource(item, removed, location + "[]"));
-  if (value && typeof value === "object") { const result = {}; for (const [key, item] of Object.entries(value)) { if (PRIVATE.test(key)) { removed[location + "." + key] = (removed[location + "." + key] || 0) + 1; continue; } result[key] = publicSource(item, removed, location + "." + key); } return result; }
+  if (value && typeof value === "object") { const result = {}; for (const [key, item] of Object.entries(value)) { if (key === "identityReview") { result[key] = normalizeMonthlyReportIdentityReview(item); continue; } if (PRIVATE.test(key)) { removed[location + "." + key] = (removed[location + "." + key] || 0) + 1; continue; } result[key] = publicSource(item, removed, location + "." + key); } return result; }
   return value;
 }
 function snapshotCore(snapshot) {
@@ -258,7 +259,8 @@ async function run(values) {
       for (const row of safe.companies) companies.set(row.companyId, row); for (const row of safe.runs) runs.set(row.id || row.runId, row);
       source.observations.push(...safe.observations); source.savedProductRecoveries.push(...safe.savedProductRecoveries);
       for (const row of safe.rankObservations) { const hash = fingerprint(row); if (!ranks.has(hash)) { ranks.add(hash); source.rankObservations.push(row); } }
-      source.monthlySourceMetadata[request.month] = { warnings: safe.warnings || [], sourceDiagnostics: safe.sourceDiagnostics || {}, globalWarnings: safe.globalWarnings || [], globalDiagnostics: safe.globalDiagnostics || {} };
+      source.monthlySourceMetadata[request.month] = { warnings: safe.warnings || [], sourceDiagnostics: safe.sourceDiagnostics || {}, globalWarnings: safe.globalWarnings || [], globalDiagnostics: safe.globalDiagnostics || {},
+        ...(Object.hasOwn(safe, "identityReview") ? { identityReview: normalizeMonthlyReportIdentityReview(safe.identityReview) } : {}) };
       if (safe.specialDays) source.specialDays = safe.specialDays;
       records.push({ request, fullCounts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(key => [key, (full[key] || []).length])),
         scopedCounts: Object.fromEntries(["companies", "runs", "observations", "rankObservations", "savedProductRecoveries"].map(key => [key, (safe[key] || []).length])),

@@ -10,6 +10,29 @@
   const number = value => known(value) ? new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 }).format(value) : "—";
   const rate = value => known(value) ? `${number(value * 100)}%` : "—";
   const money = value => known(value) ? `${number(value)}원` : "—";
+  function identityReviewView(value, present = true) {
+    if (!present) return { status: "legacy" };
+    const fields = ["schemaVersion", "basis", "totalRows", "alreadyRepresentedRows", "recoveredRows", "unresolvedRows", "reasonCounts", "evidenceDigest", "catalogDigest"];
+    const object = v => v && typeof v === "object" && !Array.isArray(v);
+    const exact = (v, keys) => object(v) && Reflect.ownKeys(v).length === keys.length && keys.every(key => Object.hasOwn(v, key) && Object.hasOwn(Object.getOwnPropertyDescriptor(v, key), "value"));
+    const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 100000000;
+    try {
+      if (!exact(value, fields) || value.schemaVersion !== 1 || value.basis !== "raw_unresolved_identity_rows"
+        || !["totalRows", "alreadyRepresentedRows", "recoveredRows", "unresolvedRows"].every(key => count(value[key]))
+        || value.alreadyRepresentedRows + value.recoveredRows + value.unresolvedRows !== value.totalRows
+        || !["evidenceDigest", "catalogDigest"].every(key => typeof value[key] === "string" && /^[a-f0-9]{64}$/.test(value[key]))
+        || !object(value.reasonCounts) || Reflect.ownKeys(value.reasonCounts).length > 64) return { status: "invalid" };
+      const reasons = []; let total = 0;
+      for (const code of Reflect.ownKeys(value.reasonCounts)) {
+        const field = Object.getOwnPropertyDescriptor(value.reasonCounts, code);
+        if (typeof code !== "string" || !/^[A-Z][A-Z0-9_]{0,79}$/.test(code)
+          || /(?:password|cookie|authorization|secret|token|private|guest|customer|contact|address|account|kosis)/i.test(code)
+          || !Object.hasOwn(field, "value") || !count(field.value) || field.value === 0) return { status: "invalid" };
+        reasons.push({ code, count: field.value }); total += field.value;
+      }
+      return total === value.unresolvedRows ? { status: "ready", ...value, reasons } : { status: "invalid" };
+    } catch { return { status: "invalid" }; }
+  }
   const dateValid = value => typeof value === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
   const kstDay = now => new Date(Number(now) + 9 * 3600000).toISOString().slice(0, 10);
   const monthEnd = month => { const [year, part] = month.split("-").map(Number); return new Date(Date.UTC(year, part, 0)).toISOString().slice(0, 10); };
@@ -333,6 +356,31 @@
     function card(label, value, detail = "", cls = "") { const node = el("div", `kma-metric ${cls}`); node.append(el("span", "", label), el("strong", "", value)); if (detail) node.append(el("small", "", detail)); return node; }
     function section(label, note = "", collapsible = false) { const node = el("section", "mr-card kma-panel"), head = el("div", "mr-section-title"); head.append(el("h3", "", label)); node.append(head); if (note) node.append(el("p", "kma-note", note));
       if (collapsible) { const details = disclose(el("details", "kma-chart-data kma-supporting-details"), `support:${label}`); details.append(el("summary", "", label), node); (resultTarget || results).append(details); } else (resultTarget || results).append(node); return node; }
+    function renderIdentityReview(snapshot) {
+      const quality = snapshot.quality || {}, review = identityReviewView(quality.identityReview, Object.hasOwn(quality, "identityReview"));
+      const block = section("업체 연결 검토", "구형 이력의 업체 연결 분류이며 관측기록 건수입니다. 객실수·예약수·월 합산건수와 다릅니다.", true);
+      block.className += " kma-identity-review"; block.setAttribute("data-identity-review-status", review.status);
+      if (review.status !== "ready") {
+        const legacyTotal = quality.sourceDiagnostics?.unmatchedCompanyRows;
+        block.append(el("p", "kma-note kma-identity-review-message", review.status === "legacy"
+          ? `세부 분류 전${known(legacyTotal) && legacyTotal > 0 ? ` · 기존 업체번호 미확정 관측기록 ${number(legacyTotal)}건` : ""}. 저장 자료에 세부 분류 근거가 없어 각 항목을 0건으로 표시하지 않습니다.`
+          : "업체 연결 검토 근거가 서로 맞지 않아 세부 수량을 표시하지 않습니다. 미확인을 0건으로 바꾸지 않습니다."));
+        return;
+      }
+      const counts = el("div", "kma-identity-counts");
+      for (const [key, label, note] of [["alreadyRepresentedRows", "기존 관측자료에 반영", "월 최종값은 최신 유효 관측 기준으로 선택합니다."],
+        ["recoveredRows", "업체번호 연결 보완", "연결 근거를 확인한 기록입니다."], ["unresolvedRows", "연결 확인 필요", "확정되지 않은 기록은 합산하지 않습니다."]]) {
+        const item = card(label, `${number(review[key])}건`, note, "kma-identity-count"); item.setAttribute("data-identity-review-count", key); counts.append(item);
+      }
+      block.append(counts, el("p", "kma-note", `검토한 관측기록 ${number(review.totalRows)}건 · 기존 관측자료와 업체번호 연결을 보완한 기록을 구분합니다. 예약·매출은 위 집계값을 확인하세요.`));
+      const labels = { SOURCE_ID_MISSING: "원본 업체번호 없음", SOURCE_ID_UNKNOWN: "원본 업체번호 연결 근거 없음", SOURCE_ID_AMBIGUOUS: "여러 업체에 연결될 가능성",
+        SOURCE_ID_CONFLICT: "업체번호 연결 근거 충돌", SOURCE_URL_INVALID: "원본 업체 주소 근거 불일치", ROW_GRAIN_INVALID: "관측 단위 근거 불일치",
+        RUN_SCOPE_CONFLICT: "수집 회차와 대상 범위 불일치", COUNTERPART_TIME_MISMATCH: "대응 관측시각 불일치", CANDIDATE_ROWS_CONFLICT: "대응 관측기록 충돌",
+        IDENTITY_REVIEW_BOUND: "검토 범위를 넘어 추가 확인 필요" };
+      if (review.reasons.length) table(block, ["연결 근거 부족 사유", "관측기록"], review.reasons.map(row => [labels[row.code] || `기타 연결 근거 확인 · ${row.code}`, `${number(row.count)}건`]), "사유별 합계는 연결 근거가 부족한 관측기록 수와 같습니다.");
+      else block.append(el("p", "kma-note", "연결 근거가 부족한 관측기록은 0건입니다."));
+      block.append(el("p", "kma-note kma-identity-evidence", `검토 근거 ${review.evidenceDigest} · 업체 목록 근거 ${review.catalogDigest}`));
+    }
     function table(parentNode, headers, rows, caption) { const wrap = el("div", "kma-table-wrap"), node = el("table", "kma-table"), head = el("thead"), line = el("tr"), body = el("tbody"); node.append(el("caption", "", caption)); for (const name of headers) { const cell = el("th", "", name); cell.scope = "col"; line.append(cell); } head.append(line); for (const row of rows) { const tr = el("tr"); row.forEach((value, index) => { const cell = el(index ? "td" : "th", "", value); if (!index) cell.scope = "row"; tr.append(cell); }); body.append(tr); } node.append(head, body); wrap.append(node); parentNode.append(wrap); return node; }
     function calendar(parentNode, rows, info) {
       const node = el("table", "kma-calendar"), head = el("thead"), headerRow = el("tr"), body = el("tbody");
@@ -601,6 +649,7 @@
       if (["failed", "blocked", "interrupted"].includes(view.latestAttempt?.status)) notice.textContent = `${retained ? `${notice.textContent} ` : restoreNotice && !loading ? `${restoreNotice} ` : ""}${view.historicalSnapshot ? "과거 저장근거 · 갱신 확인 필요. " : ""}사본에서 확인한 최근 회차 ${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}. 선택월 수치는 마지막 유효 관측 근거를 표시합니다.`;
       table(quality, ["항목", "저장 근거"], [["집계 품질", qualityStatus], ["같은 날 관측 업체·일", number(metric.sameDayObservedCompanyDays)], ["사전 관측 업체·일", number(metric.staleDays)], ["가격 근거 충족률", rate(metric.revenueCoverageRate)], ["사본에서 확인한 최근 회차", view.latestAttempt ? `${attemptLabel} · ${timeLabel(view.latestAttempt.observedAt)}${view.latestAttempt.errorCode ? ` · ${view.latestAttempt.errorCode}` : ""}` : "미확인"], ["마지막 유효 관측", timeLabel(view.lastSuccessfulAttempt?.observedAt)]], "포함된 최근 회차와 선택월의 마지막 유효 관측을 구분");
       warnings(quality, [...(snapshot.quality?.warnings || []), ...view.diagnostics]);
+      renderIdentityReview(snapshot);
       const activity = section("사본에 포함된 고유 관측 회차", "수집월 기준의 제공 run 집합입니다. 숙박월 예약·매출에 합산하지 않으며, 재사용은 새 수집과 구분합니다.", true);
       activity.append(el("p", "kma-note", `${view.activityScope}${view.runInventoryComplete ? "" : " · 전체 시도·실패 목록은 미확인입니다. 실패 0도 이 사본 범위의 기록만 뜻합니다."}`));
       if (view.activity.length) table(activity, ["수집월", "포함 회차", "신규 근거", "재사용 근거", "실패 기록", "일부 자료", "미확인"], view.activity.map(row => [row.month, number(row.runCount), number(row.freshRunCount), number(row.reusedRunCount), number(row.failedRunCount), number(row.partialRunCount), number(row.unknownRunCount)]), "한국시간 수집월 기준 · 포함 회차가 많다는 이유만으로 신뢰도를 높이지 않음");
@@ -833,7 +882,7 @@
     controllers.add(controller); instances.set(parent, controller);
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;
   }
-  const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel, createSelectionStorage,
+  const api = { mount, normalizeOptions, metricView, calendarCells, buildViewModel, identityReviewView, number, rate, money, dateValid, defaultCutoff, dataThroughDay, cutoffFor, phaseLabel, createSelectionStorage,
     async configure(session, flags) {
       if (!selectionStorage.matches(session, flags)) for (const controller of controllers) controller.clear();
       return selectionStorage.configure(session, flags);

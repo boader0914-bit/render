@@ -5,7 +5,9 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const readline = require("node:readline");
 const { performance } = require("node:perf_hooks");
-const { monthlyReportKeywordMembership } = require("./monthly_reports.cjs");
+const { monthlyReportKeywordMembership, normalizeMonthlyReportIdentityReview } = require("./monthly_reports.cjs");
+const { createMonthlyObservationIdentityResolver } = require("./monthly_observation_identity.cjs");
+const { reviewMonthlyUnmatchedIdentityRows, identityRecordInKeywordScope, observationKey } = require("./monthly_observation_identity_review.cjs");
 const { industryCompanyReference } = require("./industry_analysis.cjs");
 const { companyAddressBasis, addressRegion } = require("./company_address_basis.cjs");
 const { createSourceReadScheduler } = require("./source_read_scheduler.cjs");
@@ -283,21 +285,31 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       // safely merge an old row into a reviewed company's historical totals.
       return null;
     }
-    const observations = new Map();
-    const diagnosticInventoryRows = [], unmatchedRows = [];
+    const observations = new Map(), observationOrigins = new Map();
+    const diagnosticInventoryRows = [], unmatchedRows = [], identityRecords = [];
     // Only keyword membership needs discarded full rows. Company/region/
     // industry sources need identity counts, so do not retain replaced raw
     // history payloads throughout saved-evidence recalculation.
     const needsMembershipEvidence = request.type === "keyword";
+    const identityRunMap = needsMembershipEvidence ? new Map(data.runs.map(run => [String(run.id || run.runId), run])) : null;
     const companyScope = request.type === "company" ? String(request.targetId) : null;
-    function addRow(row, fallback = false, recordDiagnostics = true) {
+    function addRow(row, fallback = false, recordDiagnostics = true, origin = "raw_history") {
       if (!String(row.stayDate || row.date || "").startsWith(request.month + "-")) return;
       const id = canonical(row);
       // Keep rejected identity evidence separate so a relevant duplicate can be
       // diagnosed without adding its quantities to the report.
       const candidateId = id || canonical(row, true) || `unresolved-report-row-${unmatchedRows.length}`;
       if (needsMembershipEvidence) diagnosticInventoryRows.push({ ...row, companyId: candidateId, companyKey: candidateId });
-      if (!id) { if (recordDiagnostics) unmatchedRows.push({ candidateId }); return; }
+      if (!id) {
+        if (recordDiagnostics) {
+          const record = { candidateId }; unmatchedRows.push(record);
+          if (origin === "raw_history" && needsMembershipEvidence
+            && identityRecordInKeywordScope(row, identityRunMap.get(String(row.runId || "")), request)) {
+            record.row = row; identityRecords.push(record);
+          }
+        }
+        return;
+      }
       // Identity conflicts and global diagnostics are counted above. Retain
       // quantities only for the requested company, before correction/cloning.
       if (companyScope !== null && id !== companyScope) return;
@@ -308,6 +320,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       if (fallback && observations.has(key)) return;
       observations.set(key, { ...normalized, companyKey: id, companyId: id, companyName: company.primaryName,
         regionKey: company.regionKey, regionKeys: company.regionKeys, stayDate: row.stayDate || row.date });
+      observationOrigins.set(key, origin);
     }
     let malformedHistoryLines;
     if (!observationIndex) malformedHistoryLines = await readHistory(row => addRow(row), checkpoint);
@@ -389,7 +402,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
           inventoryEvidenceVersion: row.inventoryEvidenceVersion ?? snapshot.productSnapshot.inventoryEvidenceVersion ?? snapshot.inventoryEvidenceVersion,
           companyKey: id, companyName: company.primaryName, runId: row.runId || snapshot.runId || snapshot.productSnapshot.runId,
           collectedAt: row.collectedAt || snapshot.collectedAt || snapshot.productSnapshot.collectedAt,
-          productType: row.productType || "lodging", supply: row.supply ?? row.total }, true);
+          productType: row.productType || "lodging", supply: row.supply ?? row.total }, true, true, "company_snapshot");
       }
     }
     // This optional hook must only read saved collection evidence: never collect
@@ -409,7 +422,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         if (/^[a-f0-9]{64}$/.test(recalculated.productCapacityEvidenceRevision || "")) productCapacityEvidenceRevision = recalculated.productCapacityEvidenceRevision;
         for (let index = 0; index < recalculated.length; index++) {
           if (index % 256 === 0) await checkpoint();
-          addRow(recalculated[index]);
+          addRow(recalculated[index], false, true, "saved_run_recalculation");
         }
       } catch { throw sourceError(); }
     }
@@ -425,16 +438,34 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         recoveryWarnings = recovered.warnings.map(value => typeof value === "string" ? value : value?.message).filter(value => typeof value === "string");
       } catch { throw sourceError(); }
     }
+    let identityReview, reviewedRecords = new Set();
+    if (needsMembershipEvidence) {
+      try {
+        const resolver = createMonthlyObservationIdentityResolver({ companies: data.rawCompanies });
+        const reviewed = await reviewMonthlyUnmatchedIdentityRows({ records: identityRecords, observations, origins: observationOrigins,
+          resolver, runs: identityRunMap, blockedCompanyIds: conflictingCompanyIds, checkpoint });
+        for (let index = 0; index < reviewed.recoveries.length; index++) {
+          if (index % 128 === 0) await checkpoint();
+          const recovery = reviewed.recoveries[index];
+          if (canonical(recovery.row) !== recovery.companyId) throw sourceError();
+          addRow(recovery.row, false, true, "recorded_provider_id");
+          if (!observations.has(observationKey(recovery.row, recovery.companyId))) throw sourceError();
+        }
+        identityReview = normalizeMonthlyReportIdentityReview(reviewed.identityReview);
+        reviewedRecords = reviewed.fulfilledRecords;
+      } catch (error) { if (isCooperativeWorkYield(error)) throw error; throw sourceError(); }
+    }
+    const effectiveUnmatchedRows = unmatchedRows.filter(row => !reviewedRecords.has(row));
     const scopeIds = request.type === "keyword"
       ? monthlyReportKeywordMembership(request, { observations: diagnosticInventoryRows, rankObservations: diagnosticRankRows, runs: data.runs }).members
       : new Set(data.companies.filter(company => request.type === "industry" || (request.type === "company" ? company.companyId === request.targetId
         : company.regionKey === request.targetId || company.regionKeys.includes(request.targetId))).map(company => company.companyId));
-    const unmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (scopeIds.has(row.candidateId) ? row.count || 1 : 0), 0);
+    const unmatchedCompanyRows = effectiveUnmatchedRows.reduce((count, row) => count + (scopeIds.has(row.candidateId) ? row.count || 1 : 0), 0);
     const duplicatePlaceCompanies = [...conflictingCompanyIds].filter(id => scopeIds.has(id)).length;
     const warnings = [...recoveryWarnings, ...new Set(productCapacityWarnings.map(row => row.message).filter(value => typeof value === "string"))], globalWarnings = [];
     if (unmatchedCompanyRows) warnings.push(`리포트 대상에서 업체 고유번호를 확정하지 못한 관측 ${unmatchedCompanyRows}건을 제외했습니다.`);
     if (duplicatePlaceCompanies) warnings.push(`리포트 대상 중 플레이스 번호가 중복 연결된 업체 DB ${duplicatePlaceCompanies}개는 합산에서 제외했습니다. DB 중복 검토가 필요합니다.`);
-    const globalUnmatchedCompanyRows = unmatchedRows.reduce((count, row) => count + (row.count || 1), 0) - unmatchedCompanyRows;
+    const globalUnmatchedCompanyRows = effectiveUnmatchedRows.reduce((count, row) => count + (row.count || 1), 0) - unmatchedCompanyRows;
     const globalDuplicatePlaceCompanies = conflictingCompanyIds.size - duplicatePlaceCompanies;
     const unmappedRegionCompanies = data.companies.filter(company => !company.regionKey).length;
     if (malformedHistoryLines) globalWarnings.push(`전체 DB 참고: 읽을 수 없는 수집 이력 ${malformedHistoryLines}줄은 대상 범위를 확인할 수 없어 이 리포트의 품질 평가와 분리했습니다.`);
@@ -464,6 +495,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     const source = { companies: data.companies, regions: data.regions, runs: data.runs, observations: [...observations.values()], savedProductRecoveries, rankObservations, specialDays,
       ...(productCapacityEvidenceRevision ? { productCapacityEvidenceRevision } : {}),
       warnings, sourceDiagnostics: { unmatchedCompanyRows, duplicatePlaceCompanies },
+      ...(identityReview ? { identityReview } : {}),
       globalWarnings, globalDiagnostics: { malformedHistoryLines, unmatchedCompanyRows: globalUnmatchedCompanyRows, duplicatePlaceCompanies: globalDuplicatePlaceCompanies,
         ...(request.type === "region" ? { unmappedRegionCompanies } : {}) }, context };
     if (publishProductCapacityEvidence && data._companySource) Object.defineProperty(source, "_productCapacityPublication", {

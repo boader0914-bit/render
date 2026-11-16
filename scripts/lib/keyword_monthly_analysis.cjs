@@ -7,7 +7,7 @@ const constants = require("node:fs").constants;
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { gzipSync, gunzipSync } = require("node:zlib");
-const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
+const { buildMonthlyReportSnapshot, normalizeMonthlyReportIdentityReview } = require("./monthly_reports.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
@@ -91,10 +91,12 @@ function normalizeMonthlySourceMetadata(value) {
     return { ...values };
   };
   return Object.fromEntries(Object.entries(value).map(([valueMonth, metadata]) => {
-    if (!month(valueMonth) || !plain(metadata) || Object.keys(metadata).length !== MONTH_METADATA_KEYS.length
-      || MONTH_METADATA_KEYS.some(key => !Object.hasOwn(metadata, key)) || Object.keys(metadata).some(key => !MONTH_METADATA_KEYS.includes(key))) throw fault("KEYWORD_MONTHLY_INVALID_MONTH_METADATA");
+    const keys = [...MONTH_METADATA_KEYS, ...(Object.hasOwn(metadata || {}, "identityReview") ? ["identityReview"] : [])];
+    if (!month(valueMonth) || !plain(metadata) || Object.keys(metadata).length !== keys.length
+      || keys.some(key => !Object.hasOwn(metadata, key)) || Object.keys(metadata).some(key => !keys.includes(key))) throw fault("KEYWORD_MONTHLY_INVALID_MONTH_METADATA");
     return [valueMonth, { warnings: warnings(metadata.warnings), sourceDiagnostics: diagnostics(metadata.sourceDiagnostics),
-      globalWarnings: warnings(metadata.globalWarnings), globalDiagnostics: diagnostics(metadata.globalDiagnostics) }];
+      globalWarnings: warnings(metadata.globalWarnings), globalDiagnostics: diagnostics(metadata.globalDiagnostics),
+      ...(Object.hasOwn(metadata, "identityReview") ? { identityReview: normalizeMonthlyReportIdentityReview(metadata.identityReview) } : {}) }];
   }));
 }
 // Metadata changes with the requested stay month. Rows, run quality, original
@@ -102,7 +104,11 @@ function normalizeMonthlySourceMetadata(value) {
 function sourceForKeywordMonthlyRequest(source, request) {
   if (!Object.hasOwn(source, "monthlySourceMetadata")) return source;
   const metadata = normalizeMonthlySourceMetadata(source.monthlySourceMetadata);
-  return metadata[request.month] ? { ...source, ...metadata[request.month] } : source;
+  if (!metadata[request.month]) return source;
+  const selected = { ...source, ...metadata[request.month] };
+  // A legacy month cannot inherit a different month's classification.
+  if (!Object.hasOwn(metadata[request.month], "identityReview")) delete selected.identityReview;
+  return selected;
 }
 function sourceRow(row, ownedRows = false) {
   // Preserve the exact normalized row: the shared engine's deterministic tie
@@ -148,7 +154,7 @@ function normalizeSource(source, ownedRows = false) {
     holidays: (Array.isArray(year.holidays) ? year.holidays : []).filter(item => date(item.date) && text(item.name, 100)).slice(0, 100).map(item => ({ date: item.date, name: item.name })) })) };
   const monthlySourceMetadata = Object.hasOwn(source, "monthlySourceMetadata") ? normalizeMonthlySourceMetadata(source.monthlySourceMetadata) : undefined;
   return { companies, runs, observations, rankObservations, savedProductRecoveries, warnings, sourceDiagnostics, ...(specialDays ? { specialDays } : {}),
-    ...(monthlySourceMetadata ? { monthlySourceMetadata } : {}) };
+    ...(Object.hasOwn(source, "identityReview") ? { identityReview: normalizeMonthlyReportIdentityReview(source.identityReview) } : {}), ...(monthlySourceMetadata ? { monthlySourceMetadata } : {}) };
 }
 
 function statSame(a, b) { return ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(key => a[key] === b[key]); }
@@ -289,6 +295,7 @@ async function buildKeywordMonthlyProjection({ source, sourceFingerprint, source
       const compact = { companies: normalized.companies.filter(row => ids.has(companyId(row))), runs: normalized.runs.filter(row => used.has(runId(row))),
         observations, rankObservations, savedProductRecoveries, warnings: normalized.warnings,
         sourceDiagnostics: Object.fromEntries(Object.entries(normalized.sourceDiagnostics).filter(([key]) => !["runInventoryComplete", "intermediateObservationsComplete"].includes(key))),
+        ...(Object.hasOwn(normalized, "identityReview") ? { identityReview: normalizeMonthlyReportIdentityReview(normalized.identityReview) } : {}),
         ...(normalized.specialDays ? { specialDays: normalized.specialDays } : {}),
         ...(normalized.monthlySourceMetadata ? { monthlySourceMetadata: Object.fromEntries([...months].filter(valueMonth => Object.hasOwn(normalized.monthlySourceMetadata, valueMonth))
           .map(valueMonth => [valueMonth, normalized.monthlySourceMetadata[valueMonth]])) } : {}) };

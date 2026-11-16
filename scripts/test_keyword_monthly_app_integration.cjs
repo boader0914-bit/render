@@ -122,6 +122,55 @@ test("production prepared reads own the existing analytical lease until the full
   assert.deepEqual(calls, ["keyword_monthly_options", "keyword_monthly_analysis"]);
 });
 test("Git-normalized collection, pacing, protection and held runtime sources remain at approved release", () => {
+  // This release adds only bounded identity-review metadata to monthly reports.
+  // Undo exact approved bytes, then compare the entire remaining file with the
+  // original calculator. A broad function removal or new whole-file hash would
+  // silently exempt unrelated arithmetic changes from this protection.
+  const identityMetadataDeclaration = String.raw`const IDENTITY_REVIEW_FIELDS = ["schemaVersion", "basis", "totalRows", "alreadyRepresentedRows", "recoveredRows", "unresolvedRows", "reasonCounts", "evidenceDigest", "catalogDigest"];
+const IDENTITY_REVIEW_MAX_ROWS = 100000000;
+function normalizeMonthlyReportIdentityReview(value) {
+  const invalid = () => fail("MONTHLY_REPORT_IDENTITY_REVIEW_INVALID", "업체 연결 검토 근거를 확인하지 못했습니다.", 503);
+  try {
+    const object = v => v && typeof v === "object" && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+    const own = (v, keys) => object(v) && Reflect.ownKeys(v).length === keys.length
+      && keys.every(key => Object.hasOwn(v, key) && Object.hasOwn(Object.getOwnPropertyDescriptor(v, key), "value"));
+    const count = v => Number.isSafeInteger(v) && v >= 0 && v <= IDENTITY_REVIEW_MAX_ROWS;
+    if (!own(value, IDENTITY_REVIEW_FIELDS) || value.schemaVersion !== 1 || value.basis !== "raw_unresolved_identity_rows"
+      || !["totalRows", "alreadyRepresentedRows", "recoveredRows", "unresolvedRows"].every(key => count(value[key]))
+      || value.alreadyRepresentedRows + value.recoveredRows + value.unresolvedRows !== value.totalRows
+      || !["evidenceDigest", "catalogDigest"].every(key => typeof value[key] === "string" && /^[a-f0-9]{64}$/.test(value[key]))
+      || !object(value.reasonCounts) || Reflect.ownKeys(value.reasonCounts).length > 64) throw invalid();
+    let totalReasons = 0;
+    const reasons = {};
+    for (const key of Reflect.ownKeys(value.reasonCounts)) {
+      const field = Object.getOwnPropertyDescriptor(value.reasonCounts, key);
+      if (typeof key !== "string" || !/^[A-Z][A-Z0-9_]{0,79}$/.test(key)
+        || /(?:password|cookie|authorization|secret|token|private|guest|customer|contact|address|account|kosis)/i.test(key)
+        || !Object.hasOwn(field, "value") || !count(field.value) || field.value === 0) throw invalid();
+      reasons[key] = field.value; totalReasons += field.value;
+    }
+    if (totalReasons !== value.unresolvedRows) throw invalid();
+    return { schemaVersion: 1, basis: value.basis, totalRows: value.totalRows, alreadyRepresentedRows: value.alreadyRepresentedRows,
+      recoveredRows: value.recoveredRows, unresolvedRows: value.unresolvedRows, reasonCounts: reasons, evidenceDigest: value.evidenceDigest, catalogDigest: value.catalogDigest };
+  } catch (error) { if (error?.code === "MONTHLY_REPORT_IDENTITY_REVIEW_INVALID") throw error; throw invalid(); }
+}
+`;
+  function restoreApprovedMonthlyMetadata(text) {
+    let source = text.replace(/\r\n/g, "\n");
+    const replaceOnce = (approved, original) => {
+      assert.equal(source.split(approved).length, 2, "Approved monthly metadata span must occur exactly once");
+      source = source.replace(approved, original);
+    };
+    replaceOnce(identityMetadataDeclaration, "");
+    replaceOnce('  const identityReview = Object.hasOwn(source || {}, "identityReview") ? normalizeMonthlyReportIdentityReview(source.identityReview) : undefined;\n', "");
+    replaceOnce('    globalDiagnostics: source?.globalDiagnostics ? clone(source.globalDiagnostics) : null,\n    ...(identityReview === undefined ? {} : { identityReview })\n',
+      '    globalDiagnostics: source?.globalDiagnostics ? clone(source.globalDiagnostics) : null\n');
+    replaceOnce('      digest: crypto.createHash("sha256").update(JSON.stringify(identityReview === undefined ? cleanSelected : { observations: cleanSelected, identityReview })).digest("hex")\n',
+      '      digest: crypto.createHash("sha256").update(JSON.stringify(cleanSelected)).digest("hex")\n');
+    replaceOnce('module.exports = { createMonthlyReportService, buildMonthlyReportSnapshot: buildSnapshot, monthlyReportKeywordMembership, normalizeMonthlyReportIdentityReview };\n',
+      'module.exports = { createMonthlyReportService, buildMonthlyReportSnapshot: buildSnapshot, monthlyReportKeywordMembership };\n');
+    return source;
+  }
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",
     "scripts/keyword_worker_scheduler.cjs", "scripts/collector_broker.cjs", "scripts/collector_dispatch.cjs",
     "scripts/operating_web_collector.cjs", "scripts/collector_worker.cjs", "scripts/lib/kosis.cjs", "scripts/lib/regional_market_bootstrap.cjs",
@@ -133,6 +182,15 @@ test("Git-normalized collection, pacing, protection and held runtime sources rem
   for (const file of protectedFiles) {
     const baseline = execFileSync("git", ["show", `e9cf9b61cf2f9123edb5db40b2520d467cfc0e0b:${file}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
     const normalizedHash = bytes => createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
-    assert.equal(normalizedHash(fs.readFileSync(path.join(root, file))), normalizedHash(baseline), file);
+    const current = fs.readFileSync(path.join(root, file));
+    if (file === "scripts/lib/monthly_reports.cjs") {
+      const source = current.toString("utf8").replace(/\r\n/g, "\n");
+      assert.equal(normalizedHash(restoreApprovedMonthlyMetadata(source)), normalizedHash(baseline), file);
+      // Prove the allowance neither hides a count-formula mutation nor accepts
+      // an unreviewed change inside the permitted metadata declaration itself.
+      assert.ok(source.includes("const sold = number(row.sold);"));
+      assert.notEqual(normalizedHash(restoreApprovedMonthlyMetadata(source.replace("const sold = number(row.sold);", "const sold = 0;"))), normalizedHash(baseline));
+      assert.throws(() => restoreApprovedMonthlyMetadata(source.replace("const IDENTITY_REVIEW_MAX_ROWS = 100000000;", "const IDENTITY_REVIEW_MAX_ROWS = 100000001;")), /must occur exactly once/);
+    } else assert.equal(normalizedHash(current), normalizedHash(baseline), file);
   }
 });
