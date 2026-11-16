@@ -1,5 +1,6 @@
 const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
 const { inspect: inspectFixedB3Guard } = require("./lib/fixed_b3_maintenance_observation.cjs");
+const { inspectB3Maintenance: inspectFixedB3Details } = require("./lib/fixed_b3_maintenance_details.cjs");
 let startupAnalyticalStatus = () => null;
 const applicationStartup = createApplicationStartupLifetime({ readAnalyticalStatus: () => startupAnalyticalStatus() });
 applicationStartup.begin("module_initialization");
@@ -20865,14 +20866,31 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
     await applicationStartup.phase("collector_coordination", () => collectorBrokerReady);
     await applicationStartup.phase("rotation_state", () => collectionRotationScheduler.status());
     // Fixed read-only B3 observation; this is never lease release permission.
+    let fixedB3Observation = null;
     try {
       const observation = await inspectFixedB3Guard();
+      fixedB3Observation = observation;
       try { console.info("application_startup_b3_observation", JSON.stringify({ ...observation, readOnly: true, retirementAuthorized: false })); } catch {}
     } catch (error) {
       try { console.info("application_startup_b3_observation", JSON.stringify({ verifiedInputs: false,
         code: /^B3_[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "B3_UNVERIFIED", readOnly: true, retirementAuthorized: false })); } catch {}
     }
     // Normal guarded readiness continues even if the diagnostic is unavailable.
+    // Fixed read-only B3 details; only the already observed frozen guard.
+    if (fixedB3Observation?.verifiedInputs?.runner === true && fixedB3Observation.verifiedInputs.request === true
+      && fixedB3Observation.verifiedInputs.fixtureOnly === false && fixedB3Observation.exactExpectedOperationMatch === true
+      && fixedB3Observation.contextEqual === false
+      && fixedB3Observation.guardStat?.sha256 === "c12d01111b959d1c54a22a04b46c2f12602d557039eb3d8d60b836c42cf0ced8") {
+      try {
+        const details = await inspectFixedB3Details({ dataDir: DATA_DIR, codeRoot: ROOT });
+        if (details?.marker?.sha256 !== fixedB3Observation.guardStat.sha256) throw Object.assign(new Error(), { code: "B3_INSPECT_KNOWN_GUARD_CHANGED" });
+        try { console.info("application_startup_b3_details", JSON.stringify({ ...details, readOnly: true, retirementAuthorized: false })); } catch {}
+      } catch (error) {
+        try { console.info("application_startup_b3_details", JSON.stringify({ status: "held",
+          code: /^B3_INSPECT_[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "B3_INSPECT_UNAVAILABLE", readOnly: true, retirementAuthorized: false })); } catch {}
+      }
+    }
+    // End fixed read-only B3 details; normal guarded readiness is unchanged.
     // Build/reopen the compact saved-company read model before readiness and
     // before the large history/aggregate bootstraps can compete for memory.
     // This reads saved data only; failures remain explicit API errors, not zero.
