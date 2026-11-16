@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "kind": "reviewed-code-policy-next-single-runtime",
+  "reviewedBy": "codex_root_operator",
+  "reviewedAt": "2026-11-16T06:13:22.339Z",
+  "serviceId": "srv-da9q6don74is738t7id0",
+  "operationId": "ea380222-d4db-46f4-a924-bc20bee7bdc6",
+  "marker": {
+    "sha256": "c12d01111b959d1c54a22a04b46c2f12602d557039eb3d8d60b836c42cf0ced8",
+    "bytes": 316,
+    "pid": 1798,
+    "createdAt": "2026-11-16T04:46:19.629Z",
+    "mode": "stage",
+    "oldContextBinding": "exact_reviewed_marker_sha256"
+  },
+  "fixedPins": {
+    "requestSha256": "81e38b057e5c164c9b3efad42d9eb722009c2cd50451b1bec1160d358ee48f54",
+    "requestBindingSha256": "2f4670ecebd619f0439e694737b863cfad95491f20aa82a965ba0b6f1cee2efb",
+    "runnerSha256": "9cc93912ed9402b3d46fe1af573a5aa33d9e3cb7bd8dcee74a2de87d2f55d43e",
+    "publicPointerSha256": "480c75f2091633326e18b0b5877b6a4f4467e63891e215bdf8616a74f50bb385",
+    "sourcePointerSha256": "970922410e6e090373bfa217a34ca1b9148c3d01a9063d2d570ab85d219749dd",
+    "stateSha256": "68eef0e8d994f717b38a31e6fa85c4679962e87ba947355aa8fae240dc187c18"
+  },
+  "witness": {
+    "deploymentId": "dep-dbt9fsff3r2c73cb5j10",
+    "commit": "534dcf721ccc6e50be7cc2d091c87b758eb1e3da",
+    "contextSha256": "90c034f43e48fde15a3cf3f9fff9fe1f73df85775ff528090ee3b3d170df3bed",
+    "observedAt": "2026-11-16T05:45:05.749Z",
+    "observationReceiptSha256": "abbc7945fcc160e9c423f7ca782e4d26bad83a9ed7055970dd9c1d7c173b3b3e"
+  },
+  "retirement": {
+    "oldRetiredNoLaterThan": "2026-11-16T05:45:05.749Z",
+    "providerStopBeforeNewContractSha256": "ff6f92769275746896e38db3c14ab5dec538b3c3d0202db5a9104cfec3e30b6d",
+    "providerEvidenceSha256": "6ea16947ef4df9a17638f946b7a51164fadcc1db01637d77031da800983df294",
+    "sourceObservationReceiptSha256": "abbc7945fcc160e9c423f7ca782e4d26bad83a9ed7055970dd9c1d7c173b3b3e",
+    "providerSingleRuntimePersistentDisk": true,
+    "oldStoppedBeforeNew": true,
+    "actualNewRuntimeMountedDisk": true
+  },
+  "preChildPolicy": "exact_frozen_pre_child_whitelist_v1",
+  "preChildInventoryPreobserved": false,
+  "executionPolicy": "next_single_runtime_approved_code_then_verified_archive_only",
+  "codePins": {
+    "retirementModuleSha256": "c2bc1d7a4869e3055c1b230b50f3dc11a61da34e8bf42feb4ef337646f056dc4",
+    "contextModuleSha256": "65bcb1bdae162eda918327e4b31340fb329d7d3600dcc8e1157096ceab81da2b",
+    "renameHelperSha256": "e95e17435a7076d336704b8546c78d02f60a862762a35313e243697999718148",
+    "bootShim": {
+      "path": "/opt/render/project/src/scripts/lib/fixed_b3_maintenance_boot_shim.cjs",
+      "sha256": "a8477322d20642b1be68537df6065f28ddf916cdec21ac0de3405ea29d752757"
+    }
+  },
+  "pythonExecutable": {
+    "path": "/usr/bin/python3.11",
+    "trustPolicy": "canonical_root_owned_system_python311"
+  }
+}

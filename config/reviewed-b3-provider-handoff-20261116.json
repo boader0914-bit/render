@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "kind": "codex_observed_render_handoff_review",
+  "reviewedBy": "codex_root_operator",
+  "reviewedAt": "2026-11-16T06:13:22.339Z",
+  "serviceId": "srv-da9q6don74is738t7id0",
+  "witnessDeploymentId": "dep-dbt9fsff3r2c73cb5j10",
+  "witnessCommit": "534dcf721ccc6e50be7cc2d091c87b758eb1e3da",
+  "witnessObservedAt": "2026-11-16T05:45:05.749Z",
+  "witnessContextSha256": "90c034f43e48fde15a3cf3f9fff9fe1f73df85775ff528090ee3b3d170df3bed",
+  "observationReceiptSha256": "abbc7945fcc160e9c423f7ca782e4d26bad83a9ed7055970dd9c1d7c173b3b3e",
+  "observed": {
+    "frozenRunnerAndRequestVerified": true,
+    "exactOldGuardVerified": true,
+    "oldGuardContextDiffersFromMountedNewRuntime": true,
+    "operationRequestAndBindingVerified": true,
+    "jobDirectoryAbsent": true,
+    "publicationIntentAndCompletionAbsent": true,
+    "publicAndSourcePointersStable": true,
+    "persistentDiskMountedAt": "/var/data"
+  },
+  "platformContractReviewSha256": "ff6f92769275746896e38db3c14ab5dec538b3c3d0202db5a9104cfec3e30b6d",
+  "retirementUpperBound": "2026-11-16T05:45:05.749Z",
+  "perPidTerminationDirectlyObserved": false,
+  "inference": "The fixed pre-child parent belongs to the prior runtime: its bound context differs from the new runtime reading this single-runtime persistent disk. The documented stop-before-new handoff supplies the lifecycle evidence; age or PID absence does not.",
+  "cooperativeWriterBoundary": {
+    "bothAuthorizedChatsPausedPreparationAndDeploymentsExceptThisRecovery": true,
+    "rootControlsNextReviewedDeploy": true,
+    "newSchedulersStartOnlyAfterNormalGuardedReadiness": true,
+    "uncooperativeOsLevelWritersExcluded": false
+  },
+  "scope": "Only the exact old 316-byte maintenance marker may be preserved by no-replace rename. Operation files, original data, issued data, queues, configuration, worker locks and KOSIS state are not retirement targets."
+}

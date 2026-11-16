@@ -1,0 +1,146 @@
+{
+  "observedAt": "2026-11-16T05:45:05.749Z",
+  "commit": "534dcf721ccc6e50be7cc2d091c87b758eb1e3da",
+  "deploymentUrl": "https://dashboard.render.com/web/srv-da9q6don74is738t7id0/deploys/dep-dbt9fsff3r2c73cb5j10",
+  "details": {
+    "schemaVersion": 1,
+    "kind": "b3_maintenance_read_only_inspection",
+    "status": "inspected",
+    "operation": "ea380222-d4db-46f4-a924-bc20bee7bdc6",
+    "fixture": false,
+    "exactOpMatch": true,
+    "exactOperationAdmission": true,
+    "marker": {
+      "present": true,
+      "sha256": "c12d01111b959d1c54a22a04b46c2f12602d557039eb3d8d60b836c42cf0ced8",
+      "stat": {
+        "dev": "66327",
+        "ino": "135969",
+        "size": "316",
+        "mtimeNs": "1794804379629374397",
+        "ctimeNs": "1794804379629374397",
+        "nlink": "1",
+        "mode": "33152",
+        "uid": "1000",
+        "gid": "1000"
+      },
+      "schemaValidity": true,
+      "ownershipPolicySatisfied": true,
+      "pid": 1798,
+      "mode": "stage",
+      "createdAt": "2026-11-16T04:46:19.629Z"
+    },
+    "currentContextSha256": "90c034f43e48fde15a3cf3f9fff9fe1f73df85775ff528090ee3b3d170df3bed",
+    "contextDiffers": true,
+    "ownerProcess": "not_read_context_differs",
+    "childProcess": "not_read_no_bound_child_pid",
+    "argumentMatching": "not_performed_privacy_hold",
+    "fixedRequestShaMatch": true,
+    "fixedRunnerShaMatch": true,
+    "operationDirectoryPresent": true,
+    "jobDirectoryPresent": false,
+    "files": {
+      "frozenRequest": {
+        "present": true,
+        "sha256": "81e38b057e5c164c9b3efad42d9eb722009c2cd50451b1bec1160d358ee48f54",
+        "bytes": 1268,
+        "jsonValid": true,
+        "contentRead": true,
+        "tooLarge": false
+      },
+      "runner": {
+        "present": true,
+        "sha256": "9cc93912ed9402b3d46fe1af573a5aa33d9e3cb7bd8dcee74a2de87d2f55d43e",
+        "bytes": 47990,
+        "jsonValid": false,
+        "contentRead": true,
+        "tooLarge": false
+      },
+      "storedRequest": {
+        "present": true,
+        "sha256": "81e38b057e5c164c9b3efad42d9eb722009c2cd50451b1bec1160d358ee48f54",
+        "bytes": 1268,
+        "jsonValid": true,
+        "contentRead": true,
+        "tooLarge": false
+      },
+      "requestBinding": {
+        "present": true,
+        "sha256": "2f4670ecebd619f0439e694737b863cfad95491f20aa82a965ba0b6f1cee2efb",
+        "bytes": 84,
+        "jsonValid": true,
+        "contentRead": true,
+        "tooLarge": false
+      },
+      "stageComplete": {
+        "present": false
+      },
+      "stageFailed": {
+        "present": false
+      },
+      "publishIntent": {
+        "present": false
+      },
+      "publishComplete": {
+        "present": false
+      },
+      "refreshOwner": {
+        "present": false
+      },
+      "jobInput": {
+        "present": false
+      },
+      "isolation": {
+        "present": false
+      },
+      "preparationComplete": {
+        "present": false
+      },
+      "preparationFailed": {
+        "present": false
+      },
+      "publicCurrent": {
+        "present": true,
+        "sha256": "480c75f2091633326e18b0b5877b6a4f4467e63891e215bdf8616a74f50bb385",
+        "bytes": 212,
+        "jsonValid": true,
+        "contentRead": true,
+        "tooLarge": false
+      },
+      "sourceCurrent": {
+        "present": true,
+        "sha256": "970922410e6e090373bfa217a34ca1b9148c3d01a9063d2d570ab85d219749dd",
+        "bytes": 351,
+        "jsonValid": true,
+        "contentRead": true,
+        "tooLarge": false
+      }
+    },
+    "bindings": {
+      "frozenRequestOperation": true,
+      "storedRequestMatchesFrozen": true,
+      "requestBindingMatchesFrozenSha": true,
+      "jobInputBound": false,
+      "refreshOwnerBound": false,
+      "isolationBound": false,
+      "childCompleteBound": false,
+      "childFailureBound": false,
+      "stageCompleteBound": false,
+      "publicationIntentPresent": false,
+      "publicationCompletePresent": false
+    },
+    "publicCurrentSha256": "480c75f2091633326e18b0b5877b6a4f4467e63891e215bdf8616a74f50bb385",
+    "sourceCurrentSha256": "970922410e6e090373bfa217a34ca1b9148c3d01a9063d2d570ab85d219749dd",
+    "pointersReadTwiceStable": true,
+    "holdReasons": [],
+    "retirementAuthorized": false,
+    "ownershipOrLivenessProven": false,
+    "sourceWrites": 0,
+    "operationalActions": 0,
+    "networkAttempted": false,
+    "cmdlineRead": false,
+    "environmentRead": false,
+    "interpretation": "Bounded observations of this exact operation only. Different contexts do not authorize PID inspection; absent current-namespace processes do not prove retirement. No marker or source state may be changed on this receipt alone.",
+    "readOnly": true
+  }
+}

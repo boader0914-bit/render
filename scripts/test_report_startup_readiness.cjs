@@ -29,7 +29,9 @@ function fixture({ seedError = false, companyPending = false, companyError = fal
   applicationStartup.begin();
   const context = {
     Promise, Object, Number, Math, Date, PORT: 10000, HOST: "127.0.0.1",
-    process: { env: {} }, console: { log() {}, error() {}, warn: (...args) => warnings.push(args) },
+    path, DATA_DIR: "/var/data", ROOT: "/opt/render/project/src",
+    runFixedB3BootRetirement: async input => { assert.equal(input.policySha256,"7eb899d12bb6becb3be52290b482c79a58f3a89cb22c294e3189828dd593cf6a");return {status:"not_target",policySha256:input.policySha256,completionReceiptSha256:null,actualCommitRuntimeAudit:{source:"git_metadata",available:false,commit:null},runtimeDeploymentId:null}; },
+    process: { platform: "linux", env: {} }, console: { log() {}, error() {}, warn: (...args) => warnings.push(args) },
     seedOutputsFromRepo: async () => { calls.push("seed"); if (seedError) throw new Error("seed unavailable"); },
     collectorBrokerReady: coordination.promise,
     companyBootstrapStore: { get: async () => {

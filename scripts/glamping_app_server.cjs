@@ -1,6 +1,7 @@
 const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
 const { inspect: inspectFixedB3Guard } = require("./lib/fixed_b3_maintenance_observation.cjs");
 const { inspectB3Maintenance: inspectFixedB3Details } = require("./lib/fixed_b3_maintenance_details.cjs");
+const { runFixedB3BootRetirement } = require("./lib/fixed_b3_maintenance_boot_shim.cjs");
 let startupAnalyticalStatus = () => null;
 const applicationStartup = createApplicationStartupLifetime({ readAnalyticalStatus: () => startupAnalyticalStatus() });
 applicationStartup.begin("module_initialization");
@@ -20891,6 +20892,24 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
       }
     }
     // End fixed read-only B3 details; normal guarded readiness is unchanged.
+    // Reviewed fixed B3 retirement is critical; an uncertain outcome cannot
+    // advance readiness. Only a logging failure is noncritical here.
+    if (process.platform === "linux" && DATA_DIR === "/var/data" && ROOT === "/opt/render/project/src") {
+      const fixedB3Retirement = await runFixedB3BootRetirement({
+        dataDir: DATA_DIR, codeRoot: ROOT,
+        policyPath: path.join(ROOT, "config/reviewed-b3-maintenance-retirement-20261116.json"),
+        policySha256: "7eb899d12bb6becb3be52290b482c79a58f3a89cb22c294e3189828dd593cf6a"
+      });
+      try { console.info("application_startup_b3_retirement", JSON.stringify({ status: fixedB3Retirement.status,
+        auditRoot: fixedB3Retirement.auditRoot, policySha256: fixedB3Retirement.policySha256,
+        completionReceiptSha256: fixedB3Retirement.completionReceiptSha256,
+        actualCommitRuntimeAudit: fixedB3Retirement.actualCommitRuntimeAudit, runtimeDeploymentId: null,
+        coordinationMetadataChanged: fixedB3Retirement.status === "archived" })); } catch {}
+    } else {
+      try { console.info("application_startup_b3_retirement", JSON.stringify({ status: "not_applicable_runtime",
+        retirementAttempted: false, coordinationMetadataChanged: false })); } catch {}
+    }
+    // End critical reviewed B3 retirement; normal maintenance guards remain.
     // Build/reopen the compact saved-company read model before readiness and
     // before the large history/aggregate bootstraps can compete for memory.
     // This reads saved data only; failures remain explicit API errors, not zero.
