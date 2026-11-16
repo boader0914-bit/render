@@ -1,4 +1,5 @@
 const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
+const { inspect: inspectFixedB3Guard } = require("./lib/fixed_b3_maintenance_observation.cjs");
 let startupAnalyticalStatus = () => null;
 const applicationStartup = createApplicationStartupLifetime({ readAnalyticalStatus: () => startupAnalyticalStatus() });
 applicationStartup.begin("module_initialization");
@@ -20863,6 +20864,15 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
     // Restore persisted coordination before any existing scheduler can dispatch.
     await applicationStartup.phase("collector_coordination", () => collectorBrokerReady);
     await applicationStartup.phase("rotation_state", () => collectionRotationScheduler.status());
+    // Fixed read-only B3 observation; this is never lease release permission.
+    try {
+      const observation = await inspectFixedB3Guard();
+      try { console.info("application_startup_b3_observation", JSON.stringify({ ...observation, readOnly: true, retirementAuthorized: false })); } catch {}
+    } catch (error) {
+      try { console.info("application_startup_b3_observation", JSON.stringify({ verifiedInputs: false,
+        code: /^B3_[A-Z0-9_]{1,100}$/.test(error?.code || "") ? error.code : "B3_UNVERIFIED", readOnly: true, retirementAuthorized: false })); } catch {}
+    }
+    // Normal guarded readiness continues even if the diagnostic is unavailable.
     // Build/reopen the compact saved-company read model before readiness and
     // before the large history/aggregate bootstraps can compete for memory.
     // This reads saved data only; failures remain explicit API errors, not zero.
