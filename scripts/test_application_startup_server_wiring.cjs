@@ -14,6 +14,7 @@ async function fixture(t,{port=0,coordination=Promise.resolve(),retire=null,logg
   life.begin("module_initialization");
   t.after(async()=>{life.fail(Object.assign(new Error(),{code:"SYNTHETIC_TEST_CLEANUP"}));if(server.listening)await new Promise(resolve=>server.close(resolve));});
   const context={Promise,Object,Number,Math,Date,Buffer,PORT:port,HOST:"127.0.0.1",process:{platform,env:{}},console:{log(){},warn(){},error(){},info:(event,value)=>{if(loggerError)throw Error("synthetic logger failure");retirementLogs.push({event,...JSON.parse(value)});}},applicationStartup:life,
+    fsp:{lstat:async()=>({uid:0,gid:0,mode:0o755,isDirectory:()=>true,isSymbolicLink:()=>false}),realpath:async file=>file},
     path:path.posix,DATA_DIR:dataDir,ROOT:codeRoot,runFixedB3BootRetirement:async input=>{
       retirementInputs.push(JSON.parse(JSON.stringify(input)));
       assert.deepEqual(JSON.parse(JSON.stringify(input)),{dataDir:"/var/data",codeRoot:"/opt/render/project/src",policyPath:"/opt/render/project/src/config/reviewed-b3-maintenance-retirement-20261116.json",policySha256:POLICY_SHA});
@@ -80,5 +81,14 @@ test("Windows and nonmatching local or service paths skip retirement explicitly 
     const f=await fixture(t,{...runtime,retire:async()=>{assert.fail("nonmatching runtime must not invoke retirement");}});await f.completed;
     assert.equal(f.retirementInputs.length,0);assert.equal(f.server.listening,true);assert.ok(f.calls.includes("company-bootstrap")&&f.calls.includes("revision"));assert.equal(f.life.status().terminal,"listening");
     const log=f.retirementLogs.find(row=>row.event==="application_startup_b3_retirement");assert.deepEqual(log,{event:"application_startup_b3_retirement",status:"not_applicable_runtime",retirementAttempted:false,coordinationMetadataChanged:false});
+  }
+});
+
+test("actual parent diagnostic reads only ten fixed directory metadata paths and cannot interrupt the unchanged critical check",async()=>{
+  const begin=source.indexOf("// Fixed read-only B3 parent metadata;"),end=source.indexOf("// End fixed read-only B3 parent metadata;",begin),block=source.slice(begin,end);assert.ok(begin>0&&end>begin);
+  const expected=["/","/opt","/opt/render","/opt/render/project","/opt/render/project/src","/opt/render/project/src/config","/opt/render/project/src/scripts","/opt/render/project/src/scripts/lib","/var","/var/data"];
+  for(const fails of [false,true]){const paths=[],logs=[];let critical=0;const context={fsp:{lstat:async file=>{paths.push(file);if(fails&&file==="/opt")throw Error("private filesystem details");return {uid:0,gid:1000,mode:0o2775,isDirectory:()=>true,isSymbolicLink:()=>false,privateValue:"never output"};},realpath:async file=>file},console:{info:(event,json)=>{if(fails)throw Error("private logger");logs.push({event,...JSON.parse(json)});}},critical:()=>{critical++;}};
+    await vm.runInNewContext("(async()=>{"+block+";critical();})()",context);assert.deepEqual(paths,expected);assert.equal(critical,1);
+    if(!fails){assert.equal(logs.length,1);assert.equal(logs[0].readOnly,true);assert.equal(logs[0].parents.length,10);assert.deepEqual(Object.keys(logs[0].parents[0]),["path","uid","gid","mode","isDir","symlink","realpathEqual"]);assert.ok(!JSON.stringify(logs).includes("never output"));}
   }
 });

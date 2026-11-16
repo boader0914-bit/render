@@ -20895,6 +20895,23 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
     // Reviewed fixed B3 retirement is critical; an uncertain outcome cannot
     // advance readiness. Only a logging failure is noncritical here.
     if (process.platform === "linux" && DATA_DIR === "/var/data" && ROOT === "/opt/render/project/src") {
+      // Fixed read-only B3 parent metadata; never a permission-policy change.
+      try {
+        const parents = [];
+        for (const parentPath of ["/", "/opt", "/opt/render", "/opt/render/project", "/opt/render/project/src", "/opt/render/project/src/config", "/opt/render/project/src/scripts", "/opt/render/project/src/scripts/lib", "/var", "/var/data"]) {
+          let row = { path: parentPath, uid: null, gid: null, mode: null, isDir: null, symlink: null, realpathEqual: null };
+          try {
+            const metadata = await fsp.lstat(parentPath);
+            row = { path: parentPath, uid: Number.isSafeInteger(metadata.uid) ? metadata.uid : null,
+              gid: Number.isSafeInteger(metadata.gid) ? metadata.gid : null, mode: Number.isSafeInteger(metadata.mode) ? metadata.mode & 0o7777 : null,
+              isDir: metadata.isDirectory(), symlink: metadata.isSymbolicLink(), realpathEqual: null };
+            try { row.realpathEqual = await fsp.realpath(parentPath) === parentPath; } catch {}
+          } catch {}
+          parents.push(row);
+        }
+        try { console.info("application_startup_b3_parent_metadata", JSON.stringify({ readOnly: true, parents })); } catch {}
+      } catch {}
+      // End fixed read-only B3 parent metadata; critical checks stay unchanged.
       const fixedB3Retirement = await runFixedB3BootRetirement({
         dataDir: DATA_DIR, codeRoot: ROOT,
         policyPath: path.join(ROOT, "config/reviewed-b3-maintenance-retirement-20261116.json"),
