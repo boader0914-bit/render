@@ -2,14 +2,19 @@
 
 const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
 const { test } = require("node:test");
+const { EventEmitter } = require("node:events");
+const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
 const source = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8").replace(/\r\n/g, "\n");
-const startup = source.slice(source.lastIndexOf("\nseedOutputsFromRepo()"));
+const startup = source.slice(source.lastIndexOf('\napplicationStartup.phase("seed_outputs"'));
 assert.ok(startup.includes("server.listen(PORT, HOST"), "execute the actual readiness path without starting the app");
 const gate = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 
 function fixture({ failure = null, absent = false } = {}) {
   const entered = gate(), revision = gate(), calls = [], warnings = [], logs = [];
-  let listen, owned = false;
+  const listenRequested = gate(), server = new EventEmitter(); let listen, owned = false;
+  server.listen = (port, host, callback) => { assert.equal(port, 10000); assert.equal(host, "127.0.0.1"); assert.equal(owned, false); calls.push("listen"); listen = callback; listenRequested.resolve(); };
+  const applicationStartup = createApplicationStartupLifetime({ onLog: null, setIntervalImpl: () => ({ ref() {} }), clearIntervalImpl() {} });
+  applicationStartup.begin();
   const reader = async () => { throw Error("preparation must not request a company/month calculation"); };
   reader.prepare = async () => {
     assert.equal(owned, true); calls.push("revision"); entered.resolve();
@@ -31,7 +36,7 @@ function fixture({ failure = null, absent = false } = {}) {
       assert.equal(owned, false); owned = true; calls.push("revision-owner");
       try { return await operation(); } finally { owned = false; calls.push("revision-owner-released"); }
     },
-    server: { listen(port, host, callback) { assert.equal(owned, false); calls.push("listen"); listen = callback; } },
+    server, applicationStartup,
     companyIntegratedDb: { bootstrap: async () => calls.push("company-background") },
     industryAnalysisService: { bootstrap: async () => calls.push("industry-background") },
     searchDemandScheduler: { start() {} }, insightIntegration: null,
@@ -44,31 +49,33 @@ function fixture({ failure = null, absent = false } = {}) {
     loadSources() { throw Error("startup revision preparation must not calculate a month"); }
   };
   const ready = vm.runInNewContext(startup, context);
-  return { calls, warnings, logs, entered, revision, ready, listen: () => listen() };
+  return { calls, warnings, logs, entered, revision, ready, listenRequested, applicationStartup, listen: () => { server.listening = true; listen(); } };
 }
 
 test("the verified revision index is warmed after compact readiness and before listen/background bootstraps", async () => {
   const f = fixture(); await f.entered.promise;
   assert.deepEqual(f.calls, ["seed", "coordination", "company-list", "selectors", "catalog", "revision-owner", "revision"]);
-  assert.ok(!f.calls.includes("listen")); f.revision.resolve(); await f.ready;
+  assert.ok(!f.calls.includes("listen")); f.revision.resolve(); await f.listenRequested.promise;
   assert.deepEqual(f.calls.slice(-2), ["revision-owner-released", "listen"]);
   assert.ok(!f.calls.includes("company-background") && !f.calls.includes("industry-background"));
-  f.listen(); await Promise.resolve();
+  assert.equal(f.applicationStartup.status().active, true);
+  f.listen(); await f.ready;
+  assert.equal(f.applicationStartup.status().terminal, "listening");
   assert.equal(f.calls.filter(value => value === "company-background").length, 1);
   assert.equal(f.calls.filter(value => value === "industry-background").length, 1);
   assert.deepEqual(f.warnings, []); assert.doesNotMatch(JSON.stringify(f.logs), /private prepared|secret/);
 });
 
 for (const code of ["COMPANY_SOURCE_REVISION_INDEX_INVALID", "https://private.invalid/session-secret"]) test("preparation failure retains listen and normal verification with a safe diagnostic: " + (code.startsWith("COMPANY") ? "safe code" : "untrusted code"), async () => {
-  const f = fixture({ failure: Object.assign(new Error("private company/source details"), { code }) }); await f.ready;
+  const f = fixture({ failure: Object.assign(new Error("private company/source details"), { code }) }); await f.listenRequested.promise;
   assert.ok(f.calls.includes("listen")); assert.equal(f.calls.includes("company-background"), false);
   assert.deepEqual(f.warnings, [["company_integrated_revision_prepare_failed", code.startsWith("COMPANY") ? code : "unavailable"]]);
-  f.listen(); await Promise.resolve(); assert.ok(f.calls.includes("company-background") && f.calls.includes("industry-background"));
+  f.listen(); await f.ready; assert.ok(f.calls.includes("company-background") && f.calls.includes("industry-background"));
   assert.doesNotMatch(JSON.stringify([...f.warnings, ...f.logs]), /private company|private\.invalid|session-secret/);
 });
 
 test("an unavailable optional prepare capability keeps the existing startup path", async () => {
-  const f = fixture({ absent: true }); await f.ready;
+  const f = fixture({ absent: true }); await f.listenRequested.promise;
   assert.ok(f.calls.includes("listen")); assert.ok(!f.calls.includes("revision-owner")); assert.deepEqual(f.warnings, []);
-  f.listen(); await Promise.resolve(); assert.ok(f.calls.includes("company-background"));
+  f.listen(); await f.ready; assert.ok(f.calls.includes("company-background"));
 });

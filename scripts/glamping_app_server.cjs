@@ -1,3 +1,7 @@
+const { createApplicationStartupLifetime } = require("./lib/application_startup_lifetime.cjs");
+let startupAnalyticalStatus = () => null;
+const applicationStartup = createApplicationStartupLifetime({ readAnalyticalStatus: () => startupAnalyticalStatus() });
+applicationStartup.begin("module_initialization");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const crypto = require("node:crypto");
@@ -695,6 +699,7 @@ const runtimeResponsiveness = createRuntimeResponsiveness();
 const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55,
   cooperativeYield: true, cooperativeCompanyMonthYield: true,
   externalAdmission: () => readPreparedConversionAdmission({ dataDir: DATA_DIR }) });
+startupAnalyticalStatus = () => analyticalWork.status();
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
 const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
@@ -20852,20 +20857,20 @@ function localNetworkUrls() {
     .map((item) => `http://${item.address}:${PORT}`);
 }
 
-seedOutputsFromRepo()
+applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
   .catch((error) => {
     console.warn(`Could not seed outputs from repo: ${error.message || error}`);
   })
   .finally(async () => {
     // Restore persisted coordination before any existing scheduler can dispatch.
-    await collectorBrokerReady;
-    await collectionRotationScheduler.status();
+    await applicationStartup.phase("collector_coordination", () => collectorBrokerReady);
+    await applicationStartup.phase("rotation_state", () => collectionRotationScheduler.status());
     // Build/reopen the compact saved-company read model before readiness and
     // before the large history/aggregate bootstraps can compete for memory.
     // This reads saved data only; failures remain explicit API errors, not zero.
     try {
       const started = Date.now();
-      const prepared = await companyBootstrapStore.get();
+      const prepared = await applicationStartup.phase("company_bootstrap", () => companyBootstrapStore.get());
       console.log("company_bootstrap_prepared", JSON.stringify({ status: prepared.cacheStatus,
         companyCount: prepared.data.totalCompanies, jsonBytes: prepared.json.length,
         gzipBytes: prepared.gzip.length, elapsedMs: Date.now() - started }));
@@ -20876,7 +20881,7 @@ seedOutputsFromRepo()
     // a usable first report selection; failures still allow normal error reads.
     try {
       const started = Date.now();
-      const prepared = await monthlyReportSources.options({ priority: "foreground" });
+      const prepared = await applicationStartup.phase("monthly_selector", () => monthlyReportSources.options({ priority: "foreground" }));
       console.log("monthly_selector_prepared", JSON.stringify({ status: prepared.selectorCache?.status,
         storage: prepared.selectorCache?.storage, elapsedMs: Date.now() - started }));
     }
@@ -20885,7 +20890,7 @@ seedOutputsFromRepo()
     // behind background analysis. Reopen/prepare its compact metadata first.
     try {
       const started = Date.now();
-      await companyIntegratedCatalog.prepare();
+      await applicationStartup.phase("integrated_catalog", () => companyIntegratedCatalog.prepare());
       console.log("company_integrated_catalog_prepared", JSON.stringify({
         ...companyIntegratedCatalog.status(), elapsedMs: Date.now() - started
       }));
@@ -20897,15 +20902,19 @@ seedOutputsFromRepo()
     if (typeof readCompanyIntegratedRevision === "function" && typeof readCompanyIntegratedRevision.prepare === "function") {
       try {
         const started = Date.now();
-        await runAnalyticalWork(() => readCompanyIntegratedRevision.prepare(), {
+        await applicationStartup.phase("integrated_revision", () => runAnalyticalWork(() => readCompanyIntegratedRevision.prepare(), {
           priority: "foreground", kind: "company-revision-prepare"
-        });
+        }));
         console.log("company_integrated_revision_prepared", JSON.stringify({ elapsedMs: Date.now() - started }));
       }
       catch (error) { console.warn("company_integrated_revision_prepare_failed",
         typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(error.code) ? error.code : "unavailable"); }
     }
+    await applicationStartup.phase("listen", () => new Promise((resolve, reject) => {
+    server.once("error", reject);
     server.listen(PORT, HOST, () => {
+      server.removeListener("error", reject);
+      resolve();
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       searchDemandScheduler.start();
@@ -20960,4 +20969,6 @@ seedOutputsFromRepo()
         console.log(`Shadow Master DB reconciliation scheduled in batches of ${reconcileLimit} unprocessed immutable source files every ${reconcileIntervalHours}h.`);
       }
     });
-  });
+    }));
+    applicationStartup.complete();
+  }).catch(error => { applicationStartup.fail(error); throw error; });
