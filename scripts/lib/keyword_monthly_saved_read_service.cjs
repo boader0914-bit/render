@@ -7,8 +7,9 @@ const fault = code => Object.assign(new Error(code), { code, statusCode: 503 });
 
 // One immutable saved-result cohort, including ALL shared HTTP responses and
 // ignored cancellation, owns the allocation permit. No result cache is kept.
-// The permit only overlaps an explicit isolated-child await window; fallback
-// source calculations always reacquire the application's exclusive lease.
+// The permit uses an explicit isolated-child await window or pauses an exact
+// eligible industry owner at its safe checkpoint. Fallback source calculations
+// always reacquire the application's exclusive lease.
 function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, assertReadAdmission,
   runMemoryAdmission = runKeywordMonthlyMemoryAdmission, diagnostics = null } = {}) {
   if (![saved?.options,saved?.readPrepared,saved?.analyze,runWork,acquirePermit,assertReadAdmission,runMemoryAdmission].every(value=>typeof value==="function")) throw new TypeError("Explicit saved-read capabilities required");
@@ -21,7 +22,7 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     catch { counts.cleanupErrors++; return false; }
   }
   function clean(entry) {
-    if (entry.refs.size || entry.flightActive || entry.producers) return;
+    if (entry.refs.size || entry.flightActive || entry.producers || entry.responseOperations) return;
     if (!releasePermit(entry)) return;
     if (owner === entry) owner = null;
     if (entries.get(entry.key) === entry) entries.delete(entry.key);
@@ -37,15 +38,15 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     // joins cannot indefinitely postpone final parent decode/publication.
     if(entry && (entry.permit && !entry.permit.acceptsNewResponses()
       || entry.readStarted && !entry.flightActive))throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
-    if(!entry){if(entries.size>=4)throw busy();entry={key,refs:new Set(),producers:0,flightActive:false,readStarted:false,permit:null};entries.set(key,entry);}
-    const ref={released:false};entry.refs.add(ref);
+    if(!entry){if(entries.size>=4)throw busy();entry={key,refs:new Set(),producers:0,responseOperations:0,flightActive:false,readStarted:false,permit:null};entries.set(key,entry);}
+    const ref={released:false};entry.refs.add(ref);entry.responseOperations++;
     const native=typeof res.once==="function"&&typeof res.removeListener==="function"&&typeof res.writeHead==="function"&&typeof res.end==="function";
     const release=()=>{if(ref.released)return;ref.released=true;entry.refs.delete(ref);if(native){res.removeListener("finish",release);res.removeListener("close",release);res.removeListener("error",release);}clean(entry);};
     try {
       if(native){res.once("finish",release);res.once("close",release);res.once("error",release);if(res.destroyed)throw fault("KEYWORD_MONTHLY_QUERY_ABORTED");}
       return await context.run(entry,operation);
     } catch(error){release();throw error;}
-    finally{if(!native)release();}
+    finally{entry.responseOperations--;if(!native)release();clean(entry);}
   }
   async function withProducer(operation) {
     const entry=current();entry.producers++;
@@ -85,7 +86,11 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     const entry=current();
     // Only the small explicit not_prepared sentinel permits fallback. The
     // cohort remains single-owner through fallback work and slow responses.
+    const permit=entry.permit;
     if(!releasePermit(entry))throw fault("KEYWORD_MONTHLY_SAVED_READ_RELEASE_UNVERIFIED");
+    // A borrowed checkpoint must settle before entering the ordinary queue;
+    // waiting for fallback while the industry owner is suspended is a cycle.
+    if(typeof permit?.waitForRelease==="function")await permit.waitForRelease();
     counts.fallback++;
     return runWork(diagnostics?diagnostics.work(()=>saved.analyze(input)):()=>saved.analyze(input),
       {kind:"keyword_monthly_analysis",...(diagnostics?diagnostics.schedulerOptions():{})});
@@ -95,7 +100,8 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
   }
   return Object.freeze({version,options,readPrepared,analyze,withResponse,withProducer,lifecycleOptions,beforeResponse,
     status:()=>({...counts,active:Boolean(owner),cohorts:entries.size,responseOwners:[...entries.values()].reduce((n,e)=>n+e.refs.size,0),
-      operationPending:[...entries.values()].filter(e=>e.flightActive).length,producers:[...entries.values()].reduce((n,e)=>n+e.producers,0),permitActive:Boolean(owner?.permit)})});
+      operationPending:[...entries.values()].filter(e=>e.flightActive).length,producers:[...entries.values()].reduce((n,e)=>n+e.producers,0),
+      responseOperations:[...entries.values()].reduce((n,e)=>n+e.responseOperations,0),permitActive:Boolean(owner?.permit)})});
 }
 
 module.exports={createKeywordMonthlySavedReadService};

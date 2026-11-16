@@ -131,7 +131,11 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       master = await readCompanyMasterProjection(companyFile, { checkpoint,
         ...(selectorOnly ? { projectCompany: compactMonthlySelectorCompany } : {}) }); }
     catch (error) { if (error.code === "ENOENT") master = { companies: {} }; else throw sourceError(); }
-    const [regionMaster, runs] = await Promise.all([readJson(regionMasterFile, { units: [] }, checkpoint), listRuns()]);
+    // A region checkpoint may lend the industry's execution lease. Finish it
+    // before starting manifest readers, so no sibling parse can outlive that
+    // paused boundary. listRuns itself joins all of its internal workers.
+    const regionMaster = await readJson(regionMasterFile, { units: [] }, checkpoint);
+    const runs = await listRuns();
     if (!master.companies || typeof master.companies !== "object" || Array.isArray(master.companies)) throw sourceError();
     await checkpoint();
     if (prepareCapacity && prepareCompanies) { sourceMetrics.capacityPreparations++; master.companies = await prepareCompanies(master.companies, { runs, checkpoint, shareReadOnlyInventory: true }); }

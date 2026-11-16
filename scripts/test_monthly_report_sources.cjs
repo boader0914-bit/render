@@ -63,6 +63,29 @@ test("concurrent catalogs share one preparation, then refresh after success and 
   assert.equal(preparations, 3); assert.equal(runReads, 3);
 });
 
+test("an actual catalog region checkpoint never leaves an in-flight manifest sibling running during a monthly loan", async t => {
+  const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),regionEntered=deferred(),regionReady=deferred(),runsEntered=deferred(),runsReady=deferred();
+  const originalRead=fs.readFile;let runCalls=0,permit;
+  const runs=[{id:"r1",keyword:"포천글램핑",collectedAt:"2026-08-01T00:00:00Z",collectionQuality:{status:"complete"}}];
+  const adapter=await sourceFixture(t,{runWork:(op,options)=>scheduler.run(op,options),listRuns:async()=>{runCalls++;runsEntered.resolve();await runsReady.promise;return runs;},capacityForCompany:()=>7});
+  fs.readFile=async function(file,...args){if(String(file).endsWith(path.sep+"regions.json")){regionEntered.resolve();await regionReady.promise;return '{"units":[]}';}return originalRead.call(this,file,...args);};
+  const catalog=scheduler.run(()=>adapter.catalog({priority:"background"}),{kind:"industry-build",priority:"background"});
+  try{
+    await regionEntered.promise;assert.equal(runCalls,0,"manifest work must not start beside the region read");
+    permit=scheduler.acquireSavedReadPermit();const ready=permit.run(()=>({saved:true}));regionReady.resolve();assert.deepEqual(await ready,{saved:true});
+    assert.equal(runCalls,0,"manifest IO/parse cannot proceed while the region checkpoint is loaned");
+    permit.release();await permit.waitForRelease();await runsEntered.promise;runsReady.resolve();const first=await catalog;
+    assert.equal(first.companies.length,1);assert.equal(first.companies[0].capacity,7);assert.deepEqual(first.runs,runs);
+    assert.deepEqual(await adapter.catalog(),first,"sequential reading preserves all catalog results and numeric fields");assert.equal(runCalls,2);
+  }finally{fs.readFile=originalRead;regionReady.resolve();runsReady.resolve();try{permit?.release();}catch{}await catalog;await scheduler.close();}
+});
+
+test("a region failure short-circuits manifest reads and preserves the existing safe source-error contract",async t=>{
+  let runCalls=0;const adapter=await sourceFixture(t,{listRuns:async()=>{runCalls++;return [];}}),originalRead=fs.readFile;
+  fs.readFile=async function(file,...args){if(String(file).endsWith(path.sep+"regions.json"))return '{invalid-region-json';return originalRead.call(this,file,...args);};
+  try{await assert.rejects(adapter.catalog(),{code:"MONTHLY_SOURCE_UNAVAILABLE"});assert.equal(runCalls,0);}finally{fs.readFile=originalRead;}
+});
+
 test("target catalogs share metadata reads without capacity preparation and cannot replace a full analytical catalog", async t => {
   const started = deferred(), gate = deferred(); let reads = 0, preparations = 0;
   const adapter = await sourceFixture(t, {
