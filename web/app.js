@@ -38168,8 +38168,7 @@ function setActiveTab(tab, options = {}) {
     return;
   }
   if (isAdminRole() && state.activeTab === "keywordMonthly") {
-    void window.KeywordMonthlyAnalysis?.show(document.getElementById("keywordMonthlyDashboard"), options.keywordMonthlyContext);
-    return;
+    return window.KeywordMonthlyAnalysis?.show(document.getElementById("keywordMonthlyDashboard"), options.keywordMonthlyContext);
   }
   if (isAdminRole() && state.activeTab === "monthlyReports") {
     void window.MonthlyReports?.show(document.getElementById("monthlyReportsDashboard"), options.monthlyReportContext);
@@ -38232,12 +38231,13 @@ async function restoreAppHistoryState(historyState = {}, options = {}) {
       ? { regionKey: returnContext.regionKey, label: String(returnContext.label || ""), tab: returnContext.tab,
         managementRegionKey: String(returnContext.managementRegionKey || ""), provinceKey: String(returnContext.provinceKey || ""), mappingPending: Boolean(returnContext.mappingPending) } : null;
   }
-  setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
+  const selectedRead = setActiveTab(historyState.tab, { fromHistory: true, analysisRegionSelection: historyState.analysisRegionSelection || null });
   if (!["keywordMonthly", "searchDemand"].includes(state.activeTab) && historyState.activeRunId && (historyState.activeRunId !== state.activeRunId
     || (state.adminBootstrapRunPending === historyState.activeRunId && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)))) {
     await loadRun(historyState.activeRunId, options);
   } else if (isAdminRole() && !["monthlyReports", "keywordMonthly", "searchDemand"].includes(state.activeTab)
     && (state.adminBootstrapRunPending || state.adminBootstrapSummaryPending)) await resumeAdminBootstrapReads();
+  if (options.waitForPriorityRead && historyState.tab === "keywordMonthly") await selectedRead;
 }
 
 function resumeAdminBootstrapReads() {
@@ -45386,6 +45386,21 @@ async function init() {
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
+    // Restore the authenticated saved-analysis destination before unrelated
+    // administrator bootstrap reads can delay its first useful response.
+    const initialKeywordMonthlyRoute = isAdminRole() && state.session?.authenticated === true
+      && initialHistory?.role === state.session.role && initialHistory.tab === "keywordMonthly"
+      && roleAllowsTab("keywordMonthly") && !initialCompanyRoute && !adminDbCompanyIdFromRoute()
+      && (state.analysisNavigationSequence || 0) === initialNavigationSequence;
+    if (initialKeywordMonthlyRoute) {
+      state.adminBootstrapSummaryPending = true;
+      await restoreAppHistoryState(initialHistory, { bootstrap: true, waitForPriorityRead: true });
+      if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated !== true) return;
+      // The existing bounded two-frame yield lets this destination paint before
+      // large, unrelated startup responses are parsed. New user routes win.
+      if (state.activeTab === "keywordMonthly") await waitForCompanyMasterPaint();
+      if (!isAdminRole() || state.session !== initialSession || state.session?.authenticated !== true) return;
+    }
     syncAppHistoryState(false);
     if (isAdminRole()) {
       // The DB is independent of the latest run, history and ETA. Read it before
@@ -45477,7 +45492,7 @@ async function init() {
     }
     // Events are available before startup reads finish. A user's newer route
     // (including popstate) always takes precedence over the initial history.
-    if (initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()
+    if (!initialKeywordMonthlyRoute && initialHistory?.role === state.session?.role && !adminDbCompanyIdFromRoute()
       && (state.analysisNavigationSequence || 0) === initialNavigationSequence) await restoreAppHistoryState(initialHistory, { bootstrap: true });
     syncAppHistoryState(false);
     renderB2BSearchPanel();

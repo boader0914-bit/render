@@ -292,10 +292,14 @@
     const timeoutMs = Number.isSafeInteger(options.requestTimeoutMs) && options.requestTimeoutMs > 0 ? options.requestTimeoutMs : 20000;
     const schedule = options.setTimeout || win.setTimeout?.bind(win) || (typeof setTimeout === "function" ? setTimeout : null);
     const unschedule = options.clearTimeout || win.clearTimeout?.bind(win) || (typeof clearTimeout === "function" ? clearTimeout : null);
+    const requestFrame = win.requestAnimationFrame?.bind(win), cancelFrame = win.cancelAnimationFrame?.bind(win);
     const Abort = options.AbortController || win.AbortController || (typeof AbortController === "function" ? AbortController : null);
     const autoIntervalMs = Number.isSafeInteger(options.autoRefreshIntervalMs) && options.autoRefreshIntervalMs >= 250 ? Math.min(options.autoRefreshIntervalMs, 300000) : 30000;
     const autoTimeoutMs = Number.isSafeInteger(options.autoRefreshTimeoutMs) && options.autoRefreshTimeoutMs > 0 ? options.autoRefreshTimeoutMs : 5000;
     let autoTimer = null, autoTask = null, autoEpoch = 0, autoDueAt = 0, autoFailures = 0, autoText = "", autoErrorCode = "", composingSearch = null;
+    let initialAutomaticNeeded = true, initialAutomaticWait = null;
+    const emptyInitialTiming = () => ({ renderedAt: null, framesCompletedAt: null, startedAt: null, completedAt: null, outcome: "pending" });
+    let initialAutomaticTiming = emptyInitialTiming();
     // Request duration is independent of the report's selectable observation
     // clock. Never retain a URL, query, body, response header or raw exception.
     const requestClock = typeof win.performance?.now === "function" ? win.performance.now.bind(win.performance) : Date.now;
@@ -572,7 +576,38 @@
       if (excluded.length) table(block, ["제외 근거", "관측 / 업체·일"], excluded, "제외 건수를 예약이나 매출의 0으로 대신하지 않습니다.");
       block.append(el("p", "kma-note", "완전 가격 관측 평균에는 별도 부분 응답 금액을 넣지 않습니다. 업체 규모와 자료 충족률이 다르므로 평균 차이를 성과 우열이나 가격 조정의 근거로 단정하지 않습니다."));
     }
+    const initialMark = (name) => { try { win.performance?.mark?.(`staydatalab:keyword-monthly:${name}`); } catch {} };
+    function publishInitialTiming() {
+      const fields = { firstRenderMs: "renderedAt", firstFramesMs: "framesCompletedAt", firstVersionStartMs: "startedAt", firstVersionCompleteMs: "completedAt" };
+      for (const [key, source] of Object.entries(fields)) {
+        const value = initialAutomaticTiming[source];
+        if (known(value) && value >= 0) panel.dataset[key] = String(value); else delete panel.dataset[key];
+      }
+      panel.dataset.firstVersionOutcome = initialAutomaticTiming.outcome;
+      try {
+        const origin = win.performance?.timeOrigin;
+        if (known(origin) && origin >= 0) panel.dataset.performanceTimeOrigin = String(origin);
+        const type = win.performance?.getEntriesByType?.("navigation")?.[0]?.type;
+        if (["navigate", "reload", "back_forward", "prerender"].includes(type)) panel.dataset.navigationType = type;
+      } catch {}
+    }
+    function clearDisplayedMarker() {
+      for (const key of ["displayedPointerSha256", "displayedKeyword", "displayedStayMonth", "displayedCutoffDate"]) delete panel.dataset[key];
+    }
+    function markDisplayedResult() {
+      const revision = displayedRevision();
+      if (!revision) return;
+      panel.dataset.displayedPointerSha256 = revision;
+      panel.dataset.displayedKeyword = payload.request.keyword;
+      panel.dataset.displayedStayMonth = payload.request.month;
+      panel.dataset.displayedCutoffDate = payload.request.cutoffDate;
+      if (initialAutomaticTiming.renderedAt === null) {
+        initialAutomaticTiming.renderedAt = clockValue(); initialMark("first-normal-render");
+      }
+      publishInitialTiming();
+    }
     function render() {
+      clearDisplayedMarker();
       clearCharts(); resultTarget = results; workspace = listPanel = detailPanel = null;
       const candidate = allowed() && !paused && payload ? buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)) : null;
       const retained = candidate?.usable && (loading || Boolean(error) || resumeNeeded);
@@ -688,8 +723,10 @@
       const reasons = Object.entries(snapshot.quality?.discardedByReason || {}).filter(([, count]) => known(count) && count > 0);
       if (reasons.length) table(sources, ["제외 사유", "관측 수"], reasons.map(([reason, count]) => [reasonLabels[reason] || reason, number(count)]), "제외 관측을 정상 0건으로 바꾸지 않음");
       warnings(sources, (snapshot.sources?.excludedRuns || []).map(row => ({ message: `${row.id || "수집 기록"} · ${row.reason || row.status || "제외 사유 미확인"}` })));
+      markDisplayedResult();
     }
     function renderAutomaticNotice() {
+      publishInitialTiming();
       autoNotice.hidden = !allowed() || paused || !autoText;
       autoNotice.textContent = autoNotice.hidden ? "" : autoText;
       autoNotice.className = `kma-note kma-auto-status${autoErrorCode ? " kma-auto-warning" : ""}`;
@@ -697,6 +734,16 @@
     }
     function stopAutomatic() {
       if (autoTimer !== null) unschedule?.(autoTimer);
+      const waiting = initialAutomaticWait;
+      if (waiting) {
+        waiting.cancelled = true;
+        if (waiting.frame !== null) cancelFrame?.(waiting.frame);
+        waiting.resolveFrame?.(false); waiting.resolve(); initialAutomaticWait = null;
+      }
+      if (autoTask?.initial) {
+        initialAutomaticTiming.completedAt = clockValue(); initialAutomaticTiming.outcome = "cancelled";
+        initialMark("first-version-settled"); publishInitialTiming();
+      }
       autoTimer = null; autoEpoch++; autoTask?.controller?.abort(); autoTask = null;
     }
     const displayedRevision = () => payload && payload === lastGoodPayload && sameScope(payload, selected())
@@ -727,8 +774,45 @@
     const canCheckAutomatically = () => options.autoRefresh !== false && !destroyed && visible() && !loading && !pendingLoad
       && Boolean(catalog && appliedSelection && ["keyword", "month", "cutoffDate"].every(key => appliedSelection[key] === selected()[key])
         && dateValid(cutoffDate) && catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month)));
+    function startInitialAutomatic() {
+      if (initialAutomaticWait) return initialAutomaticWait.promise;
+      const task = { token: sequence, epoch: autoEpoch, key: loadKey(), revision: displayedRevision(), frame: null, frameCount: 0, resolveFrame: null, cancelled: false, resolve: null, promise: null };
+      task.promise = new Promise(resolve => { task.resolve = resolve; }); initialAutomaticWait = task;
+      const valid = () => !task.cancelled && initialAutomaticWait === task && task.token === sequence && task.epoch === autoEpoch
+        && canCheckAutomatically() && task.revision === displayedRevision();
+      const frames = typeof requestFrame !== "function" ? Promise.resolve(true) : new Promise(resolve => {
+        task.resolveFrame = resolve;
+        let remaining = 2;
+        const next = () => {
+          task.frame = null; task.frameCount++;
+          if (!valid()) { resolve(false); return; }
+          if (--remaining === 0) { resolve(true); return; }
+          try { task.frame = requestFrame(next); } catch { resolve(true); }
+        };
+        try { task.frame = requestFrame(next); } catch { resolve(true); }
+      });
+      // Finish normal DOM rendering before either frame. The two browser frame
+      // callbacks provide an initial presentation opportunity, not a claim
+      // that every deferred chart or physical display has finished painting.
+      void frames.then(async ready => {
+        if (!ready || !valid()) return;
+        initialAutomaticTiming.framesCompletedAt = task.frameCount === 2 ? clockValue() : null;
+        await checkAutomatic();
+      }).catch(() => {
+        if (!valid()) return;
+        initialAutomaticNeeded = false; autoFailures++; autoErrorCode = "KEYWORD_MONTHLY_VERSION_UNAVAILABLE";
+        initialAutomaticTiming.completedAt = clockValue(); initialAutomaticTiming.outcome = "failed";
+        autoDueAt = now() + Math.min(autoIntervalMs * 2 ** Math.min(autoFailures, 20), 300000); renderAutomaticNotice();
+      }).finally(() => {
+        if (initialAutomaticWait === task) initialAutomaticWait = null;
+        task.resolve(); if (!task.cancelled) armAutomatic();
+      });
+      return task.promise;
+    }
     function armAutomatic() {
+      if (initialAutomaticWait) return initialAutomaticWait.promise;
       if (!schedule || autoTimer !== null || autoTask || !canCheckAutomatically()) return;
+      if (initialAutomaticNeeded && displayedRevision()) return startInitialAutomatic();
       if (!autoDueAt) autoDueAt = now() + autoIntervalMs;
       autoTimer = schedule(() => { autoTimer = null; void checkAutomatic(); }, Math.max(0, autoDueAt - now()));
       // Node-hosted UI tests must not keep a process alive; browsers return a number.
@@ -737,7 +821,12 @@
     async function checkAutomatic() {
       if (!canCheckAutomatically() || autoTask) return;
       const token = sequence, epoch = autoEpoch, prior = selected(), mode = cutoffMode;
-      const task = { controller: Abort ? new Abort() : null, editRevision: draftRevision, overwriteDraft: !draftHasChanges() };
+      const initial = initialAutomaticNeeded && Boolean(displayedRevision());
+      if (initial) {
+        initialAutomaticNeeded = false; initialAutomaticTiming.startedAt = clockValue(); initialAutomaticTiming.outcome = "running";
+        initialMark("first-version-start"); publishInitialTiming();
+      }
+      const task = { controller: Abort ? new Abort() : null, editRevision: draftRevision, overwriteDraft: !draftHasChanges(), initial };
       autoTask = task;
       const valid = () => current(token) && epoch === autoEpoch && autoTask === task;
       try {
@@ -791,6 +880,10 @@
         }
       } finally {
         if (autoTask === task) {
+          if (task.initial) {
+            initialAutomaticTiming.completedAt = clockValue(); initialAutomaticTiming.outcome = autoErrorCode ? "failed" : "complete";
+            initialMark("first-version-settled");
+          }
           autoTask = null; autoDueAt = now() + Math.min(autoIntervalMs * 2 ** Math.min(autoFailures, 20), 300000);
           renderAutomaticNotice(); armAutomatic();
         }
@@ -800,6 +893,7 @@
     function clearPrivate(reason = "관리자 로그인이 필요합니다.", erasePersistence = true) {
       if (erasePersistence) selectionStorage.revoke();
       cancel(); requestOrdinal = 0; paused = true; resumeNeeded = false; resumeRequest = null; catalog = null; payload = lastGoodPayload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null; pendingRestore = false;
+      initialAutomaticNeeded = true; initialAutomaticTiming = emptyInitialTiming();
       autoText = autoErrorCode = ""; autoFailures = 0; autoDueAt = 0;
       product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; restoreAttempted = false; restoreNotice = ""; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
     }
@@ -959,6 +1053,10 @@
     function load(context, { applyInput = false, renewCatalog = false, restored = false } = {}) {
       if (destroyed || !visible()) return Promise.resolve();
       const key = loadKey(context);
+      if (initialAutomaticWait?.key === key) {
+        if (context) { applyViewContext(context); rememberScope(); render(); }
+        return initialAutomaticWait.promise;
+      }
       if (pendingLoad?.key === key) {
         // Product/company/list controls are local to this shared data scope.
         // Apply the latest context now and keep it for an options response
@@ -987,7 +1085,7 @@
             else if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null;
           }
         } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); } }
-        finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; autoDueAt = now() + autoIntervalMs; if (canCheckAutomatically()) autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; render(); armAutomatic(); } }
+        finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; autoDueAt = now() + autoIntervalMs; if (canCheckAutomatically()) autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; render(); await armAutomatic(); } }
       })();
       return task.promise;
     }
@@ -1040,7 +1138,7 @@
     const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (!visible()) stopAutomatic(); else if (!catalog && !loading && !error) void open(pendingContext); else armAutomatic(); }) : null;
     observer?.observe(doc.body, { attributes: true, attributeFilter: ["class"] }); doc.addEventListener("visibilitychange", onVisibility);
     const controller = { open, refresh: () => load(), pause() { rememberScope(); cancel(); paused = true; resumeNeeded = false; resumeRequest = null; payload = null; render(); }, clear: clearPrivate,
-      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, requestDiagnostic: requestDiagnostic ? { ...requestDiagnostic, details: [...requestDiagnostic.details] } : null, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded || autoTask || autoErrorCode)), automatic: { checking: Boolean(autoTask), failureCount: autoFailures, revision: displayedRevision(), errorCode: autoErrorCode } }),
+      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, requestDiagnostic: requestDiagnostic ? { ...requestDiagnostic, details: [...requestDiagnostic.details] } : null, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded || autoTask || autoErrorCode)), automatic: { checking: Boolean(autoTask), failureCount: autoFailures, revision: displayedRevision(), errorCode: autoErrorCode, initial: { ...initialAutomaticTiming } } }),
       destroy() { if (destroyed) return; clearPrivate("", false); destroyed = true; observer?.disconnect(); doc.removeEventListener("visibilitychange", onVisibility); panel.replaceChildren(); controllers.delete(controller); instances.delete(parent); } };
     controllers.add(controller); instances.set(parent, controller);
     render(); if (options.autoStart !== false && visible()) void open(options.context || null); return controller;

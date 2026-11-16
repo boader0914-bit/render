@@ -55,12 +55,14 @@ const text = node => descendants(node).map(item => item.textContent).join(" ");
 const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
 function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs,
-  setTimeout: schedule = setTimeout, clearTimeout: unschedule = clearTimeout, now = () => Date.parse(NOW), storage, session, customerView = false } = {}) {
+  setTimeout: schedule = setTimeout, clearTimeout: unschedule = clearTimeout, now = () => Date.parse(NOW), storage, session, customerView = false,
+  requestAnimationFrame, cancelAnimationFrame, performance } = {}) {
   const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
   const window = { fetch: request, setTimeout: schedule, clearTimeout: unschedule, AbortController, sessionStorage: storage,
+    requestAnimationFrame, cancelAnimationFrame, performance,
     crypto: require("node:crypto").webcrypto, TextEncoder, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
@@ -1151,32 +1153,177 @@ function automaticPayload(revision, selection = { keyword: KEYWORD, month: "2026
   value.bundle = { generation: revision.slice(0, 32) };
   return value;
 }
-async function automaticUi(t, { handle, interval = 250, timeout = 1000, companies = 3 } = {}) {
+async function automaticUi(t, { handle, interval = 250, timeout = 1000, companies = 3, frames = null,
+  primeInitialVersion = true, waitForOpen = true } = {}) {
   const clock = automaticClock(), source = { revision: AUTO_A, day: "2026-10-30", optionsRevision: null, payloadRevision: null }, counts = { version: 0, options: 0, data: 0 };
+  let openingInitial = true; const marks = [], timeOrigin = clock.now();
   const ui = mockUi({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    requestAnimationFrame: frames?.request, cancelAnimationFrame: frames?.cancel,
+    performance: { now: () => clock.now() - timeOrigin, timeOrigin, getEntriesByType: () => [{ type: "reload" }], mark: name => marks.push({ name, at: clock.now() - timeOrigin }) },
     autoRefreshIntervalMs: interval, autoRefreshTimeoutMs: timeout, session: liveSession(), request: async (url, settings) => {
       const kind = url.endsWith("/version") ? "version" : url.endsWith("/options") ? "options" : "data"; counts[kind]++;
       const selection = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+      // Recurring-refresh tests begin after one real, healthy initial version
+      // GET. Initial failure/frame tests opt out and exercise that first GET.
+      if (openingInitial && primeInitialVersion && kind === "version") return jsonResponse(automaticVersion(source.revision, source.day));
       const overridden = handle ? await handle({ kind, url, settings, selection, source, counts, clock }) : undefined;
       if (overridden !== undefined) return overridden;
       return jsonResponse(kind === "version" ? automaticVersion(source.revision, source.day)
         : kind === "options" ? automaticOptions(source.optionsRevision || source.revision, source.day)
           : automaticPayload(source.payloadRevision || source.revision, selection, companies));
     } });
-  t.after(() => ui.controller.destroy()); await ui.ready; await ui.controller.open(); await settle();
-  return { ...ui, clock, source, counts };
+  t.after(() => ui.controller.destroy()); await ui.ready; const opening = ui.controller.open(); if (waitForOpen) await opening; await settle(); openingInitial = false;
+  return { ...ui, clock, source, counts, marks, opening };
 }
 const automaticVisibleState = ui => {
   const state = clone(ui.controller.state());
   return Object.fromEntries(["selection", "draft", "applied", "cutoffMode", "product", "benchmarkCompanyId", "listQuery", "listPage", "mobileView", "expanded", "loading", "status", "errorCode"].map(key => [key, state[key]]));
 };
 
+function automaticFrames() {
+  let next = 0; const tasks = new Map();
+  return {
+    request(callback) { const id = ++next; tasks.set(id, callback); return id; },
+    cancel(id) { tasks.delete(id); },
+    pending: () => tasks.size,
+    async step() { const current = [...tasks.values()]; tasks.clear(); for (const callback of current) callback(); await settle(); }
+  };
+}
+
+test("first real version check follows normal DOM and two frames and belongs to the initial open promise", async t => {
+  const frames = automaticFrames(), gate = deferred();
+  const ui = await automaticUi(t, { frames, interval: 30000, primeInitialVersion: false, waitForOpen: false,
+    handle: ({ kind }) => kind === "version" ? gate.promise : undefined });
+  let opened = false; ui.opening.then(() => { opened = true; });
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.deepEqual(ui.counts, { version: 0, options: 1, data: 1 }); assert.equal(opened, false);
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(panel.dataset.displayedKeyword, KEYWORD);
+  assert.equal(panel.dataset.displayedStayMonth, "2026-10"); assert.equal(panel.dataset.displayedCutoffDate, "2026-10-30");
+  assert.equal(panel.dataset.firstRenderMs, "0"); assert.equal(panel.dataset.navigationType, "reload");
+  assert.equal(Number(panel.dataset.performanceTimeOrigin), ui.clock.now()); assert.equal(frames.pending(), 1);
+  await ui.clock.advance(16); await frames.step(); assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 1);
+  await ui.clock.advance(16); await frames.step(); assert.equal(ui.counts.version, 1); assert.equal(opened, false);
+  assert.equal(panel.dataset.firstFramesMs, "32"); assert.equal(panel.dataset.firstVersionStartMs, "32");
+  assert.equal(panel.dataset.firstVersionOutcome, "running"); assert.equal(ui.controller.state().automatic.checking, true);
+  const reentered = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 }, "Same-scope reentry shares the initial cycle");
+  for (const observer of ui.observers) observer.callback(); ui.listeners.visibilitychange(); await settle();
+  assert.equal(ui.counts.version, 1);
+  await ui.clock.advance(7); gate.resolve(jsonResponse(automaticVersion(AUTO_A))); await Promise.all([ui.opening, reentered]);
+  assert.equal(opened, true); assert.equal(panel.dataset.firstVersionCompleteMs, "39");
+  assert.equal(panel.dataset.firstVersionOutcome, "complete"); assert.equal(ui.clock.nextDelay(), 30000);
+  assert.deepEqual(ui.marks.map(x => x.name), ["first-normal-render", "first-version-start", "first-version-settled"].map(x => "staydatalab:keyword-monthly:" + x));
+  await ui.clock.advance(29999); assert.equal(ui.counts.version, 1);
+  await ui.clock.advance(1); assert.equal(ui.counts.version, 2); assert.equal(ui.counts.data, 1);
+});
+
+test("first version detects a newer publication then stages sequential prepared-only reads after the displayed result", async t => {
+  const frames = automaticFrames(), gate = deferred();
+  const ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false,
+    handle: ({ kind, source }) => kind === "data" && source.revision === AUTO_B ? gate.promise : undefined });
+  const panel = ui.find("keyword-monthly-analysis")[0], before = automaticVisibleState(ui);
+  ui.source.revision = AUTO_B; await frames.step(); await frames.step();
+  assert.deepEqual(ui.counts, { version: 1, options: 2, data: 2 });
+  assert.deepEqual(ui.calls.map(c => c.url.endsWith("/options") ? "options" : c.url.endsWith("/version") ? "version" : "data"), ["options", "data", "version", "options", "data"]);
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.deepEqual(automaticVisibleState(ui), before);
+  assert.equal(ui.calls.at(-1).settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+  gate.resolve(jsonResponse(automaticPayload(AUTO_B))); await ui.opening;
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_B); assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
+  assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.equal(ui.clock.nextDelay(), 250);
+});
+
+test("a first version protection failure settles open while preserving normal data and the existing bounded backoff", async t => {
+  let held = true;
+  const ui = await automaticUi(t, { interval: 30000, primeInitialVersion: false,
+    handle: ({ kind }) => kind === "version" && held ? jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY" }, 503) : undefined });
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
+  assert.equal(ui.controller.state().automatic.initial.outcome, "failed"); assert.equal(ui.controller.state().automatic.failureCount, 1);
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, AUTO_A);
+  assert.equal(ui.controller.state().status, "available"); assert.equal(ui.controller.state().showingStored, true);
+  assert.equal(ui.clock.nextDelay(), 60000);
+  for (const observer of ui.observers) observer.callback(); ui.listeners.visibilitychange(); await settle();
+  await ui.clock.advance(59999); assert.equal(ui.counts.version, 1);
+  held = false; await ui.clock.advance(1); assert.equal(ui.counts.version, 2);
+  assert.equal(ui.controller.state().automatic.failureCount, 0); assert.equal(ui.clock.nextDelay(), 30000);
+});
+
+test("the first immediate version waits for a genuinely usable result rather than an initial missing response", async t => {
+  let ready = false; const frames = automaticFrames();
+  const ui = await automaticUi(t, { frames, interval: 30000, primeInitialVersion: false,
+    handle: ({ kind, source, selection }) => kind === "data" && !ready ? jsonResponse({ ...automaticPayload(source.revision, selection), status: "missing", snapshot: null }) : undefined });
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 0); assert.equal(panel.dataset.displayedPointerSha256, undefined);
+  ready = true; const retry = ui.controller.refresh(); await settle();
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(ui.counts.version, 0);
+  await frames.step(); await frames.step(); await retry;
+  assert.equal(ui.counts.version, 1); assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
+});
+
+test("cancelling an initial frame wait settles open without hidden or private version requests", async t => {
+  for (const action of ["hidden", "clear", "pause", "destroy"]) {
+    const frames = automaticFrames(), ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false });
+    await frames.step();
+    if (action === "hidden") { ui.doc.hidden = true; ui.listeners.visibilitychange(); }
+    else if (action === "clear") ui.api.clear(); else ui.controller[action]();
+    await ui.opening; await frames.step(); await ui.clock.advance(60000);
+    assert.equal(ui.counts.version, 0, action); assert.equal(frames.pending(), 0, action);
+    if (action !== "hidden") assert.equal(ui.find("keyword-monthly-analysis")[0]?.dataset.displayedPointerSha256, undefined, action);
+  }
+});
+
+test("a late initial version cannot overwrite a newer manual scope or clear its successful state", async t => {
+  for (const late of [jsonResponse(automaticVersion(AUTO_B)), jsonResponse({}, 403)]) {
+    const frames = automaticFrames(), gate = deferred();
+    const ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false,
+      handle: ({ kind }) => kind === "version" ? gate.promise : undefined });
+    await frames.step(); await frames.step(); assert.equal(ui.counts.version, 1);
+    ui.source.revision = AUTO_C;
+    await ui.controller.open({ keyword: OTHER, month: "2026-10", cutoffDate: "2026-10-30", cutoffMode: "explicit" });
+    await ui.opening; const latest = automaticVisibleState(ui);
+    gate.resolve(late); await settle();
+    assert.deepEqual(automaticVisibleState(ui), latest); assert.equal(ui.controller.state().selection.keyword, OTHER);
+    const panel = ui.find("keyword-monthly-analysis")[0];
+    assert.equal(panel.dataset.displayedPointerSha256, AUTO_C); assert.equal(panel.dataset.displayedKeyword, OTHER);
+    assert.equal(ui.controller.state().paused, false); assert.equal(ui.counts.version, 1);
+  }
+});
+
+test("an unavailable animation-frame API never invents paint completion or loops initial version requests", async t => {
+  const ui = await automaticUi(t, { frames: { request() { throw Error("UNAVAILABLE_FRAME"); }, cancel() {} }, primeInitialVersion: false });
+  assert.equal(ui.counts.version, 1); assert.equal(ui.controller.state().automatic.initial.framesCompletedAt, null);
+  assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
+  await ui.clock.advance(249); assert.equal(ui.counts.version, 1);
+});
+
+test("an initial version authentication failure clears displayed markers before reading any private body", async t => {
+  let bodyReads = 0;
+  const ui = await automaticUi(t, { primeInitialVersion: false,
+    handle: ({ kind }) => kind === "version" ? { ok: false, status: 403, json: async () => { bodyReads++; return { private: "UNREAD" }; } } : undefined });
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.equal(bodyReads, 0); assert.equal(ui.controller.state().paused, true);
+  assert.equal(panel.dataset.displayedPointerSha256, undefined); assert.equal(panel.dataset.displayedKeyword, undefined);
+  assert.equal(panel.dataset.firstRenderMs, undefined); assert.equal(panel.dataset.firstVersionStartMs, undefined);
+  assert.equal(ui.find("kma-metric").length, 0); const before = ui.calls.length;
+  await ui.clock.advance(60000); assert.equal(ui.calls.length, before);
+});
+
+test("a cancelled initial frame check resumes once on visibility without concurrent data reads", async t => {
+  const frames = automaticFrames(), ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false });
+  await frames.step(); ui.doc.hidden = true; ui.listeners.visibilitychange(); await ui.opening;
+  assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 0);
+  ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle();
+  await frames.step(); await frames.step(); await settle();
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
+  assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
+  for (const observer of ui.observers) observer.callback(); await settle(); assert.equal(ui.counts.version, 1);
+});
+
 test("automatic prepared refresh polls only a lightweight version when the published pointer is unchanged", async t => {
   const ui = await automaticUi(t), baseline = automaticVisibleState(ui), charts = ui.chartCalls.length;
-  assert.deepEqual(ui.counts, { version: 0, options: 1, data: 1 });
-  await ui.clock.advance(249); assert.equal(ui.counts.version, 0);
-  await ui.clock.advance(1); assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
-  await ui.clock.advance(500); assert.deepEqual(ui.counts, { version: 3, options: 1, data: 1 });
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
+  await ui.clock.advance(249); assert.equal(ui.counts.version, 1);
+  await ui.clock.advance(1); assert.deepEqual(ui.counts, { version: 2, options: 1, data: 1 });
+  await ui.clock.advance(500); assert.deepEqual(ui.counts, { version: 4, options: 1, data: 1 });
   assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(ui.chartCalls.length, charts);
   assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 0);
   assert.ok(ui.calls.every(call => call.settings.method === "GET" && call.settings.credentials === "same-origin" && call.settings.cache === "no-store" && !call.settings.body));
@@ -1225,7 +1372,7 @@ test("automatic prepared refresh watches initial missing or503 results without c
     const applied = ui.controller.state().selection;
     for (const key of ["keyword", "month", "cutoffDate", "cutoffMode", "product"]) assert.equal(applied[key], selection[key], key);
     assert.equal(ui.clock.nextDelay(), 250);
-    assert.deepEqual(ui.counts, { version: 3, options: 4, data: 4 });
+    assert.deepEqual(ui.counts, { version: 4, options: 4, data: 4 });
   }
 });
 
@@ -1327,9 +1474,9 @@ test("automatic prepared refresh remains one flight during slow checks and repea
   const ui = await automaticUi(t, { timeout: 5000, handle: ({ kind, settings }) => {
     if (kind === "version") { signal = settings.signal; return gate.promise; }
   } });
-  await ui.clock.advance(250); assert.equal(ui.counts.version, 1); assert.equal(ui.controller.state().automatic.checking, true);
+  await ui.clock.advance(250); assert.equal(ui.counts.version, 2); assert.equal(ui.controller.state().automatic.checking, true);
   for (let index = 0; index < 3; index++) ui.listeners.visibilitychange();
-  await ui.clock.advance(1000); assert.equal(ui.counts.version, 1); assert.equal(signal.aborted, false);
+  await ui.clock.advance(1000); assert.equal(ui.counts.version, 2); assert.equal(signal.aborted, false);
   gate.resolve(jsonResponse(automaticVersion(AUTO_A))); await settle(); assert.equal(ui.controller.state().automatic.checking, false);
   assert.equal(ui.clock.nextDelay(), 250);
 });
@@ -1414,14 +1561,14 @@ test("automatic prepared refresh defers publication during Korean IME compositio
   assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 0);
   assert.equal(ui.controller.state().automatic.errorCode, ""); assert.equal(ui.controller.state().automatic.checking, false);
   assert.match(text(ui.find("kma-auto-status")[0]), /입력 중/); assert.equal(ui.clock.nextDelay(), 250);
-  assert.deepEqual(ui.counts, { version: 1, options: 2, data: 2 });
+  assert.deepEqual(ui.counts, { version: 2, options: 2, data: 2 });
   await search.fire("compositionend"); search.value = "비교"; await search.fire("input"); search.setSelectionRange(2, 2);
   await ui.clock.advance(249); assert.equal(ui.controller.state().automatic.revision, AUTO_A);
   await ui.clock.advance(1);
   assert.equal(ui.controller.state().automatic.revision, AUTO_B); assert.equal(ui.controller.state().automatic.failureCount, 0);
   assert.equal(ui.controller.state().listQuery, "비교"); assert.notEqual(ui.field("companySearch"), search);
   assert.equal(ui.doc.activeElement, ui.field("companySearch")); assert.deepEqual([ui.doc.activeElement.selectionStart, ui.doc.activeElement.selectionEnd], [2, 2]);
-  assert.deepEqual(ui.counts, { version: 2, options: 3, data: 3 });
+  assert.deepEqual(ui.counts, { version: 3, options: 3, data: 3 });
 });
 
 test("automatic prepared refresh rejects malformed or unverified version metadata without reading a financial result", async t => {
@@ -1429,7 +1576,7 @@ test("automatic prepared refresh rejects malformed or unverified version metadat
     { publishedAt: "invalid" }, { currentDay: "2026-02-30" }, { readOnly: false }, { networkAttempted: true }, { originalFreshnessVerified: true }]) {
     const ui = await automaticUi(t, { handle: ({ kind }) => kind === "version" ? jsonResponse({ ...automaticVersion(AUTO_B), ...patch }) : undefined });
     const baseline = automaticVisibleState(ui); await ui.clock.advance(250);
-    assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 }); assert.deepEqual(automaticVisibleState(ui), baseline);
+    assert.deepEqual(ui.counts, { version: 2, options: 1, data: 1 }); assert.deepEqual(automaticVisibleState(ui), baseline);
     assert.equal(ui.controller.state().automatic.revision, AUTO_A); assert.equal(ui.controller.state().automatic.failureCount, 1);
   }
 });
@@ -1571,7 +1718,7 @@ test("merged healthy version checks retain a manual failure diagnostic until its
   let held = false; const ui = await automaticUi(t, { handle: ({ kind }) => held && kind === "data" ? jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY" }, 503) : undefined });
   held = true; await ui.controller.refresh(); const failed = clone(ui.controller.state().requestDiagnostic); await ui.clock.advance(250);
   assert.deepEqual(clone(ui.controller.state().requestDiagnostic), failed); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503");
-  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 2 }); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, false);
+  assert.deepEqual(ui.counts, { version: 2, options: 1, data: 2 }); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, false);
   held = false; await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, ""); assert.equal(ui.controller.state().requestDiagnostic.outcome, "complete");
   assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true);
 });
