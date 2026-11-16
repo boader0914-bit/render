@@ -229,6 +229,22 @@ test("a current verification job and its reason stay visible despite completed h
   assert.match(ui.text(), /같은 입력의 후속 완료 기록 34/); assert.match(ui.text(), /현재 선택 자료의 최신 반영 여부는 별개/);
 });
 
+for (const [reasonCode, label] of [
+  ["KEYWORD_RECONSTRUCT_OUTSIDE_READ_DENIED", "읽기 격리 보호로 중단"],
+  ["KEYWORD_INCREMENTAL_INPUTS_CHANGED", "집계 중 저장 입력이 변경되어 보류"]
+]) test("current input guard reason remains human readable with raw code and protection: " + reasonCode, async () => {
+  const status = refreshHistoryFixture(); status.historicalReview.currentVersionCounts = { queued: 0, deferred: 0, running: 0, complete: 0, needs_verification: 1 };
+  status.currentVersionReasonCounts = [{ status: "needs_verification", reasonCode, count: 1 }];
+  const ui = refreshUi(status); await ui.controller.open();
+  const before = clone(ui.controller.state()), tables = () => descendants(ui.find("kma-results")[0]).filter(node => node.tagName === "TABLE").map(node => text(node)), beforeTables = tables();
+  assert.ok(ui.text().includes(label)); assert.ok(ui.text().includes(reasonCode)); assert.match(text(ui.find("kma-refresh-current")[0]), /검수 필요 1/);
+  assert.match(ui.text(), /자동 반영 확인 필요/); assert.match(ui.text(), /같은 입력의 후속 완료 기록 34/); assert.match(ui.text(), /400원/);
+  await ui.controller.refresh(); assert.deepEqual(tables(), beforeTables);
+  assert.deepEqual(clone(ui.controller.state().selection), before.selection); assert.equal(ui.controller.state().product, before.product);
+  assert.equal(ui.controller.state().benchmarkCompanyId, before.benchmarkCompanyId); assert.equal(ui.controller.state().listPage, before.listPage);
+  assert.ok(ui.calls.every(call => call.settings.method === "GET")); assert.ok(ui.calls.length > 2);
+});
+
 test("history classification never changes applied scope product company or calculated result tables", async () => {
   const status = refreshHistoryFixture(), ui = refreshUi(status); await ui.controller.open();
   const before = clone(ui.controller.state()), sold = uiModule.buildViewModel(payloadFixture(), payloadFixture().request, "2026-10").summary.lodging.sold;
