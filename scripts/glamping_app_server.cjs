@@ -51,6 +51,9 @@ const { createMonthlyReportCatchmentContext } = require("./lib/monthly_report_ca
 const { createMonthlyReportHttpHandler } = require("./lib/monthly_report_http.cjs");
 const { createKeywordMonthlyBundleAnalysis } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
+const { createKeywordMonthlyRequestDiagnostics } = require("./lib/keyword_monthly_request_diagnostics.cjs");
+const { createKeywordMonthlyHttpReadAdmission } = require("./lib/keyword_monthly_http_read_admission.cjs");
+const { createKeywordMonthlySavedReadService } = require("./lib/keyword_monthly_saved_read_service.cjs");
 const { createSearchDemandStore } = require("./lib/search_demand_store.cjs");
 const { createSearchDemandProviders } = require("./lib/search_demand_providers.cjs");
 const { createSearchDemandScheduler } = require("./lib/search_demand_scheduler.cjs");
@@ -898,20 +901,21 @@ const keywordMonthlyRefreshIntegration = createKeywordMonthlyRefreshIntegration(
   readPostprocess: runId => collectionPostprocessQueue.status({ runId }),
   readPostprocessList: () => collectionPostprocessQueue.status({ limit: 1024 }),
   allowsDerivedUpdates, isCollectionIdle: keywordMonthlyCollectionsIdle,
-  assertAnalyticalLeaseHeld: () => { const s = analyticalWork.status(); return s.active && s.activeKind === "keyword_monthly_refresh" && s.activePriority === "background"; }
+  assertAnalyticalLeaseHeld: () => { const s = analyticalWork.status(); return s.active && s.activeKind === "keyword_monthly_refresh" && s.activePriority === "background"; },
+  withSavedReadWindow: operation => analyticalWork.withSavedReadWindow(operation)
 });
-// Keep one complete analytical allocation under the existing application lease.
-// Concurrent admin queries cannot retain several decoded history graphs.
-const keywordMonthlyAnalysis = Object.freeze({
-  // A bounded publication-pointer read does not acquire the analytical lease.
-  // It signals a prepared generation, never original/result freshness.
-  version: () => keywordMonthlyPreparedAnalysis.version(),
-  readPrepared: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.readPrepared(input), { kind: "keyword_monthly_analysis" }),
-  options: () => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.options(), { kind: "keyword_monthly_options" }),
-  analyze: input => runAnalyticalWork(() => keywordMonthlyPreparedAnalysis.analyze(input), { kind: "keyword_monthly_analysis" })
+// Saved DTO reads use one bounded permit only while idle or in the isolated
+// child's explicit wait window. Legacy graphs retain the exclusive lease.
+const keywordMonthlyRequestDiagnostics = createKeywordMonthlyRequestDiagnostics();
+const keywordMonthlyReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission:()=>readPreparedConversionAdmission({dataDir:DATA_DIR})});
+const keywordMonthlyAnalysis = createKeywordMonthlySavedReadService({
+  saved: keywordMonthlyPreparedAnalysis, runWork: runAnalyticalWork,
+  acquirePermit: () => analyticalWork.acquireSavedReadPermit(), assertReadAdmission: keywordMonthlyReadAdmission,
+  diagnostics: keywordMonthlyRequestDiagnostics
 });
 const handleKeywordMonthly = createKeywordMonthlyHttpHandler({
   service: keywordMonthlyAnalysis, requireAdmin: requireAdminSession, send,
+  readAdmission: () => readPreparedConversionAdmission({ dataDir: DATA_DIR }), requestDiagnostics: keywordMonthlyRequestDiagnostics,
   readRefreshStatus: () => keywordMonthlyRefreshIntegration.status()
 });
 // Search demand uses its own immutable metadata, queue and provider budgets.

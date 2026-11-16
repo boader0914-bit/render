@@ -33,7 +33,8 @@ async function retainedPreparation(intent, receiptDir) {
     && H.SHA.test(value.isolation?.proofSha256 || ""), "KEYWORD_INCREMENTAL_RETAINED_EVIDENCE_INVALID"); return value;
 }
 async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
-  H.need(options && Object.keys(options).every(k => ["dataDir", "codeRoot", "scratchParent", "mode", "evidence", "now", "signal", "canPublish", "readDeltaEvidence"].includes(k)), "KEYWORD_INCREMENTAL_OPTIONS_INVALID");
+  H.need(options && Object.keys(options).every(k => ["dataDir", "codeRoot", "scratchParent", "mode", "evidence", "now", "signal", "canPublish", "readDeltaEvidence", "withSavedReadWindow"].includes(k))
+    && (options.withSavedReadWindow===undefined||typeof options.withSavedReadWindow==="function"), "KEYWORD_INCREMENTAL_OPTIONS_INVALID");
   H.need(dependencies.fixture === true || process.platform === "linux", "KEYWORD_INCREMENTAL_LINUX_REQUIRED");
   const { dataDir, codeRoot } = options; H.absolute(dataDir); H.absolute(codeRoot); await H.checked(dataDir, true); await H.checked(codeRoot, true);
   H.need(options.mode === "live" && typeof options.canPublish === "function" && typeof options.readDeltaEvidence === "function", "KEYWORD_INCREMENTAL_ADAPTER_REQUIRED");
@@ -149,10 +150,10 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     const execute = dependencies.fixture === true && dependencies.execute ? dependencies.execute : prep.runChild;
     await admission();
     let child;
-    try { child = await execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
+    try { child = await (options.withSavedReadWindow|| (operation=>operation()))(()=>execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
       "--guard-name", "reconstruct_keyword_monthly_incremental.cjs", "--guard-sha256", pins[1].sha256, "--node-sha256", pins[0].sha256,
       "--node-max-old-space-size", "1024", "--", node, guard, "--input", jobInput, "--input-sha", H.hash(Buffer.from(JSON.stringify(job))),
-      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true }); }
+      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true })); }
     catch (caught) {
       const error = caught && typeof caught === "object" ? caught : H.fault("KEYWORD_PREP_CHILD_FAILED"), ended = failure.termination(error);
       let childFailure = { status: "missing" };

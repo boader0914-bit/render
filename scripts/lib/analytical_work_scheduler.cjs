@@ -36,7 +36,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   }
   const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
   let checkpointReader = null;
-  let active = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
+  let active = null, savedReadPermit = null, closed = false, consecutiveForeground = 0, timer = null, sampling = null;
   let externalChecking = false, externalCancel = null, lastExternalAttemptAt = null;
   const maintenance = { enabled: externalAdmission !== null, checking: false, paused: false, reasonCode: null,
     checks: 0, held: 0, failures: 0 };
@@ -69,7 +69,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (!(priority === "foreground" ? foreground.length + checkpointReads.length : background.length)) continue;
       // These reasons are disjoint. Busy ownership takes precedence over a
       // memory pause; a pause does not double count time spent behind a lease.
-      const key = active ? "busyWaitMs" : priority === "background" && memory.paused ? "memoryWaitMs"
+      const key = active || savedReadPermit ? "busyWaitMs" : priority === "background" && memory.paused ? "memoryWaitMs"
         : priority === "background" && sampling ? "samplingWaitMs" : "otherWaitMs";
       waitClocks[priority][key] += elapsed;
     }
@@ -125,7 +125,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     return record;
   }
   const memoryStatus = () => ({ ...memory, highWatermark, lowWatermark, resumeSamples });
-  function settleIdle() { if (!active) for (const resolve of idleWaiters.splice(0)) resolve(); }
+  function settleIdle() { if (!active && !savedReadPermit) for (const resolve of idleWaiters.splice(0)) resolve(); }
   function clearPoll() { if (timer !== null) clearTimeoutImpl(timer); timer = null; }
   const activeMaintenancePoll = () => externalAdmission !== null && Boolean(active?.cooperative);
   const maintenanceIntervalMs = Math.min(sampleIntervalMs, 1000);
@@ -337,7 +337,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     }
   }
   function pumpOwned() {
-    if (closed || active) return;
+    if (closed || active || savedReadPermit) return;
     if (checkpointReads.length) return dispatch(checkpointReads);
     const canBackground = background.length && !sampling && fresh() && !memory.paused;
     if (foreground.length && (!canBackground || consecutiveForeground < foregroundBurst)) return dispatch(foreground);
@@ -397,6 +397,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       || taskCallback !== null && typeof taskCallback !== "function") {
       return Promise.reject(new TypeError("Invalid analytical work"));
     }
+    if (context.getStore()?.savedRead && context.getStore().active) return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_NESTED_WORK"));
     if (context.getStore()?.checkpointRead && context.getStore().active) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_NESTED_WORK"));
     if (closed) return Promise.reject(fault("ANALYTICAL_WORK_CLOSED"));
     if (signal?.aborted) return Promise.reject(aborted());
@@ -443,6 +444,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (typeof operation !== "function" || kind !== "company-month-cached-verification"
       || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")
       || taskCallback !== null && typeof taskCallback !== "function") return Promise.reject(new TypeError("Invalid checkpoint read"));
+    if (context.getStore()?.savedRead && context.getStore().active) return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_NESTED_WORK"));
     if (context.getStore()?.checkpointRead && context.getStore().active) return Promise.reject(fault("ANALYTICAL_CHECKPOINT_READ_NESTED_WORK"));
     if (closed) return Promise.reject(fault("ANALYTICAL_WORK_CLOSED"));
     if (signal?.aborted) return Promise.reject(aborted());
@@ -477,8 +479,54 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     // may release its data and durably requeue at a safe allocation boundary.
     return inspect();
   }
+  async function withSavedReadWindow(operation) {
+    const owner = context.getStore();
+    if (typeof operation !== "function" || !owner?.active || active !== owner || owner.kind !== "keyword_monthly_refresh"
+      || owner.priority !== "background" || owner.savedReadWindow || closed) throw fault("KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID");
+    // Only the explicit isolated-child await opens this capability. Closing
+    // the window precedes draining: no new read can delay final parent work.
+    const window = { accepting: true, permits: new Set(), waiters: [] }; owner.savedReadWindow = window;
+    try { return await operation(); }
+    finally {
+      window.accepting = false;
+      if (window.permits.size) await new Promise(resolve => window.waiters.push(resolve));
+      if (owner.savedReadWindow === window) owner.savedReadWindow = null;
+    }
+  }
+  function acquireSavedReadPermit() {
+    if (closed) throw fault("ANALYTICAL_WORK_CLOSED");
+    if (savedReadPermit) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
+    const window = active?.savedReadWindow;
+    if (externalChecking || maintenance.paused || checkpointReader || active && !(active.kind === "keyword_monthly_refresh"
+      && active.priority === "background" && window?.accepting)) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+    const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
+      controller, priority: "foreground", kind: "keyword_monthly_saved_read", running: false, invoked: false };
+    // This synchronous claim also fences an old external-admission callback:
+    // pumpOwned rechecks it immediately before dispatching any large owner.
+    accountWaiting(); savedReadPermit = token; if (window) window.permits.add(token);
+    return Object.freeze({
+      acceptsNewResponses: () => token.active && !closed && (!window || window.accepting),
+      run(operation) {
+        if (!token.active || token.invoked || typeof operation !== "function") return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_INVALID"));
+        token.invoked = true; token.running = true;
+        return context.run(token, () => runWithCooperativeWork(null, () => Promise.resolve().then(() => {
+          if (closed || controller.signal.aborted) throw fault("ANALYTICAL_WORK_CLOSED");
+          return operation({ signal: controller.signal, priority: "foreground", kind: token.kind, timing: { queueWaitMs: 0 } });
+        }))).finally(() => { token.running = false; });
+      },
+      release() {
+        if (!token.active) return;
+        if (token.running || savedReadPermit !== token) throw fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_ACTIVE");
+        accountWaiting(); token.active = false; savedReadPermit = null;
+        if (window) { window.permits.delete(token); if (!window.permits.size) for (const resolve of window.waiters.splice(0)) resolve(); }
+        settleIdle(); pump();
+      }
+    });
+  }
   function status() {
-    return { closed, active: Boolean(active), activePriority: active?.priority || null, activeKind: active?.kind || null,
+    return { closed, active: Boolean(active || savedReadPermit), activePriority: active?.priority || savedReadPermit?.priority || null, activeKind: active?.kind || savedReadPermit?.kind || null,
+      savedRead: { active: Boolean(savedReadPermit), childWaitWindowOpen: Boolean(active?.savedReadWindow?.accepting),
+        childWaitWindowDraining: Boolean(active?.savedReadWindow && !active.savedReadWindow.accepting) },
       queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
       queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,
       sampling: Boolean(sampling), memory: memoryStatus(), maintenance: { ...maintenance },
@@ -502,9 +550,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     for (const task of [...foreground.splice(0), ...background.splice(0), ...checkpointReads.splice(0)]) { task.cleanup(); const error = fault("ANALYTICAL_WORK_CLOSED");
       recordTask(task, error, at); task.reject(error); }
     active?.controller.abort(fault("ANALYTICAL_WORK_CLOSED"));
-    if (active) await new Promise(resolve => idleWaiters.push(resolve));
+    savedReadPermit?.controller.abort(fault("ANALYTICAL_WORK_CLOSED"));
+    if (active || savedReadPermit) await new Promise(resolve => idleWaiters.push(resolve));
   }
-  return { run, runCheckpointRead, status, close, checkpointPressure };
+  return { run, runCheckpointRead, status, close, checkpointPressure, withSavedReadWindow, acquireSavedReadPermit };
 }
 
 module.exports = { createAnalyticalWorkScheduler };

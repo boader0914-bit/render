@@ -4,6 +4,7 @@ const fs = require("node:fs/promises"), path = require("node:path"), os = requir
 const { createKeywordMonthlyBundleAnalysis, KEYWORD_MONTHLY_BUNDLE_LIMITS } = require("./lib/keyword_monthly_bundle.cjs");
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createKeywordMonthlyQueryLifecycle } = require("./lib/keyword_monthly_query_lifecycle.cjs");
+const { createKeywordMonthlySavedReadService } = require("./lib/keyword_monthly_saved_read_service.cjs");
 const NOW = "2026-11-15T15:01:00.000Z", digest = value => crypto.createHash("sha256").update(value).digest("hex");
 const pointer = (extra = {}) => ({ schemaVersion: 1, generation: "a".repeat(32), catalogSha256: "b".repeat(64), catalogBytes: 321,
   publishedAt: "2026-11-15T15:00:00.000Z", ...extra });
@@ -103,15 +104,26 @@ test("HTTP absent version support, unavailable pointers and read failures fail s
   assert.equal(failed.status, 503); assert.equal(failed.body.status, "needs_verification"); assert.equal(JSON.stringify(failed.body).includes("secret"), false);
 });
 
-test("the application version wrapper bypasses the analytical lease while preserving the existing heavy wrappers", async () => {
-  const source = await fs.readFile(path.join(__dirname, "glamping_app_server.cjs"), "utf8"), declaration = source.match(/const keywordMonthlyAnalysis = Object\.freeze\(\{[\s\S]*?\n\}\);/);
-  assert.ok(declaration); let reads = 0;
-  const sentinel = { status: "available", revision: "a".repeat(64) }, context = vm.createContext({
-    keywordMonthlyPreparedAnalysis: { version: async () => { reads++; return sentinel; } },
-    runAnalyticalWork: () => { throw Error("Version notification cannot acquire the analytical lease"); }
+function applicationService(saved, overrides={}) {
+  return fs.readFile(path.join(__dirname, "glamping_app_server.cjs"), "utf8").then(source=>{
+    const declaration=source.match(/const keywordMonthlyAnalysis = createKeywordMonthlySavedReadService\(\{[\s\S]*?\n\}\);/);
+    assert.ok(declaration);
+    const forbidden=()=>{throw Error("A pointer notification cannot acquire or query allocation admission");};
+    const context=vm.createContext({createKeywordMonthlySavedReadService: options=>createKeywordMonthlySavedReadService({...options,runMemoryAdmission:forbidden}),
+      keywordMonthlyPreparedAnalysis:{options:forbidden,readPrepared:forbidden,analyze:forbidden,...saved},
+      runAnalyticalWork:forbidden,analyticalWork:{acquireSavedReadPermit:forbidden},keywordMonthlyReadAdmission:forbidden,
+      keywordMonthlyRequestDiagnostics:null,...overrides});
+    return new vm.Script(declaration[0]+"\nkeywordMonthlyAnalysis").runInContext(context);
   });
-  const service = new vm.Script(declaration[0] + "\nkeywordMonthlyAnalysis").runInContext(context);
-  assert.equal(await service.version(), sentinel); assert.equal(reads, 1); assert.equal(typeof service.options, "function"); assert.equal(typeof service.analyze, "function");
+}
+
+test("the application factory version bypasses heavy leases, saved permits, maintenance admission and result allocation", async()=>{
+  let reads=0;const sentinel={status:"available",revision:"a".repeat(64)};
+  const service=await applicationService({version:async()=>{reads++;return sentinel;}});
+  assert.equal(await service.version(),sentinel);assert.equal(reads,1);
+  assert.equal(typeof service.options,"function");assert.equal(typeof service.analyze,"function");assert.equal(typeof service.readPrepared,"function");
+  assert.equal(service.status().started,0);assert.equal(service.status().cohorts,0);
+  await assert.rejects((await applicationService({})).version(),{code:"KEYWORD_MONTHLY_VERSION_UNAVAILABLE"});
 });
 
 function dataHttpFixture({ readPrepared = async input => ({ status: "available", mode: "prepared", request: input }),
@@ -161,11 +173,17 @@ test("identical automatic requests share a flight but never join an unfinished m
   finishManual({ status: "available", mode: "analyze" }); assert.equal((await first).body.mode, "analyze"); assert.equal(f.queryLifecycle.status().inFlight, 0);
 });
 
-test("the application prepared-only wrapper keeps the existing allocation lease and never calls the analysis fallback", async () => {
-  const source = await fs.readFile(path.join(__dirname, "glamping_app_server.cjs"), "utf8"), declaration = source.match(/const keywordMonthlyAnalysis = Object\.freeze\(\{[\s\S]*?\n\}\);/);
-  assert.ok(declaration); const calls = [], input = { keyword: "fixture", month: "2026-11" }, sentinel = { status: "missing", snapshot: null };
-  const context = vm.createContext({ keywordMonthlyPreparedAnalysis: { readPrepared: async value => { assert.equal(value, input); calls.push("prepared"); return sentinel; },
-    analyze: () => { throw Error("No legacy analysis"); } }, runAnalyticalWork: (operation, options) => { calls.push(options.kind); return operation(); } });
-  const service = new vm.Script(declaration[0] + "\nkeywordMonthlyAnalysis").runInContext(context);
-  assert.equal(await service.readPrepared(input), sentinel); assert.deepEqual(calls, ["keyword_monthly_analysis", "prepared"]);
+test("the application prepared-only factory keeps the saved permit through response ownership and never calls the legacy fallback",async()=>{
+  const calls=[],input={keyword:"fixture",month:"2026-11"},sentinel={status:"missing",snapshot:null,preparedResult:{status:"not_prepared"}};
+  let leased=false;
+  const service=await applicationService({readPrepared:async value=>{assert.equal(value,input);assert.equal(leased,true);calls.push("prepared");return sentinel;}},
+    {createKeywordMonthlySavedReadService:options=>createKeywordMonthlySavedReadService({...options,runMemoryAdmission:operation=>operation()}),
+      keywordMonthlyReadAdmission:async()=>{},analyticalWork:{acquireSavedReadPermit:()=>{
+        assert.equal(leased,false);leased=true;calls.push("saved-permit");return {acceptsNewResponses:()=>true,run:operation=>operation(),release:()=>{assert.equal(leased,true);leased=false;calls.push("saved-release");}};
+      }}});
+  const result=await service.withResponse("prepared:fixture",{},()=>service.withProducer(async()=>{
+    try{return await service.readPrepared(input);}finally{service.lifecycleOptions().onOperationSettled();}
+  }));
+  assert.equal(result,sentinel);assert.equal(leased,false);assert.deepEqual(calls,["saved-permit","prepared","saved-release"]);
+  assert.equal(service.status().fallback,0);assert.equal(service.status().cohorts,0);
 });

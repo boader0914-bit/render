@@ -1450,3 +1450,128 @@ test("identity review disclosure survives F5 with the same applied company/month
   const again = mockUi({ storage, session, request }); await again.ready; await again.controller.open();
   assert.deepEqual(clone(again.controller.state().selection), before); assert.equal(again.find("kma-identity-review")[0].parentNode.open, true); assert.equal(again.calls.length, 2);
 });
+
+test("request diagnostics keep the existing twenty-second deadline and contain no request identity or response text", async () => {
+  const ui = mockUi(); await ui.controller.open(); const diagnostic = clone(ui.controller.state().requestDiagnostic);
+  assert.equal(diagnostic.kind, "data"); assert.equal(diagnostic.stage, "body"); assert.equal(diagnostic.outcome, "complete"); assert.equal(diagnostic.deadlineMs, 20000);
+  assert.equal(diagnostic.httpStatus, 200); assert.equal(diagnostic.headersReceived, true); assert.equal(diagnostic.bodyDecoded, true); assert.equal(diagnostic.code, null); assert.deepEqual(diagnostic.details, []);
+  assert.ok(Number.isSafeInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 0); assert.doesNotMatch(JSON.stringify(diagnostic), /\/api|keyword|company|경남|token|cookie|secret|payload/i);
+  assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true); ui.controller.destroy();
+});
+
+for (const kind of ["options", "data", "body"]) test(`an actual request deadline identifies ${kind} waiting while preserving the same saved values`, async () => {
+  const gate = deferred(); let waiting = false;
+  const ui = mockUi({ requestTimeoutMs: 15, request: async url => {
+    const options = url.endsWith("/options"), value = options ? optionsFixture() : payloadFixture();
+    if (waiting && kind === "options" && options || waiting && kind === "data" && !options) return gate.promise;
+    if (waiting && kind === "body" && !options) return { ...jsonResponse(value), json: async () => gate.promise };
+    return jsonResponse(value);
+  } });
+  await ui.controller.open(); const selection = clone(ui.controller.state().selection); waiting = true;
+  await (kind === "options" ? ui.controller.open(selection) : ui.controller.refresh());
+  const state = ui.controller.state(), diagnostic = clone(state.requestDiagnostic), node = ui.find("kma-query-diagnostic")[0];
+  assert.equal(state.errorCode, "KEYWORD_MONTHLY_TIMEOUT"); assert.equal(state.showingStored, true); assert.equal(state.loading, false); assert.match(ui.text(), /400원/); assert.deepEqual(clone(state.selection), selection);
+  assert.equal(diagnostic.kind, kind === "options" ? "options" : "data"); assert.equal(diagnostic.stage, kind); assert.equal(diagnostic.outcome, "timed_out"); assert.equal(diagnostic.code, "KEYWORD_MONTHLY_TIMEOUT");
+  assert.equal(diagnostic.deadlineMs, 15); assert.ok(Number.isSafeInteger(diagnostic.elapsedMs) && diagnostic.elapsedMs >= 10 && diagnostic.elapsedMs < 5000);
+  assert.equal(diagnostic.headersReceived, kind === "body"); assert.equal(diagnostic.bodyDecoded, false); assert.equal(diagnostic.httpStatus, kind === "body" ? 200 : null); assert.equal(node.hidden, false);
+  assert.equal(node.dataset.requestStage, kind); assert.equal(node.dataset.deadlineMs, "15"); assert.match(node.textContent, kind === "body" ? /본문 수신·해석.*HTTP 200.*JSON 수신 미완료/ : /응답 대기.*HTTP 응답 미수신/);
+  assert.equal(ui.calls.at(-1).settings.signal.aborted, true); const calls = ui.calls.length;
+  gate.resolve(kind === "body" ? payloadFixture() : jsonResponse(kind === "options" ? optionsFixture() : payloadFixture())); await settle();
+  assert.equal(ui.calls.length, calls); assert.deepEqual(clone(ui.controller.state().requestDiagnostic), diagnostic); ui.controller.destroy();
+});
+
+for (const code of ["KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE", "KEYWORD_MONTHLY_PREPARED_CONVERSION_UNVERIFIED"]) for (const kind of ["options", "data"]) test(`${kind} ${code} explains the protection without altering the saved view or retrying`, async () => {
+  const value = dashboardPayload(43); let held = false;
+  const ui = mockUi({ request: async url => held && (url.endsWith("/options") ? kind === "options" : kind === "data")
+    ? jsonResponse({ code, message: "SECRET_RAW_FAILURE", diagnostics: ["KEYWORD_MONTHLY_MEMORY_DEFERRED", "<private>"], ownerToken: "SECRET_OWNER", path: "/var/data/SECRET" }, 503)
+    : jsonResponse(url.endsWith("/options") ? optionsFixture() : value) });
+  await ui.controller.open(); ui.field("companySearch").value = "비교"; await ui.field("companySearch").fire("input"); await ui.button("다음 업체").fire("click"); await ui.find("kma-company-row")[5].fire("click"); await ui.button("데이유즈").fire("click");
+  ui.field("cutoffDate").value = "2026-10-29"; await ui.field("cutoffDate").fire("input"); const before = clone(ui.controller.state()); held = true;
+  await (kind === "options" ? ui.controller.open(clone(before.selection)) : ui.controller.refresh()); const after = clone(ui.controller.state()), diagnostic = after.requestDiagnostic;
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.showingStored, true); assert.equal(after.benchmarkCompanyId, "company-25"); assert.equal(after.listPage, 2); assert.ok(ui.find("kma-metric").length > 0);
+  assert.equal(diagnostic.kind, kind); assert.equal(diagnostic.stage, "body"); assert.equal(diagnostic.outcome, "failed"); assert.equal(diagnostic.httpStatus, 503); assert.equal(diagnostic.bodyDecoded, true); assert.ok(diagnostic.details.includes(code));
+  assert.match(ui.find("kma-error")[0].textContent, /저장 집계 변환 작업/); assert.ok(ui.find("kma-error")[0].textContent.includes(code)); assert.doesNotMatch(ui.text(), /SECRET|private|\/var\/data/); assert.doesNotMatch(JSON.stringify(diagnostic), /SECRET|private|\/var\/data|ownerToken/);
+  const count = ui.calls.length; ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, count); ui.controller.destroy();
+});
+
+test("obsolete failure diagnostics cannot replace a newer successful selection and authentication clears diagnostics", async () => {
+  const gate = deferred(); let dataReads = 0, auth = false;
+  const ui = mockUi({ request: async url => auth ? htmlFailure(401) : url.endsWith("/options") ? jsonResponse(optionsFixture()) : ++dataReads === 2 ? gate.promise : jsonResponse(payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) });
+  await ui.controller.open(); const old = ui.controller.refresh(); await settle(); ui.field("keyword").value = OTHER; await ui.field("keyword").fire("change"); await ui.apply();
+  const latest = clone(ui.controller.state().requestDiagnostic); gate.resolve(jsonResponse({ code: "KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE" }, 503)); await old;
+  assert.equal(ui.controller.state().selection.keyword, OTHER); assert.equal(ui.controller.state().errorCode, ""); assert.deepEqual(clone(ui.controller.state().requestDiagnostic), latest); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true);
+  auth = true; await ui.controller.refresh(); assert.equal(ui.controller.state().requestDiagnostic, null); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_AUTH_REQUIRED"); assert.equal(ui.find("kma-query-diagnostic")[0].textContent, ""); assert.equal(ui.find("kma-query-diagnostic")[0].dataset.requestStage, ""); ui.controller.destroy();
+});
+
+test("invalid submitted conditions replace an earlier timeout code and clear its diagnostic without another GET", async () => {
+  const gate = deferred(); let waiting = false;
+  const ui = mockUi({ requestTimeoutMs: 15, request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : waiting ? gate.promise : jsonResponse(payloadFixture()) });
+  await ui.controller.open(); waiting = true; await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_TIMEOUT"); const count = ui.calls.length;
+  ui.field("month").value = "2027-01"; await ui.field("month").fire("change"); await ui.apply(); assert.equal(ui.calls.length, count); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_SELECTION_INVALID"); assert.equal(ui.controller.state().requestDiagnostic, null); assert.match(ui.find("kma-error")[0].textContent, /실제 관측 숙박월/); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true);
+  gate.resolve(jsonResponse(payloadFixture())); await settle(); ui.controller.destroy();
+});
+
+test("only the bounded opaque trace header is retained and raw timing or response headers are never copied", async () => {
+  for (const candidate of [null, "", "A".repeat(24), "a".repeat(25), "SECRET_RAW_HEADER", "a".repeat(24)]) {
+    const ui = mockUi({ request: async url => url.endsWith("/options") ? jsonResponse(optionsFixture()) : { ...jsonResponse({ code: "KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE" }, 503),
+      headers: { get(name) { return name.toLowerCase() === "content-type" ? "application/json" : name.toLowerCase() === "x-keyword-monthly-trace" ? candidate : "SECRET_RAW_TIMING_OR_HEADER"; } } } });
+    await ui.controller.open(); const diagnostic = clone(ui.controller.state().requestDiagnostic), valid = candidate === "a".repeat(24);
+    assert.equal(diagnostic.traceId, valid ? candidate : null); assert.equal(ui.find("kma-query-diagnostic")[0].dataset.traceId, valid ? candidate : ""); assert.doesNotMatch(JSON.stringify(diagnostic), /SECRET|server-timing|"headers"|"timing"/i);
+    ui.controller.clear(); assert.equal(ui.controller.state().requestDiagnostic, null); assert.equal(ui.find("kma-query-diagnostic")[0].dataset.traceId, ""); ui.controller.destroy();
+  }
+});
+
+for (const kind of ["options", "data"]) test(`${kind} analytical protection preserves the exact saved view and requires an explicit retry`, async () => {
+  const code = "KEYWORD_MONTHLY_ANALYTICAL_BUSY", value = dashboardPayload(43); let held = false;
+  const ui = mockUi({ request: async url => held && (url.endsWith("/options") ? kind === "options" : kind === "data")
+    ? jsonResponse({ code, activeKind: "SECRET_INTERNAL_OWNER", message: "SECRET_RAW_FAILURE" }, 503) : jsonResponse(url.endsWith("/options") ? optionsFixture() : value) });
+  await ui.controller.open(); ui.field("companySearch").value = "비교"; await ui.field("companySearch").fire("input"); await ui.button("다음 업체").fire("click"); await ui.find("kma-company-row")[5].fire("click"); await ui.button("데이유즈").fire("click");
+  ui.field("cutoffDate").value = "2026-10-29"; await ui.field("cutoffDate").fire("input"); const before = clone(ui.controller.state()); held = true;
+  await (kind === "options" ? ui.controller.open(clone(before.selection)) : ui.controller.refresh()); const after = clone(ui.controller.state());
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.showingStored, true); assert.equal(after.errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.equal(after.requestDiagnostic.kind, kind); assert.equal(after.requestDiagnostic.outcome, "failed"); assert.equal(after.requestDiagnostic.httpStatus, 503); assert.equal(after.requestDiagnostic.deadlineMs, 20000); assert.ok(after.requestDiagnostic.details.includes(code));
+  assert.match(ui.find("kma-error")[0].textContent, /대형 분석 작업의 보호 단계/); assert.match(ui.find("kma-error")[0].textContent, /기존 저장 자료를 유지/); assert.doesNotMatch(ui.text(), /SECRET|INTERNAL_OWNER/); assert.doesNotMatch(JSON.stringify(after.requestDiagnostic), /SECRET|activeKind/);
+  const calls = ui.calls.length; ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, calls);
+  held = false; await ui.controller.open(clone(before.selection)); const restored = clone(ui.controller.state()); assert.equal(restored.errorCode, ""); assert.equal(restored.showingStored, false); assert.equal(restored.requestDiagnostic.outcome, "complete");
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(restored[key], before[key], key); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true); ui.controller.destroy();
+});
+
+test("merged automatic version timeout diagnoses its own bounded controller and deadline without changing financial values", async t => {
+  const gate = deferred(); const ui = await automaticUi(t, { timeout: 100, handle: ({ kind }) => kind === "version" ? gate.promise : undefined });
+  const baseline = automaticVisibleState(ui); await ui.clock.advance(250); await ui.clock.advance(100);
+  const value = clone(ui.controller.state().requestDiagnostic);
+  assert.equal(value.kind, "version"); assert.equal(value.stage, "version"); assert.equal(value.deadlineMs, 100); assert.equal(value.outcome, "timed_out");
+  assert.equal(value.headersReceived, false); assert.equal(value.httpStatus, null); assert.match(ui.find("kma-query-diagnostic")[0].textContent, /저장 버전.*제한 0.1초/);
+  assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(ui.controller.state().automatic.revision, AUTO_A);
+  gate.resolve(jsonResponse(automaticVersion(AUTO_B))); await settle(); assert.deepEqual(clone(ui.controller.state().requestDiagnostic), value);
+});
+
+test("merged automatic prepared-only503 preserves the saved view and records only safe data protection diagnostics", async t => {
+  const ui = await automaticUi(t, { handle: ({ kind, source }) => kind === "data" && source.revision === AUTO_B ? { ...jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY", message: "SECRET_SERVER_BODY" }, 503),
+    headers: { get: name => name.toLowerCase() === "content-type" ? "application/json" : name.toLowerCase() === "x-keyword-monthly-trace" ? "a".repeat(24) : "SECRET_HEADER" } } : undefined });
+  const baseline = automaticVisibleState(ui); ui.source.revision = AUTO_B; await ui.clock.advance(250);
+  const state = ui.controller.state(), diagnostic = clone(state.requestDiagnostic);
+  assert.deepEqual(automaticVisibleState(ui), baseline); assert.equal(state.automatic.revision, AUTO_A); assert.equal(state.showingStored, true);
+  assert.equal(diagnostic.kind, "data"); assert.equal(diagnostic.stage, "body"); assert.equal(diagnostic.deadlineMs, 20000); assert.equal(diagnostic.httpStatus, 503);
+  assert.equal(diagnostic.outcome, "failed"); assert.equal(diagnostic.traceId, "a".repeat(24)); assert.ok(diagnostic.details.includes("KEYWORD_MONTHLY_ANALYTICAL_BUSY"));
+  assert.equal(ui.calls.at(-1).settings.headers["X-Keyword-Monthly-Prepared-Only"], "1"); assert.doesNotMatch(JSON.stringify(diagnostic), /SECRET|\/api|"keyword"|"company"/i);
+});
+
+test("merged late automatic failure cannot overwrite a newer manual request diagnostic", async t => {
+  const gate = deferred(); const ui = await automaticUi(t, { handle: ({ kind, source }) => kind === "data" && source.revision === AUTO_B ? gate.promise : undefined });
+  ui.source.revision = AUTO_B; await ui.clock.advance(250); ui.source.revision = AUTO_C;
+  await ui.controller.open({ keyword: OTHER, month: "2026-10", cutoffDate: "2026-10-30", cutoffMode: "explicit" }); const latest = clone(ui.controller.state().requestDiagnostic);
+  gate.resolve(jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY", message: "SECRET_OLD_ERROR" }, 503)); await settle();
+  assert.deepEqual(clone(ui.controller.state().requestDiagnostic), latest); assert.equal(latest.outcome, "complete"); assert.equal(ui.controller.state().selection.keyword, OTHER);
+  assert.equal(ui.controller.state().errorCode, ""); assert.doesNotMatch(ui.text(), /SECRET_OLD_ERROR/);
+});
+
+test("merged healthy version checks retain a manual failure diagnostic until its explicit financial retry succeeds", async t => {
+  let held = false; const ui = await automaticUi(t, { handle: ({ kind }) => held && kind === "data" ? jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY" }, 503) : undefined });
+  held = true; await ui.controller.refresh(); const failed = clone(ui.controller.state().requestDiagnostic); await ui.clock.advance(250);
+  assert.deepEqual(clone(ui.controller.state().requestDiagnostic), failed); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503");
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 2 }); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, false);
+  held = false; await ui.controller.refresh(); assert.equal(ui.controller.state().errorCode, ""); assert.equal(ui.controller.state().requestDiagnostic.outcome, "complete");
+  assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true);
+});
