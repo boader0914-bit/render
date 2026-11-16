@@ -13,7 +13,7 @@ const gate=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});ret
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let n=0;n<100;n++){if(fn())return;await turn();}assert.fail("bounded synthetic progress did not settle");}
 const scope={kind:"industry-build",priority:"background"};
-function clock(){let at=0;const timers=new Map();return {now:()=>at,setTimeoutImpl(fn,ms){const h={unref(){}};timers.set(h,{fn,due:at+ms,ms});return h;},clearTimeoutImpl:h=>timers.delete(h),
+function clock(){let at=0;const timers=new Map();return {now:()=>at,set(ms){at=ms;},jump(ms){at+=ms;},setTimeoutImpl(fn,ms){const h={unref(){}};timers.set(h,{fn,due:at+ms,ms});return h;},clearTimeoutImpl:h=>timers.delete(h),
   async advance(ms){at+=ms;for(const [h,t]of [...timers])if(t.due<=at){timers.delete(h);t.fn();}for(let n=0;n<8;n++)await turn();},timers};}
 function response(){const res=new EventEmitter();res.setHeader=()=>{};res.writeHead=status=>{res.status=status;};res.end=value=>{res.body=value;res.writableEnded=true;};res.finish=()=>res.emit("finish");res.destroy=()=>{res.destroyed=true;res.emit("close");};return res;}
 const body=res=>Buffer.isBuffer(res.body)?JSON.parse(res.body):res.body;
@@ -179,4 +179,45 @@ test("pointer-only version notifications bypass both a queued and an active indu
   }
   assert.equal(versions,2);read.resolve();await until(()=>automatic.res.body);assert.equal(body(automatic.res).snapshot.value,null);
   automatic.res.finish();await automatic.done;await bg.resumed.promise;bg.finish.resolve();await bg.done;assert.equal(s.calls.legacy,0);await s.scheduler.close();
+
+});
+
+test("absolute admission expiry rejects a late checkpoint even when the event loop has not executed its timer callback",async()=>{
+  for(const elapsed of [1500,2000]){
+    const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;
+    const ready=permit.run(()=>{reads++;return {};});const rejection=assert.rejects(ready,{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
+    c.jump(elapsed);assert.equal(c.timers.size,1,"the deadline callback has deliberately not run");assert.equal(permit.acceptsNewResponses(),false);bg.proceed.resolve();await rejection;
+    assert.equal(reads,0);assert.equal(scheduler.status().savedRead.active,false);assert.equal(scheduler.status().savedRead.checkpointPending,false);assert.equal(scheduler.status().queuedCheckpointReads,0);
+    permit.release();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();assert.equal(c.timers.size,0);
+  }
+});
+
+test("a loan admitted before the absolute deadline remains owned after the clock passes it",async()=>{
+  const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let resumed=false;
+  bg.resumed.promise.then(()=>{resumed=true;});const ready=permit.run(()=>({saved:true}));c.jump(1499);bg.proceed.resolve();assert.deepEqual(await ready,{saved:true});
+  c.jump(2000);assert.equal(permit.acceptsNewResponses(),true);assert.equal(scheduler.status().savedRead.active,true);assert.equal(resumed,false);assert.equal(c.timers.size,0);
+  permit.release();await permit.waitForRelease();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();
+});
+
+test("holding a reservation past its absolute deadline cannot later start or enqueue a loan",async()=>{
+  const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;c.jump(2000);
+  await assert.rejects(permit.run(()=>{reads++;}),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});assert.equal(reads,0);assert.equal(c.timers.size,0);assert.equal(scheduler.status().queuedCheckpointReads,0);assert.equal(scheduler.status().savedRead.checkpointPending,false);
+  permit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();
+});
+
+test("an invalid or retreating admission clock fails closed instead of becoming a zero-duration success",async()=>{
+  for(const invalid of [NaN,-1]){
+    const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;c.set(invalid);
+    await assert.rejects(permit.run(()=>{reads++;}),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});assert.equal(reads,0);assert.equal(scheduler.status().savedRead.checkpointPending,false);
+    c.set(0);permit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();
+  }
+});
+
+test("an invalid observed queue clock cannot reopen the same reservation after time recovers",async()=>{
+  for(const invalid of [NaN,499]){
+    const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;
+    const ready=permit.run(()=>{reads++;return {};});const rejection=assert.rejects(ready,{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});c.set(500);assert.equal(permit.acceptsNewResponses(),true);
+    c.set(invalid);assert.equal(permit.acceptsNewResponses(),false);c.set(500);bg.proceed.resolve();await rejection;assert.equal(reads,0);assert.equal(scheduler.status().savedRead.checkpointPending,false);
+    permit.release();await bg.resumed.promise;bg.finish.resolve();await bg.done;await scheduler.close();
+  }
 });
