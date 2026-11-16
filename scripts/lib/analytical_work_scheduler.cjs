@@ -508,6 +508,15 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     // checkpoint it needs to reach. Only the actual loan claims the permit.
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
       controller, priority: "foreground", kind: "keyword_monthly_saved_read", running: false, invoked: false };
+    let reservedAt;
+    try { reservedAt = timestamp(); } catch { throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"); }
+    const admitUntil = reservedAt + savedReadCheckpointWaitMs;
+    let lastAdmissionAt = reservedAt, admissionClosed = false;
+    const admissionTime = () => {
+      if (admissionClosed) return null;
+      try { const at = timestamp(); if (at < lastAdmissionAt || at >= admitUntil) { admissionClosed = true; return null; } lastAdmissionAt = at; return at; }
+      catch { admissionClosed = true; return null; }
+    };
     savedReadReservation = token;
     let admissionTimer = null, loan = null, began = false, released = false, resolveRelease;
     const releaseGate = new Promise(resolve => { resolveRelease = resolve; });
@@ -515,22 +524,26 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     const sameOwner = () => active === owner && owner.active && owner.kind === "industry-build"
       && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0;
     return Object.freeze({
-      acceptsNewResponses: () => token.active && !closed && sameOwner() && !owner.controller.signal.aborted,
+      acceptsNewResponses: () => token.active && !closed && sameOwner() && !owner.controller.signal.aborted
+        && (began || admissionTime() !== null),
       run(operation) {
         if (!token.active || token.invoked || typeof operation !== "function") return Promise.reject(fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_INVALID"));
         token.invoked = true;
         let resolveReady, rejectReady;
         const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
         try {
-          admissionTimer = setTimeoutImpl(() => { if (!began) controller.abort(); }, savedReadCheckpointWaitMs);
+          const admittedAt = admissionTime();
+          if (admittedAt === null) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+          admissionTimer = setTimeoutImpl(() => { if (!began) controller.abort(); }, Math.max(1, admitUntil - admittedAt));
           admissionTimer?.unref?.();
           loan = runCheckpointRead(async info => {
             // Generic proof loans remain unchanged. This private capability
             // can start only under the exact eligible industry owner captured
-            // at reservation time, never a later owner or an atomic section.
+            // at reservation time, never a later owner, expired reservation or
+            // atomic section. A delayed timer is not admission authority.
             const borrower = context.getStore();
             if (!sameOwner() || !borrower?.checkpointRead || borrower.ownerId !== owner.id
-              || closed || externalChecking || maintenance.paused || controller.signal.aborted)
+              || closed || externalChecking || maintenance.paused || controller.signal.aborted || admissionTime() === null)
               throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
             began = true; clearAdmissionTimer();
             if (savedReadReservation !== token || savedReadPermit) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
