@@ -7,7 +7,7 @@ const source=fs.readFileSync(path.join(__dirname,"glamping_app_server.cjs"),"utf
 const entry=source.lastIndexOf('\napplicationStartup.phase("seed_outputs"'),startup=source.slice(entry);
 assert.ok(entry>0&&startup.includes("server.listen(PORT, HOST"));
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-const POLICY_SHA="7eb899d12bb6becb3be52290b482c79a58f3a89cb22c294e3189828dd593cf6a";
+const POLICY_SHA="8bd1fbe886fe769635f0ff46333e39b5e3ebfeb0b555a411d467a79ceebce57a";
 async function fixture(t,{port=0,coordination=Promise.resolve(),retire=null,loggerError=false,platform="linux",dataDir="/var/data",codeRoot="/opt/render/project/src"}={}){
   const server=http.createServer(),logs=[],calls=[],retirementLogs=[],retirementInputs=[];let ownTimer=null,cleared=0;
   const life=createApplicationStartupLifetime({onLog:event=>logs.push(event),setIntervalImpl:(callback,ms)=>{ownTimer=setInterval(callback,ms);return ownTimer;},clearIntervalImpl:timer=>{assert.equal(timer,ownTimer);clearInterval(timer);cleared++;}});

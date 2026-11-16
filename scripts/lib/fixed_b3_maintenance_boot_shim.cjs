@@ -7,6 +7,17 @@ const SELF=BASE+"/fixed_b3_maintenance_boot_shim.cjs",HELPER=BASE+"/archive-revi
 const OP="ea380222-d4db-46f4-a924-bc20bee7bdc6",AUDIT=DATA+"/keyword_monthly_incremental/maintenance-retirements/"+OP,GIT="/usr/bin/git",SHA=/^[a-f0-9]{64}$/;
 const hash=b=>c.createHash("sha256").update(b).digest("hex"),exact=(v,keys)=>v&&typeof v==="object"&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
 const need=(v,code)=>{if(!v)throw Object.assign(new Error(code),{code});},identity=s=>["dev","ino","size","mtimeNs","ctimeNs","nlink","uid","gid","mode"].map(k=>String(s[k])).join(":");
+function parentModeAllowed(at,s){
+  const uid=Number(s.uid),gid=Number(s.gid),mode=Number(s.mode)&0o7777;
+  if(![0,1000].includes(uid))return false;
+  // Reviewed Render chain: sticky ownership protects the existing project
+  // entry from other UIDs. Its root-owned parent and direct child stay exact.
+  if(at==="/opt")return uid===0&&gid===0&&mode===0o755;
+  if(at==="/opt/render")return uid===1000&&gid===1000&&mode===0o1777;
+  if(at==="/opt/render/project")return uid===1000&&gid===1000&&mode===0o755;
+  const shared=at===DATA&&uid===0&&gid===1000&&mode===0o2775;
+  return !(mode&0o002)&&(!(mode&0o020)||shared)&&!(mode&0o5000);
+}
 async function runFixedB3BootRetirement({dataDir,codeRoot,policyPath,policySha256}={},dependencies={}){
   const fixture=dependencies.fixture===true;
   need(fixture||Object.keys(dependencies).length===0,"B3_BOOT_FIXTURE_REQUIRED");
@@ -21,9 +32,8 @@ async function runFixedB3BootRetirement({dataDir,codeRoot,policyPath,policySha25
     for(const part of file.slice(1).split("/").slice(0,-1)){
       at=p.join(at,part);const s=io.lstatSync(at,{bigint:true}),mode=Number(s.mode)&0o7777;
       need(s.isDirectory()&&!s.isSymbolicLink()&&io.realpathSync(at)===at&&(Number(s.uid)===0||Number(s.uid)===1000),"B3_BOOT_PARENT");
-      const shared=at===DATA&&Number(s.uid)===0&&Number(s.gid)===1000&&mode===0o2775;
-      need(!(mode&0o002)&&(!(mode&0o020)||shared)&&!(mode&0o5000),"B3_BOOT_PARENT_MODE");
-      const stamp=["dev","ino","uid","gid","mode"].map(k=>String(s[k])).join(":");need(!parents.has(at)||parents.get(at)===stamp,"B3_BOOT_PARENT_CHANGED");parents.set(at,stamp);
+      need(parentModeAllowed(at,s),"B3_BOOT_PARENT_MODE");
+      const stamp=["dev","ino","uid","gid","mode","mtimeNs","ctimeNs"].map(k=>String(s[k])).join(":");need(!parents.has(at)||parents.get(at)===stamp,"B3_BOOT_PARENT_CHANGED");parents.set(at,stamp);
     }
     const s=io.lstatSync(file,{bigint:true}),size=Number(s.size),mode=Number(s.mode)&0o7777;
     need(s.isFile()&&!s.isSymbolicLink()&&Number(s.nlink)===1&&[0,1000].includes(Number(s.uid))&&!(mode&0o7022)&&io.realpathSync(file)===file,"B3_BOOT_LEAF");
@@ -61,4 +71,4 @@ async function runFixedB3BootRetirement({dataDir,codeRoot,policyPath,policySha25
   recheck();
   return {status:result.status,auditRoot:AUDIT,policySha256,completionReceiptSha256:result.status==="not_target"?null:result.completionReceiptSha256,actualCommitRuntimeAudit:audit,runtimeDeploymentId:null};
 }
-module.exports={runFixedB3BootRetirement,PATHS:Object.freeze({dataDir:DATA,codeRoot:CODE,policyPath:POLICY,self:SELF,helper:HELPER,context:CONTEXT,rename:RENAME,git:GIT,auditRoot:AUDIT})};
+module.exports={runFixedB3BootRetirement,parentModeAllowed,PATHS:Object.freeze({dataDir:DATA,codeRoot:CODE,policyPath:POLICY,self:SELF,helper:HELPER,context:CONTEXT,rename:RENAME,git:GIT,auditRoot:AUDIT})};

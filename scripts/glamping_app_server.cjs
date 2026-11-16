@@ -20915,7 +20915,7 @@ applicationStartup.phase("seed_outputs", () => seedOutputsFromRepo())
       const fixedB3Retirement = await runFixedB3BootRetirement({
         dataDir: DATA_DIR, codeRoot: ROOT,
         policyPath: path.join(ROOT, "config/reviewed-b3-maintenance-retirement-20261116.json"),
-        policySha256: "7eb899d12bb6becb3be52290b482c79a58f3a89cb22c294e3189828dd593cf6a"
+        policySha256: "8bd1fbe886fe769635f0ff46333e39b5e3ebfeb0b555a411d467a79ceebce57a"
       });
       try { console.info("application_startup_b3_retirement", JSON.stringify({ status: fixedB3Retirement.status,
         auditRoot: fixedB3Retirement.auditRoot, policySha256: fixedB3Retirement.policySha256,
