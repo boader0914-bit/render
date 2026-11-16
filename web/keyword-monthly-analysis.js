@@ -186,6 +186,8 @@
     if (code?.endsWith("WORKER_LOCKED")) return "작업 잠금 보호로 보류";
     if (code?.endsWith("COLLECTION_BUSY")) return "수집 보호·예약 간격 때문에 대기";
     if (code?.endsWith("POSTPROCESS_NOT_COMPLETE")) return "수집 자료의 DB 반영 대기";
+    if (code === "KEYWORD_RECONSTRUCT_OUTSIDE_READ_DENIED") return "읽기 격리 보호로 중단";
+    if (code === "KEYWORD_INCREMENTAL_INPUTS_CHANGED") return "집계 중 저장 입력이 변경되어 보류";
     return "사유 확인 필요";
   }
   function normalizeOptions(value = {}, today = kstDay(Date.now())) {

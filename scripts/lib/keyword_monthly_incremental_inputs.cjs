@@ -40,16 +40,21 @@ async function fileMetadata(root, relative, bounds, optionalFile = false) {
   if (path.basename(filename).toLowerCase() === "manifest.json") need(value.size <= BigInt(bounds.manifestBytes), "KEYWORD_INCREMENTAL_MANIFEST_BOUND");
   return { relative, present: true, bytes: Number(value.size), stamp: stamp(value) };
 }
-async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bounds.bytes, maxFileBytes = bounds.fileBytes } = {}) {
+async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bounds.bytes, maxFileBytes = bounds.fileBytes, directoryStamps = null } = {}) {
   const first = optionalRoot ? await optional(root, true) : await checkedPath(root, true);
   if (!first) return { present: false, files: [], directories: [], bytes: 0 };
   const files = [], directories = []; let bytes = 0;
   async function visit(directory, depth) {
     need(depth <= bounds.depth, "KEYWORD_INCREMENTAL_INPUT_DEPTH_BOUND");
     const before = await checkedPath(directory, true), relative = slash(path.relative(root, directory));
+    // Detect changed captured parents before following a newly listed path. The
+    // strict output view correctly denies unknown paths; an external inventory
+    // change is an input conflict, not an exemption from that read protection.
+    if (directoryStamps) need(same(stamp(before), directoryStamps.get(relative)), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
     need(directories.length < bounds.directories, "KEYWORD_INCREMENTAL_INPUT_DIRECTORY_BOUND");
     directories.push({ relative, stamp: stamp(before) });
     const entries = await fs.readdir(directory, { withFileTypes: true });
+    need(same(stamp(before), stamp(await checkedPath(directory, true))), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
     need(entries.length <= bounds.files + bounds.directories, "KEYWORD_INCREMENTAL_INPUT_ENTRY_BOUND");
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       need(depth + 1 <= bounds.depth, "KEYWORD_INCREMENTAL_INPUT_DEPTH_BOUND");
@@ -77,21 +82,25 @@ async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bou
   }
   return { present: true, files, directories, bytes };
 }
-async function metadataInventory({ dataDir, limits: input } = {}) {
+async function metadataInventory({ dataDir, limits: input } = {}, expectedOutputDirectories = null) {
   H.absolute(dataDir); await checkedPath(dataDir, true); const bounds = limits(input), sourceFiles = [];
+  need(expectedOutputDirectories === null || Array.isArray(expectedOutputDirectories) && expectedOutputDirectories.length > 0
+    && expectedOutputDirectories.length <= bounds.directories, "KEYWORD_INCREMENTAL_INPUT_EXPECTED_REQUIRED");
   // This is a metadata ceiling, not a copy/body-read allowance. A growing
   // authoritative history may exceed the old physical-copy chunk budget.
   const sourceBounds = { ...bounds, fileBytes: bounds.sourceMetadataBytes };
   for (const relative of SOURCES) sourceFiles.push(await fileMetadata(dataDir, relative, sourceBounds, true));
-  const outputRoot = path.join(dataDir, "outputs"), captured = await treeMetadata(outputRoot, bounds);
+  const outputRoot = path.join(dataDir, "outputs"), captured = await treeMetadata(outputRoot, bounds, {
+    directoryStamps: expectedOutputDirectories && new Map(expectedOutputDirectories.map(row => [row.relative, row.stamp])) });
   for (const row of sourceFiles) need(same(row, await fileMetadata(dataDir, row.relative, sourceBounds, true)), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   const body = { schemaVersion: 1, dataDir, sourceFiles, outputs: { root: outputRoot, files: captured.files, directories: captured.directories } };
   return { ...body, inventorySha256: digest(body), fileCount: captured.files.length, directoryCount: captured.directories.length,
     outputBytes: captured.bytes, masterBodyReads: 0, historyBodyReads: 0, outputBodyReads: 0 };
 }
 async function verifyInventory({ expected, dataDir, limits: input } = {}) {
-  need(expected?.schemaVersion === 1 && H.SHA.test(expected.inventorySha256 || "") && expected.dataDir === dataDir, "KEYWORD_INCREMENTAL_INPUT_EXPECTED_REQUIRED");
-  const fresh = await metadataInventory({ dataDir, limits: input });
+  need(expected?.schemaVersion === 1 && H.SHA.test(expected.inventorySha256 || "") && expected.dataDir === dataDir
+    && expected.outputs?.root === path.join(dataDir, "outputs") && Array.isArray(expected.outputs.directories), "KEYWORD_INCREMENTAL_INPUT_EXPECTED_REQUIRED");
+  const fresh = await metadataInventory({ dataDir, limits: input }, expected.outputs.directories);
   need(fresh.inventorySha256 === expected.inventorySha256, "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   return { preserved: true, inventorySha256: fresh.inventorySha256, fileCount: fresh.fileCount, outputBytes: fresh.outputBytes,
     masterBodyReads: 0, historyBodyReads: 0, outputBodyReads: 0 };
