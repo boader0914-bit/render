@@ -7,6 +7,7 @@ const { test } = require("node:test");
 const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { createKeywordMonthlyRequestDiagnostics } = require("./lib/keyword_monthly_request_diagnostics.cjs");
+const { createKeywordMonthlySavedReadService } = require("./lib/keyword_monthly_saved_read_service.cjs");
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web/app.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "web/index.html"), "utf8");
@@ -110,21 +111,37 @@ test("keyword view suppresses hidden KOSIS status, region reads and late paints"
   await api.loadKosisRegion("test", { refresh: true });
 });
 
-test("production prepared reads own the existing analytical lease until the full query resolves", async () => {
-  const declaration = serverSource.match(/^const keywordMonthlyAnalysis = Object\.freeze\(\{[^]*?^\}\);/m)?.[0];
-  assert.ok(declaration); let leased = false; const calls = [];
+test("production wiring uses a bounded saved permit and reacquires the exclusive lease for unprepared calculation", async () => {
+  const declaration = serverSource.match(/^const keywordMonthlyReadAdmission = [^]*?^\}\);/m)?.[0];
+  assert.ok(declaration); let leased = null, admissions = 0; const calls = [];
   const diagnostics = createKeywordMonthlyRequestDiagnostics({onLog:null});
-  const context = vm.createContext({ keywordMonthlyRequestDiagnostics:diagnostics, keywordMonthlyPreparedAnalysis: {
-    async options() { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); return "options"; },
-    async analyze(input) { assert.equal(leased, true); await new Promise(resolve => setImmediate(resolve)); assert.equal(leased, true); return input; }
-  }, async runAnalyticalWork(operation, options) { assert.equal(leased, false); assert.equal(typeof options.onTaskTiming,"function"); leased = true; calls.push(options.kind);
-    try { return await operation({timing:{queueWaitMs:0}}); }
-    finally { leased = false; options.onTaskTiming({outcome:"completed",queueWaitMs:0,leaseMs:1}); } } });
-  const service = vm.runInContext(declaration + "\nkeywordMonthlyAnalysis", context);
-  assert.equal(await diagnostics.run("options",()=>service.options()), "options"); assert.equal(leased, false);
-  const query = { keyword: "가평글램핑", month: "2026-10" }; assert.equal(await diagnostics.run("data",()=>service.analyze(query)), query); assert.equal(leased, false);
-  assert.deepEqual(calls, ["keyword_monthly_options", "keyword_monthly_analysis"]);
-  assert.ok(diagnostics.status().recent.every(record=>record.workStarted&&record.workFinished&&record.taskTimingObserved&&record.queueWaitAtStartMs===0));
+  const context = vm.createContext({ keywordMonthlyRequestDiagnostics:diagnostics, DATA_DIR:"/fixture",
+    createKeywordMonthlyHttpReadAdmission: ({readAdmission}) => async () => { assert.deepEqual(await readAdmission(),{allowed:true}); admissions++; },
+    readPreparedConversionAdmission: async ({dataDir}) => { assert.equal(dataDir,"/fixture"); return {allowed:true}; },
+    createKeywordMonthlySavedReadService: options => createKeywordMonthlySavedReadService({...options,runMemoryAdmission:operation=>operation()}),
+    analyticalWork:{acquireSavedReadPermit(){assert.equal(leased,null); leased="saved"; let running=false;
+      return {acceptsNewResponses:()=>true, async run(operation){running=true;try{return await operation({timing:{queueWaitMs:0}});}finally{running=false;}},
+        release(){assert.equal(running,false);assert.equal(leased,"saved");leased=null;calls.push("saved-release");}};}},
+    keywordMonthlyPreparedAnalysis: {
+      async options() { assert.equal(leased,"saved"); await new Promise(resolve=>setImmediate(resolve)); return "options"; },
+      async readPrepared(input) { assert.equal(leased,"saved"); await new Promise(resolve=>setImmediate(resolve)); assert.equal(leased,"saved");
+        return input.cutoffDate ? {preparedResult:{status:"not_prepared"}} : input; },
+      async analyze(input) { assert.equal(leased,"global"); await new Promise(resolve=>setImmediate(resolve)); assert.equal(leased,"global"); return input; }
+    }, async runAnalyticalWork(operation, options) { assert.equal(leased,null); assert.equal(typeof options.onTaskTiming,"function"); leased="global";calls.push(options.kind);
+      try{return await operation({timing:{queueWaitMs:0}});}finally{leased=null;options.onTaskTiming({outcome:"completed",queueWaitMs:0,leaseMs:1});} }
+  });
+  const service=vm.runInContext(declaration+"\nkeywordMonthlyAnalysis",context);
+  const query=(kind,input)=>diagnostics.run(kind,()=>service.withResponse(kind,{},()=>service.withProducer(async()=>{
+    try{return await (kind==="options"?service.options():service.analyze(input));}finally{service.lifecycleOptions().onOperationSettled();}
+  })));
+  assert.equal(await query("options"),"options");assert.equal(leased,null);
+  const prepared={keyword:"가평글램핑",month:"2026-10"};assert.equal(await query("data",prepared),prepared);assert.equal(leased,null);
+  const unprepared={...prepared,cutoffDate:"2026-10-29"};assert.equal(await query("data",unprepared),unprepared);assert.equal(leased,null);
+  assert.deepEqual(calls,["saved-release","saved-release","saved-release","keyword_monthly_analysis"]);
+  assert.ok(admissions>=9);assert.equal(service.status().active,false);assert.equal(service.status().cohorts,0);
+  assert.ok(diagnostics.status().recent.every(record=>record.workStarted&&record.workFinished&&record.queueWaitAtStartMs===0));
+  assert.equal(diagnostics.status().recent.at(-1).taskTimingObserved,true);
+  assert.match(serverSource,/withSavedReadWindow: operation => analyticalWork\.withSavedReadWindow\(operation\)/);
 });
 test("Git-normalized collection, pacing, protection and held runtime sources remain at approved release", () => {
   const protectedFiles = ["scripts/collection_rotation_scheduler.cjs", "scripts/daily_keyword_collection_scheduler.cjs",

@@ -19,7 +19,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   const assertReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission});
   const reply = (res,status,body) => { requestDiagnostics.response(res,status,body?.code); return send(res,status,body); };
-  async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal}={}) {
+  async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal,trackSavedFlight=false}={}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     const onClose = () => { if (!res.writableEnded) controller.abort(); };
@@ -27,24 +27,29 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     // request abort or response disconnect ends this caller's read lifetime.
     req.once?.("aborted", onAbort); res.once?.("close", onClose);signal?.addEventListener("abort",onAbort,{once:true});
     if (req.aborted || res.destroyed && !res.writableEnded || signal?.aborted) controller.abort();
-    try { return await lifecycle.run(identity, operation, { signal: controller.signal }); }
+    try { return await lifecycle.run(identity, operation, { signal: controller.signal,
+      ...(trackSavedFlight&&typeof service.lifecycleOptions==="function"?service.lifecycleOptions():{}) }); }
     finally { req.removeListener?.("aborted", onAbort); res.removeListener?.("close", onClose);signal?.removeEventListener("abort",onAbort); }
   }
   async function deliver(req,res,identity,operation,{statusRead=false}={}) {
-    return (statusRead?statusResponseBudget:responseBudget).run(res,async({signal,maxResponseBytes,nativeResponse})=>{
-      const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle}));
+    const produce=async({signal,maxResponseBytes,nativeResponse})=>{
+      const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle,trackSavedFlight:!statusRead}));
       if(req.aborted||res.destroyed||signal?.aborted)return;
       let body=result.body;
       if(nativeResponse){
         try { body=await requestDiagnostics.measure("serialize",()=>runKeywordMonthlyMemoryAdmission(()=>boundedJsonBuffer(body,maxResponseBytes))); }
         catch(error){if(error?.code==="COMPANY_RESPONSE_TOO_LARGE")error.code="KEYWORD_MONTHLY_RESPONSE_TOO_LARGE";throw error;}
       }
+      if(!statusRead&&typeof service.beforeResponse==="function")await service.beforeResponse();
       if(req.aborted||res.destroyed||signal?.aborted)return;
       // Native serialization deliberately keeps the already safe result code
       // separate from its bounded encoded buffer for numeric diagnostics.
       requestDiagnostics.response(res,result.http,result.body?.code);
       send(res,result.http,body);
-    });
+    };
+    const production=()=> (statusRead?statusResponseBudget:responseBudget).run(res,context=>
+      !statusRead&&typeof service.withProducer==="function"?service.withProducer(()=>produce(context)):produce(context));
+    return !statusRead&&typeof service.withResponse==="function"?service.withResponse(identity,res,production):production();
   }
   return async function handleKeywordMonthly(req, res, url, session) {
     const base = "/api/keyword-monthly";
@@ -60,7 +65,8 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       if (url.pathname === `${base}/refresh-status` && typeof readRefreshStatus === "function") {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         await deliver(req,res,"refresh-status",async()=>({http:200,body:{...(await readRefreshStatus()),phaseDiagnostics:getAnalyticalPhaseDiagnostics().status(),
-          queryDiagnostics:queryLifecycle.status(),responseDiagnostics:responseBudget.status(),requestDiagnostics:requestDiagnostics.status(),readOnly:true,networkAttempted:false}}),{statusRead:true});return true;
+          queryDiagnostics:queryLifecycle.status(),responseDiagnostics:responseBudget.status(),requestDiagnostics:requestDiagnostics.status(),
+          ...(typeof service.status==="function"?{savedReadDiagnostics:service.status()}:{}),readOnly:true,networkAttempted:false}}),{statusRead:true});return true;
       }
       if (url.pathname === `${base}/options`) {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });

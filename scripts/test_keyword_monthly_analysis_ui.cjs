@@ -1137,3 +1137,18 @@ test("only the bounded opaque trace header is retained and raw timing or respons
     ui.controller.clear(); assert.equal(ui.controller.state().requestDiagnostic, null); assert.equal(ui.find("kma-query-diagnostic")[0].dataset.traceId, ""); ui.controller.destroy();
   }
 });
+
+for (const kind of ["options", "data"]) test(`${kind} analytical protection preserves the exact saved view and requires an explicit retry`, async () => {
+  const code = "KEYWORD_MONTHLY_ANALYTICAL_BUSY", value = dashboardPayload(43); let held = false;
+  const ui = mockUi({ request: async url => held && (url.endsWith("/options") ? kind === "options" : kind === "data")
+    ? jsonResponse({ code, activeKind: "SECRET_INTERNAL_OWNER", message: "SECRET_RAW_FAILURE" }, 503) : jsonResponse(url.endsWith("/options") ? optionsFixture() : value) });
+  await ui.controller.open(); ui.field("companySearch").value = "비교"; await ui.field("companySearch").fire("input"); await ui.button("다음 업체").fire("click"); await ui.find("kma-company-row")[5].fire("click"); await ui.button("데이유즈").fire("click");
+  ui.field("cutoffDate").value = "2026-10-29"; await ui.field("cutoffDate").fire("input"); const before = clone(ui.controller.state()); held = true;
+  await (kind === "options" ? ui.controller.open(clone(before.selection)) : ui.controller.refresh()); const after = clone(ui.controller.state());
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(after[key], before[key], key);
+  assert.equal(after.showingStored, true); assert.equal(after.errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.equal(after.requestDiagnostic.kind, kind); assert.equal(after.requestDiagnostic.outcome, "failed"); assert.equal(after.requestDiagnostic.httpStatus, 503); assert.equal(after.requestDiagnostic.deadlineMs, 20000); assert.ok(after.requestDiagnostic.details.includes(code));
+  assert.match(ui.find("kma-error")[0].textContent, /대형 분석 작업의 보호 단계/); assert.match(ui.find("kma-error")[0].textContent, /기존 저장 자료를 유지/); assert.doesNotMatch(ui.text(), /SECRET|INTERNAL_OWNER/); assert.doesNotMatch(JSON.stringify(after.requestDiagnostic), /SECRET|activeKind/);
+  const calls = ui.calls.length; ui.doc.hidden = true; ui.listeners.visibilitychange(); ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle(); assert.equal(ui.calls.length, calls);
+  held = false; await ui.controller.open(clone(before.selection)); const restored = clone(ui.controller.state()); assert.equal(restored.errorCode, ""); assert.equal(restored.showingStored, false); assert.equal(restored.requestDiagnostic.outcome, "complete");
+  for (const key of ["selection", "draft", "applied", "benchmarkCompanyId", "listQuery", "listPage", "product", "expanded"]) assert.deepEqual(restored[key], before[key], key); assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true); ui.controller.destroy();
+});

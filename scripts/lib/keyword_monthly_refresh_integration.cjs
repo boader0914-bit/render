@@ -72,9 +72,10 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
   const { dataDir, codeRoot, outputsDir = path.join(dataDir || "/", "outputs"), readPostprocess, readPostprocessList, allowsDerivedUpdates,
     isCollectionIdle = () => false, runWork, now = () => new Date(), logger = console,
     assertAnalyticalLeaseHeld = () => false,
+    withSavedReadWindow = operation => operation(),
     createQueue = createKeywordMonthlyRefresh, refresh = refreshKeywordMonthlyIncremental,
     setIntervalImpl = setInterval, clearIntervalImpl = clearInterval } = options;
-  if (!path.isAbsolute(dataDir || "") || !path.isAbsolute(codeRoot || "") || [readPostprocess, readPostprocessList, allowsDerivedUpdates, runWork].some(f => typeof f !== "function")) throw new TypeError("Keyword refresh requires explicit source and application callbacks");
+  if (!path.isAbsolute(dataDir || "") || !path.isAbsolute(codeRoot || "") || [readPostprocess, readPostprocessList, allowsDerivedUpdates, runWork,withSavedReadWindow].some(f => typeof f !== "function")) throw new TypeError("Keyword refresh requires explicit source and application callbacks");
   const namespaceSupported = path.resolve(outputsDir) === path.join(dataDir, "outputs");
   let timer = null, reconciling = null, closed = false, cleanup = null;
   const clock = () => new Date(now()).toISOString();
@@ -97,7 +98,7 @@ function createKeywordMonthlyRefreshIntegration(options = {}) {
       const watch = setIntervalImpl(() => { if (closed || !isCollectionIdle()) controller.abort(); }, 1000); watch?.unref?.();
       try {
         const result = await refresh({ dataDir, codeRoot, scratchParent: path.resolve(require("node:os").tmpdir()), mode: "live",
-        evidence, now: clock, signal: controller.signal,
+        evidence, now: clock, signal: controller.signal, withSavedReadWindow,
         canPublish: async () => { const gate = await admission(); return gate.allowed; },
         readDeltaEvidence: async runId => {
           if (!RUN.test(runId || "")) fail("KEYWORD_INCREMENTAL_DELTA_RUN_INVALID");

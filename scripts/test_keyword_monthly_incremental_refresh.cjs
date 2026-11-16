@@ -107,6 +107,34 @@ async function value(f, keyword, month) {
   const service = B.createKeywordMonthlyBundleAnalysis({ projectionDir: f.liveDir, now: () => NOW }), options = await service.options();
   return service.analyze({ keyword, month, cutoffDate: options.keywords.find(item => item.keyword === keyword).defaultCutoffs[month] });
 }
+for (const childFailure of [false,"valid"]) test("host child-await window drains before success or failure evidence is parsed: "+(childFailure||"success"),async t=>{
+  const f=await fixture(t,childFailure?{childFailure}:{}),originalExecute=f.deps.execute,originalOpen=fs.open;
+  let childSettled=false,windowOpen=false,windowExited=false,hostProofReads=0,releaseDrain,enteredDrain;
+  const drain=new Promise(resolve=>{releaseDrain=resolve;}),entered=new Promise(resolve=>{enteredDrain=resolve;});
+  const call={...f.call,withSavedReadWindow:async operation=>{
+    assert.equal(windowOpen,false);windowOpen=true;
+    try{return await operation();}finally{windowOpen=false;enteredDrain();await drain;windowExited=true;}
+  }};
+  const deps={...f.deps,execute:async(...args)=>{
+    assert.equal(windowOpen,true);
+    try{return await originalExecute(...args);}finally{childSettled=true;}
+  }};
+  fs.open=async function(file,...args){
+    if(childSettled&&["preparation-complete.json","preparation-failed.json","isolation.json","refresh-owner.json","job-input.json"].includes(path.basename(String(file)))){
+      hostProofReads++;assert.equal(windowOpen,false);assert.equal(windowExited,true,"host proof parse must await the entire saved-read drain");
+    }
+    return originalOpen.call(this,file,...args);
+  };
+  try{
+    const result=R.refreshKeywordMonthlyIncremental(call,deps).then(value=>({value}),error=>({error}));
+    await entered;assert.equal(childSettled,true);assert.equal(windowOpen,false);assert.equal(hostProofReads,0);
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(hostProofReads,0);
+    releaseDrain();const outcome=await result;
+    if(childFailure)assert.equal(outcome.error?.code,"KEYWORD_INCREMENTAL_SYNTHETIC_FAILURE");else assert.equal(outcome.value?.status,"published");
+    assert.ok(hostProofReads>0);assert.equal(windowExited,true);
+  }finally{releaseDrain();fs.open=originalOpen;}
+});
+
 test("an existing unchanged source checkpoint is checked under the owned host lease and its linkage survives publication", async t => {
   const f = await fixture(t); await f.store.initialize(); const original = await f.store.bootstrap();
   const master = await fs.readFile(path.join(f.dataDir, "company_master/companies.json")), history = await fs.readFile(path.join(f.dataDir, "history/observations.jsonl"));

@@ -25,11 +25,15 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
     if (flights.get(entry.key) === entry) flights.delete(entry.key);
     counters[failed ? "failed" : "completed"]++;
     for (const waiter of [...entry.waiters]) finishWaiter(entry, waiter, error, value, failed);
+    // A bounded resource owner may release only after this flight can no
+    // longer accept a late shared waiter. Never pass results/errors to it.
+    try { entry.onOperationSettled?.(); } catch { counters.cleanupErrors++; }
     // No result, exception, request, or response is retained by the registry.
   }
-  function run(identity, operation, { signal } = {}) {
+  function run(identity, operation, { signal, onOperationSettled } = {}) {
     if (typeof identity !== "string" || !identity || Buffer.byteLength(identity) > 8192 || typeof operation !== "function"
-      || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")) {
+      || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")
+      || onOperationSettled !== undefined && typeof onOperationSettled !== "function") {
       return Promise.reject(new TypeError("Invalid keyword read"));
     }
     if (closed) return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_CLOSED"));
@@ -40,7 +44,7 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
       if (flights.size >= maxInFlight) { counters.rejectedBusy++; return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_BUSY")); }
       const startedAt = Number(now());
       if (!Number.isFinite(startedAt)) return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_CLOCK_INVALID"));
-      entry = { key, startedAt, waiters: new Set() }; flights.set(key, entry); fresh = true;
+      entry = { key, startedAt, waiters: new Set(), onOperationSettled }; flights.set(key, entry); fresh = true;
     } else if (entry.waiters.size >= maxWaiters) {
       counters.rejectedBusy++; return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_BUSY"));
     }

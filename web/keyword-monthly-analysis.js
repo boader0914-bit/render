@@ -652,6 +652,7 @@
       KEYWORD_MONTHLY_QUERY_TIMEOUT: "저장 자료 조회 대기 시간이 초과됐습니다. 잠시 후 다시 조회해 주세요.",
       KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE: "저장 집계 변환 작업의 보호 중이라 조회를 잠시 보류했습니다. 기존 저장 자료는 유지합니다.",
       KEYWORD_MONTHLY_PREPARED_CONVERSION_UNVERIFIED: "저장 집계 변환 작업의 보호 상태를 확인하지 못해 조회를 보류했습니다. 기존 저장 자료는 유지합니다.",
+      KEYWORD_MONTHLY_ANALYTICAL_BUSY: "대형 분석 작업의 보호 단계로 저장 자료 조회를 잠시 보류했습니다. 기존 저장 자료를 유지하며 잠시 후 다시 조회해 주세요.",
       KEYWORD_MONTHLY_QUERY_BUSY: "진행 중인 조회·응답이 많아 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
       KEYWORD_MONTHLY_RESPONSE_BUSY: "진행 중인 조회·응답이 많아 저장 자료 조회를 잠시 보류했습니다. 잠시 후 다시 조회해 주세요.",
       KEYWORD_MONTHLY_RESPONSE_TOO_LARGE: "저장 자료 응답 크기가 한도를 넘어 조회를 완료하지 못했습니다.",
