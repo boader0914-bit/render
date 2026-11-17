@@ -6,6 +6,7 @@ const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./lib/
 const script = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-analysis.js"), "utf8");
 const benchmarkScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-benchmark.js"), "utf8");
 const dashboardScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-dashboard-model.js"), "utf8");
+const catalogueScript = fs.readFileSync(path.join(__dirname, "../web/keyword-monthly-catalogue-cache.js"), "utf8");
 const viewState = require("../web/admin-view-state.js");
 const NOW = "2026-10-30T03:00:00.000Z", KEYWORD = "경남글램핑", OTHER = "경남 글램핑";
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -56,21 +57,27 @@ const settle = async () => { for (let i = 0; i < 12; i++) await new Promise(reso
 const deferred = () => { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; };
 function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs,
   setTimeout: schedule = setTimeout, clearTimeout: unschedule = clearTimeout, now = () => Date.parse(NOW), storage, session, customerView = false,
-  requestAnimationFrame, cancelAnimationFrame, performance } = {}) {
+  requestAnimationFrame, cancelAnimationFrame, performance, viewport } = {}) {
   const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
+  const windowListeners = {}, windowScrolls = [];
   const window = { fetch: request, setTimeout: schedule, clearTimeout: unschedule, AbortController, sessionStorage: storage,
     requestAnimationFrame, cancelAnimationFrame, performance,
+    innerWidth: viewport?.width, scrollX: viewport?.x, scrollY: viewport?.y,
+    addEventListener(type, fn) { (windowListeners[type] ||= new Set()).add(fn); }, removeEventListener(type, fn) { windowListeners[type]?.delete(fn); },
+    scrollTo({ left, top }) { windowScrolls.push({ x: left, y: top }); this.scrollX = left; this.scrollY = top; },
     crypto: require("node:crypto").webcrypto, TextEncoder, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
   vm.runInNewContext(dashboardScript, { window });
+  vm.runInNewContext(catalogueScript, { window, Date });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
   const api = window.KeywordMonthlyAnalysis, ready = session ? api.configure(session, { customerView }) : Promise.resolve(false), controller = api.mount(parent, {
     autoStart: false, fetch: request, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs, setTimeout: schedule, clearTimeout: unschedule, now });
-  return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls,
+  return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls, window, windowScrolls, windowListeners,
+    fireWindow(type) { for (const handler of windowListeners[type] || []) handler({ type }); },
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); },
     async apply() { await this.button("저장 자료 조회").fire("click"); await settle(); } };
@@ -899,6 +906,25 @@ const liveSession = (patch = {}) => ({ authenticated: true, role: "admin", usern
   sessionCreatedAt: new Date(Date.now() - 1000).toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString(), ...patch });
 const selectionDigest = async value => require("node:crypto").createHash("sha256").update(value).digest("hex");
 
+test("optional reload position is bounded selection metadata and rejects malformed persisted shapes", async () => {
+  const session = liveSession(), storage = memorySelectionStorage(), store = uiModule.createSelectionStorage({ storage, digest: selectionDigest });
+  await store.configure(session);
+  const position = { x: 0.5, y: 418, viewportWidth: 1280 }, selection = { ...selectorFixture(), scroll: position };
+  assert.equal(store.write(selection), true); assert.deepEqual(store.read(), selection);
+  position.y = 999; assert.equal(store.read().scroll.y, 418);
+  const valid = JSON.parse(storage.getItem(SELECTION_KEY));
+  for (const scroll of [null, [], {}, { x: 0, y: 1 }, { x: 0, y: 1, viewportWidth: 1280, revenue: 1 },
+    { x: "0", y: 1, viewportWidth: 1280 }, { x: 0, y: -1, viewportWidth: 1280 }, { x: 0, y: 1000001, viewportWidth: 1280 },
+    { x: 0, y: 1, viewportWidth: 0 }, { x: 0, y: 1, viewportWidth: "1280" }]) {
+    assert.equal(store.write({ ...selectorFixture(), scroll }), false);
+    storage.setItem(SELECTION_KEY, JSON.stringify({ ...valid, selection: { ...valid.selection, scroll } }));
+    assert.equal(store.read(), null); assert.equal(storage.getItem(SELECTION_KEY), null);
+  }
+  for (const number of [NaN, Infinity, -Infinity]) assert.equal(store.write({ ...selectorFixture(), scroll: { x: 0, y: number, viewportWidth: 1280 } }), false);
+  assert.equal(store.write({ ...selectorFixture(), scroll: { x: 1000000, y: 1000000, viewportWidth: 1000000 } }), true);
+  assert.equal(store.write(selectorFixture()), true); assert.deepEqual(store.read(), selectorFixture(), "old selection schema remains readable without a position");
+});
+
 test("selection storage keeps only bounded view inputs behind an opaque authenticated session scope", async () => {
   const storage = memorySelectionStorage(), store = uiModule.createSelectionStorage({ storage, digest: selectionDigest }), session = liveSession();
   assert.equal(store.write(selectorFixture()), false); assert.equal(store.read(), null);
@@ -1190,20 +1216,20 @@ function automaticFrames() {
   };
 }
 
-test("first real version check follows normal DOM and two frames and belongs to the initial open promise", async t => {
+test("first real version follows normal DOM while two real frames remain an independent observation", async t => {
   const frames = automaticFrames(), gate = deferred();
   const ui = await automaticUi(t, { frames, interval: 30000, primeInitialVersion: false, waitForOpen: false,
     handle: ({ kind }) => kind === "version" ? gate.promise : undefined });
   let opened = false; ui.opening.then(() => { opened = true; });
   const panel = ui.find("keyword-monthly-analysis")[0];
-  assert.deepEqual(ui.counts, { version: 0, options: 1, data: 1 }); assert.equal(opened, false);
+  assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 }); assert.equal(opened, false);
   assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(panel.dataset.displayedKeyword, KEYWORD);
   assert.equal(panel.dataset.displayedStayMonth, "2026-10"); assert.equal(panel.dataset.displayedCutoffDate, "2026-10-30");
   assert.equal(panel.dataset.firstRenderMs, "0"); assert.equal(panel.dataset.navigationType, "reload");
   assert.equal(Number(panel.dataset.performanceTimeOrigin), ui.clock.now()); assert.equal(frames.pending(), 1);
-  await ui.clock.advance(16); await frames.step(); assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 1);
+  await ui.clock.advance(16); await frames.step(); assert.equal(ui.counts.version, 1); assert.equal(frames.pending(), 1);
   await ui.clock.advance(16); await frames.step(); assert.equal(ui.counts.version, 1); assert.equal(opened, false);
-  assert.equal(panel.dataset.firstFramesMs, "32"); assert.equal(panel.dataset.firstVersionStartMs, "32");
+  assert.equal(panel.dataset.firstFramesMs, "32"); assert.equal(panel.dataset.firstVersionStartMs, "0");
   assert.equal(panel.dataset.firstVersionOutcome, "running"); assert.equal(ui.controller.state().automatic.checking, true);
   const reentered = ui.controller.open(); await settle();
   assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 }, "Same-scope reentry shares the initial cycle");
@@ -1220,9 +1246,12 @@ test("first real version check follows normal DOM and two frames and belongs to 
 test("first version detects a newer publication then stages sequential prepared-only reads after the displayed result", async t => {
   const frames = automaticFrames(), gate = deferred();
   const ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false,
-    handle: ({ kind, source }) => kind === "data" && source.revision === AUTO_B ? gate.promise : undefined });
+    handle: ({ kind, source }) => {
+      if (kind === "version") { source.revision = AUTO_B; return jsonResponse(automaticVersion(AUTO_B)); }
+      if (kind === "data" && source.revision === AUTO_B) return gate.promise;
+    } });
   const panel = ui.find("keyword-monthly-analysis")[0], before = automaticVisibleState(ui);
-  ui.source.revision = AUTO_B; await frames.step(); await frames.step();
+  await frames.step(); await frames.step();
   assert.deepEqual(ui.counts, { version: 1, options: 2, data: 2 });
   assert.deepEqual(ui.calls.map(c => c.url.endsWith("/options") ? "options" : c.url.endsWith("/version") ? "version" : "data"), ["options", "data", "version", "options", "data"]);
   assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.deepEqual(automaticVisibleState(ui), before);
@@ -1254,19 +1283,19 @@ test("the first immediate version waits for a genuinely usable result rather tha
   const panel = ui.find("keyword-monthly-analysis")[0];
   assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 0); assert.equal(panel.dataset.displayedPointerSha256, undefined);
   ready = true; const retry = ui.controller.refresh(); await settle();
-  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(ui.counts.version, 0);
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(ui.counts.version, 1);
   await frames.step(); await frames.step(); await retry;
   assert.equal(ui.counts.version, 1); assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
 });
 
-test("cancelling an initial frame wait settles open without hidden or private version requests", async t => {
+test("cancelling initial frame observation never delays version completion or adds hidden requests", async t => {
   for (const action of ["hidden", "clear", "pause", "destroy"]) {
     const frames = automaticFrames(), ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false });
     await frames.step();
     if (action === "hidden") { ui.doc.hidden = true; ui.listeners.visibilitychange(); }
     else if (action === "clear") ui.api.clear(); else ui.controller[action]();
     await ui.opening; await frames.step(); await ui.clock.advance(60000);
-    assert.equal(ui.counts.version, 0, action); assert.equal(frames.pending(), 0, action);
+    assert.equal(ui.counts.version, 1, action); assert.equal(frames.pending(), 0, action);
     if (action !== "hidden") assert.equal(ui.find("keyword-monthly-analysis")[0]?.dataset.displayedPointerSha256, undefined, action);
   }
 });
@@ -1307,15 +1336,306 @@ test("an initial version authentication failure clears displayed markers before 
   await ui.clock.advance(60000); assert.equal(ui.calls.length, before);
 });
 
-test("a cancelled initial frame check resumes once on visibility without concurrent data reads", async t => {
+test("visibility does not rerun a completed initial version or invent cancelled frame completion", async t => {
   const frames = automaticFrames(), ui = await automaticUi(t, { frames, primeInitialVersion: false, waitForOpen: false });
   await frames.step(); ui.doc.hidden = true; ui.listeners.visibilitychange(); await ui.opening;
-  assert.equal(ui.counts.version, 0); assert.equal(frames.pending(), 0);
+  assert.equal(ui.counts.version, 1); assert.equal(frames.pending(), 0);
   ui.doc.hidden = false; ui.listeners.visibilitychange(); await settle();
   await frames.step(); await frames.step(); await settle();
   assert.deepEqual(ui.counts, { version: 1, options: 1, data: 1 });
   assert.equal(ui.controller.state().automatic.initial.outcome, "complete");
   for (const observer of ui.observers) observer.callback(); await settle(); assert.equal(ui.counts.version, 1);
+  assert.equal(ui.controller.state().automatic.initial.framesCompletedAt, null);
+});
+
+test("a throttled animation frame cannot hold the real initial version or the boot promise", async t => {
+  const frames = automaticFrames(), ui = await automaticUi(t, { frames, interval: 30000, primeInitialVersion: false });
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.equal(ui.counts.version, 1); assert.equal(panel.dataset.firstVersionOutcome, "complete");
+  assert.equal(panel.dataset.firstFramesMs, undefined); assert.equal(frames.pending(), 1);
+  await ui.clock.advance(1700); assert.equal(ui.counts.version, 1, "The normal thirty-second interval remains unchanged");
+  await frames.step(); await frames.step();
+  assert.equal(Number(panel.dataset.firstFramesMs), 1700); assert.ok(Number(panel.dataset.firstVersionCompleteMs) < 1700);
+});
+
+const CATALOGUE_KEY = "staydatalab:keyword-monthly-catalogue:v1";
+const cacheContext = () => ({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30", cutoffMode: "explicit" });
+function cachePayload(revision, selection = cacheContext()) {
+  return { ...automaticPayload(revision, selection), readOnly: true, networkAttempted: false, preparedResult: { status: "ready", sourceRevalidated: false } };
+}
+function cacheOptions(revision) {
+  const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10), value = automaticOptions(revision, today);
+  value.readOnly = true; value.networkAttempted = false; value.provenance.originalFreshnessVerified = false;
+  for (const row of value.keywords) {
+    row.supportedCutoffs = Object.fromEntries(row.stayMonths.map(month => [month, month === "2026-09" ? "2026-09-30" : month === "2026-10" ? "2026-10-30" : today]));
+    row.defaultCutoffs = { ...row.supportedCutoffs };
+    row.provenanceByMonth = Object.fromEntries(Object.entries(row.supportedCutoffs).map(([month, cutoff]) => [month, { dataThrough: cutoff + "T00:00:00Z" }]));
+  }
+  return value;
+}
+function cacheUi(t, { storage, session, handle, revision = AUTO_A, clock = null, interval, viewport, frames, performance } = {}) {
+  const source = { revision }, counts = { options: 0, data: 0, version: 0, status: 0 }; let ui;
+  ui = mockUi({ storage, session, now: clock?.now || Date.now, setTimeout: clock?.setTimeout || setTimeout,
+    clearTimeout: clock?.clearTimeout || clearTimeout, autoRefreshIntervalMs: interval, viewport, performance,
+    requestAnimationFrame: frames?.request, cancelAnimationFrame: frames?.cancel, request: async (url, settings) => {
+    const kind = url.endsWith("/refresh-status") ? "status" : url.endsWith("/version") ? "version" : url.endsWith("/options") ? "options" : "data";
+    counts[kind]++; const selection = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+    const custom = await handle?.({ kind, settings, counts, selection, source, ui }); if (custom !== undefined) return custom;
+    return jsonResponse(kind === "options" ? cacheOptions(source.revision) : kind === "version" ? automaticVersion(source.revision, new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10))
+      : kind === "status" ? { status: "available", started: true, initialized: true, closed: false, errorCode: null, cleanup: { status: "complete" }, counts: { running: 0, queued: 0, deferred: 0, needs_verification: 0, complete: 0 } }
+        : cachePayload(source.revision, selection));
+  } });
+  t.after(() => ui.controller.destroy()); return { ...ui, source, counts };
+}
+async function warmedCatalogue(t) {
+  const storage = memorySelectionStorage(), session = liveSession(), warm = cacheUi(t, { storage, session });
+  await warm.ready; await warm.controller.open(cacheContext());
+  assert.ok(storage.getItem(CATALOGUE_KEY)); warm.controller.destroy();
+  return { storage, session };
+}
+
+async function savedReloadPosition(t, { cache = true } = {}) {
+  const storage = memorySelectionStorage(), session = liveSession(), ui = cacheUi(t, { storage, session, viewport: { width: 1280, x: 0, y: 0 } });
+  await ui.ready; await ui.controller.open(cacheContext());
+  assert.equal(JSON.parse(storage.getItem(SELECTION_KEY)).selection.scroll, undefined, "ordinary rendering does not invent a position");
+  ui.window.scrollX = 12; ui.window.scrollY = 418; ui.fireWindow("pagehide");
+  const selection = JSON.parse(storage.getItem(SELECTION_KEY)).selection;
+  assert.deepEqual(selection.scroll, { x: 12, y: 418, viewportWidth: 1280 });
+  assert.doesNotMatch(storage.getItem(SELECTION_KEY), /snapshot|estimatedRevenue|private-admin-name|member-private|token|price|rooms/);
+  ui.controller.destroy();
+  assert.equal(ui.windowListeners.pagehide.size, 0); assert.equal(ui.windowListeners.wheel.size, 0);
+  if (!cache) storage.removeItem(CATALOGUE_KEY);
+  return { storage, session, selection };
+}
+
+test("F5 pagehide records the active normal panel after visibility hidden but excludes an inactive screen", async t => {
+  const storage = memorySelectionStorage(), session = liveSession(), ui = cacheUi(t, { storage, session, viewport: { width: 1280, x: 0, y: 0 } });
+  await ui.ready; await ui.controller.open(cacheContext());
+  ui.doc.hidden = true; ui.listeners.visibilitychange();
+  ui.window.scrollX = 0; ui.window.scrollY = 418; ui.fireWindow("pagehide");
+  assert.deepEqual(JSON.parse(storage.getItem(SELECTION_KEY)).selection.scroll, { x: 0, y: 418, viewportWidth: 1280 });
+  ui.parent.screenHidden = true; ui.window.scrollY = 12; ui.fireWindow("pagehide");
+  assert.equal(JSON.parse(storage.getItem(SELECTION_KEY)).selection.scroll.y, 418, "an inactive panel cannot replace the last actual position");
+});
+
+for (const cache of [false, true]) test(`same-auth ${cache ? "cached" : "cold"} F5 restores the complete selection once after normal DOM and before its real frames`, async t => {
+  const saved = await savedReloadPosition(t, { cache }), data = deferred(), frames = automaticFrames();
+  const ui = cacheUi(t, { ...saved, frames, viewport: { width: 1280, x: 0, y: 29 },
+    handle: ({ kind }) => kind === "data" ? data.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.equal(ui.windowScrolls.length, 0); assert.equal(ui.find("kma-dashboard-metrics").length, 0);
+  data.resolve(jsonResponse(cachePayload(AUTO_A))); await opening; await settle();
+  assert.deepEqual(ui.windowScrolls, [{ x: 12, y: 418 }]);
+  assert.ok(ui.find("kma-dashboard-metrics").length); assert.equal(frames.pending(), 1);
+  const panel = ui.find("keyword-monthly-analysis")[0]; assert.equal(panel.dataset.firstFramesMs, undefined);
+  assert.equal(panel.dataset.firstVersionOutcome, "complete");
+  assert.equal(ui.counts.options, cache ? 0 : 1);
+  await frames.step(); await frames.step(); assert.ok(panel.dataset.firstFramesMs !== undefined);
+  await ui.button("데이유즈").fire("click"); await ui.controller.refresh();
+  assert.equal(ui.windowScrolls.length, 1, "later renders and completed reads never repeat a scroll jump");
+});
+
+test("reload position cannot cross fresh authentication, viewport width, or explicit navigation", async t => {
+  for (const mode of ["new-auth", "viewport", "explicit"]) {
+    const saved = await savedReloadPosition(t), ui = cacheUi(t, { ...saved,
+      session: mode === "new-auth" ? { ...saved.session, sessionCreatedAt: new Date(Date.now()).toISOString() } : saved.session,
+      viewport: { width: mode === "viewport" ? 390 : 1280, x: 0, y: 29 } });
+    await ui.ready; await ui.controller.open(mode === "explicit" ? { ...cacheContext(), keyword: OTHER } : undefined);
+    assert.equal(ui.windowScrolls.length, 0, mode);
+    assert.ok(ui.find("kma-dashboard-metrics").length);
+  }
+});
+
+test("wheel touch key and pointer intent before or during initial GET cancel the one-shot reload movement", async t => {
+  for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) for (const beforeOpen of [false, true]) {
+    const saved = await savedReloadPosition(t), gate = deferred(), ui = cacheUi(t, { ...saved, viewport: { width: 1280, x: 0, y: 29 },
+      handle: ({ kind }) => kind === "data" ? gate.promise : undefined });
+    await ui.ready;
+    if (beforeOpen) ui.fireWindow(type);
+    const opening = ui.controller.open(); await settle();
+    if (!beforeOpen) ui.fireWindow(type);
+    gate.resolve(jsonResponse(cachePayload(AUTO_A))); await opening;
+    assert.equal(ui.windowScrolls.length, 0, `${type}, beforeOpen=${beforeOpen}`);
+  }
+});
+
+test("a changed viewport cancels restoration even when it returns to the old width before data arrives", async t => {
+  const saved = await savedReloadPosition(t), gate = deferred(), ui = cacheUi(t, { ...saved, viewport: { width: 1280, x: 0, y: 29 },
+    handle: ({ kind }) => kind === "data" ? gate.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  ui.window.innerWidth = 390; ui.fireWindow("resize"); ui.window.innerWidth = 1280; ui.fireWindow("resize");
+  gate.resolve(jsonResponse(cachePayload(AUTO_A))); await opening; assert.equal(ui.windowScrolls.length, 0);
+});
+
+test("late old-scope data and logout cannot move the replacement view or resurrect persisted scroll", async t => {
+  for (const mode of ["new-scope", "logout"]) {
+    const saved = await savedReloadPosition(t), gate = deferred(), ui = cacheUi(t, { ...saved, viewport: { width: 1280, x: 0, y: 29 },
+      handle: ({ kind, selection }) => kind === "data" && selection.keyword === KEYWORD ? gate.promise : undefined });
+    await ui.ready; const opening = ui.controller.open(); await settle();
+    if (mode === "logout") ui.api.clear();
+    else await ui.controller.open({ ...cacheContext(), keyword: OTHER });
+    gate.resolve(jsonResponse(cachePayload(AUTO_A))); await opening; await settle();
+    assert.equal(ui.windowScrolls.length, 0, mode);
+    ui.fireWindow("pagehide");
+    if (mode === "logout") assert.equal(saved.storage.getItem(SELECTION_KEY), null);
+    else assert.equal(ui.controller.state().selection.keyword, OTHER);
+  }
+});
+
+test("failed or adjusted initial scopes never restore a position from a different usable report", async t => {
+  for (const mode of ["failed", "adjusted-cutoff"]) {
+    const saved = await savedReloadPosition(t, { cache: false }), ui = cacheUi(t, { ...saved, viewport: { width: 1280, x: 0, y: 29 },
+      handle: ({ kind }) => {
+        if (mode === "failed" && kind === "data") return htmlFailure(503);
+        if (mode === "adjusted-cutoff" && kind === "options") { const value = cacheOptions(AUTO_A); value.keywords[0].supportedCutoffs["2026-10"] = "2026-10-29"; value.keywords[0].defaultCutoffs["2026-10"] = "2026-10-29"; return jsonResponse(value); }
+      } });
+    await ui.ready; await ui.controller.open(); assert.equal(ui.windowScrolls.length, 0, mode);
+    ui.window.scrollY = 5; ui.fireWindow("pagehide");
+    const currentSelection = JSON.parse(saved.storage.getItem(SELECTION_KEY))?.selection;
+    if (mode === "failed") assert.notDeepEqual(currentSelection?.scroll, { x: 0, y: 5, viewportWidth: 1280 });
+    else assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-29");
+  }
+});
+
+test("same-session reload verifies a cached catalogue beside prepared-only data and refreshes live protection after first version", async t => {
+  const warm = await warmedCatalogue(t), version = deferred(), data = deferred(), status = deferred();
+  const ui = cacheUi(t, { ...warm, handle: ({ kind, counts }) => kind === "version" && counts.version === 1 ? version.promise : kind === "data" ? data.promise : kind === "status" ? status.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+  assert.equal(ui.calls.find(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly").settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+  version.resolve(jsonResponse(automaticVersion(AUTO_A, cacheOptions(AUTO_A).currentDay))); await settle();
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, undefined);
+  data.resolve(jsonResponse(cachePayload(AUTO_A))); await opening; await settle();
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(panel.dataset.catalogueSource, "session_metadata_verified_by_version");
+  assert.equal(ui.counts.version, 2); assert.equal(ui.counts.status, 1); assert.equal(ui.counts.options, 0);
+  assert.equal(panel.dataset.firstVersionOutcome, "complete"); assert.match(ui.text(), /갱신·보호 상태는 운영 서버에서 확인 중/);
+  const diagnostic = clone(ui.controller.state().requestDiagnostic);
+  const metricsNode = ui.find("kma-dashboard-metrics")[0], search = ui.field("companySearch"), chartCount = ui.chartCalls.length;
+  assert.ok(metricsNode);
+  search.focus(); search.setSelectionRange(1, 1);
+  status.resolve(jsonResponse({ status: "available", started: true, initialized: true, closed: false, errorCode: null, counts: { running: 0, queued: 0, deferred: 0, needs_verification: 0, complete: 0 }, cleanup: { status: "complete" } })); await settle();
+  assert.doesNotMatch(ui.text(), /갱신·보호 상태는 운영 서버에서 확인 중/); assert.match(ui.text(), /현재 갱신 작업/);
+  assert.deepEqual(clone(ui.controller.state().requestDiagnostic), diagnostic);
+  assert.equal(ui.find("kma-dashboard-metrics")[0], metricsNode); assert.equal(ui.field("companySearch"), search);
+  assert.equal(ui.chartCalls.length, chartCount); assert.equal(ui.doc.activeElement, search); assert.equal(search.selectionStart, 1);
+  const persisted = warm.storage.getItem(CATALOGUE_KEY); assert.doesNotMatch(persisted, /private-admin|member-private|refreshStatus|snapshot|estimatedRevenue|companies|identityReview/);
+});
+
+test("changed publication waits for both speculative reads to settle before the single sequential options fallback", async t => {
+  const warm = await warmedCatalogue(t), data = deferred();
+  const ui = cacheUi(t, { ...warm, revision: AUTO_B, handle: ({ kind, counts }) => kind === "data" && counts.data === 1 ? data.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+  data.resolve(jsonResponse(cachePayload(AUTO_A))); await opening;
+  assert.deepEqual(ui.counts, { options: 1, data: 2, version: 2, status: 0 });
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, AUTO_B);
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.catalogueSource, "server_options");
+  const reads = ui.calls.filter(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly");
+  assert.equal(reads[0].settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+  assert.equal(Object.hasOwn(reads[1].settings.headers, "X-Keyword-Monthly-Prepared-Only"), false);
+});
+
+test("cache-hit data or version protection errors do not fan out into options retries", async t => {
+  for (const blocked of ["data", "version"]) {
+    const warm = await warmedCatalogue(t), ui = cacheUi(t, { ...warm, handle: ({ kind }) => kind === blocked ? jsonResponse({ code: "KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE" }, 503) : undefined });
+    await ui.ready; await ui.controller.open();
+    assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+    assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.equal(ui.find("kma-metric").length, 0);
+    assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, undefined);
+    assert.equal(warm.storage.getItem(CATALOGUE_KEY), null);
+  }
+});
+
+test("a cache validation authentication failure clears persistence before an obsolete data body can be adopted", async t => {
+  const warm = await warmedCatalogue(t), gate = deferred(); let reads = 0;
+  const ui = cacheUi(t, { ...warm, handle: ({ kind }) => kind === "version" ? { ok: false, status: 403, json: async () => { reads++; return {}; } } : kind === "data" ? gate.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.equal(ui.controller.state().paused, true); assert.equal(reads, 0); assert.equal(warm.storage.getItem(CATALOGUE_KEY), null);
+  gate.resolve(jsonResponse(cachePayload(AUTO_A))); await opening;
+  assert.equal(ui.find("kma-metric").length, 0); assert.equal(ui.counts.options, 0);
+});
+
+test("logout without a mounted controller still removes the session metadata cache", async t => {
+  const warm = await warmedCatalogue(t), ui = cacheUi(t, warm); await ui.ready;
+  ui.controller.destroy(); assert.ok(warm.storage.getItem(CATALOGUE_KEY)); ui.api.clear();
+  assert.equal(warm.storage.getItem(CATALOGUE_KEY), null); assert.equal(warm.storage.getItem(SELECTION_KEY), null);
+});
+
+test("another fresh login cannot reuse the preceding login catalogue even for the same account", async t => {
+  const warm = await warmedCatalogue(t), session = { ...warm.session, sessionCreatedAt: new Date(Date.parse(warm.session.sessionCreatedAt) + 1).toISOString() };
+  const ui = cacheUi(t, { storage: warm.storage, session }); await ui.ready; await ui.controller.open(cacheContext());
+  assert.equal(ui.counts.options, 1); assert.equal(ui.counts.data, 1); assert.equal(ui.calls.filter(c => c.settings.headers["X-Keyword-Monthly-Prepared-Only"] === "1").length, 0);
+});
+
+test("unknown version, mismatched pointer or a missing prepared capability discards the cache and falls back once", async t => {
+  for (const corrupt of ["version", "data", "capability"]) {
+    const warm = await warmedCatalogue(t), ui = cacheUi(t, { ...warm, handle: ({ kind, counts }) => {
+      if (kind === "version" && counts.version === 1 && corrupt === "version") return jsonResponse({ status: "unknown" });
+      if (kind === "data" && counts.data === 1 && corrupt !== "version") return jsonResponse(corrupt === "data" ? cachePayload(AUTO_B) : { ...cachePayload(AUTO_A), preparedResult: undefined });
+    } });
+    await ui.ready; await ui.controller.open();
+    assert.equal(ui.counts.options, 1); assert.equal(ui.counts.data, 2); assert.equal(ui.counts.version, 2);
+    assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.catalogueSource, "server_options");
+    assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, AUTO_A);
+  }
+});
+
+test("a tampered cached cutoff is prepared-only and cannot trigger a legacy read before live options restore it", async t => {
+  const warm = await warmedCatalogue(t), entry = JSON.parse(warm.storage.getItem(CATALOGUE_KEY)), selection = JSON.parse(warm.storage.getItem(SELECTION_KEY));
+  entry.metadata.keywords.find(row => row.keyword === KEYWORD).supportedCutoffs["2026-10"] = "2026-10-31";
+  selection.selection.cutoffMode = "auto"; warm.storage.setItem(CATALOGUE_KEY, JSON.stringify(entry)); warm.storage.setItem(SELECTION_KEY, JSON.stringify(selection));
+  const ui = cacheUi(t, { ...warm, handle: ({ kind, settings, selection }) => {
+    if (kind === "data" && selection.cutoffDate === "2026-10-31") {
+      assert.equal(settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+      return jsonResponse({ status: "missing", snapshot: null, request: selection, preparedResult: { status: "not_prepared" } });
+    }
+  } });
+  await ui.ready; await ui.controller.open();
+  assert.equal(ui.counts.options, 1); assert.equal(ui.counts.data, 2); assert.equal(ui.controller.state().selection.cutoffDate, "2026-10-30");
+  const reads = ui.calls.filter(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly");
+  assert.equal(new URL(reads[1].url, "https://local.test").searchParams.get("cutoffDate"), "2026-10-30");
+});
+
+test("unavailable background protection status remains visible without undoing verified cached data or retrying", async t => {
+  const warm = await warmedCatalogue(t), ui = cacheUi(t, { ...warm, handle: ({ kind }) => kind === "status" ? jsonResponse({}, 503) : undefined });
+  await ui.ready; await ui.controller.open(); await settle();
+  assert.equal(ui.counts.options, 0); assert.equal(ui.counts.status, 1); assert.equal(ui.counts.data, 1);
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, AUTO_A);
+  assert.equal(ui.controller.state().automatic.initial.outcome, "complete"); assert.equal(ui.controller.state().errorCode, "");
+  assert.match(ui.text(), /갱신·보호 상태를 확인하지 못했습니다/);
+});
+
+test("an observed partial catalogue removes an older complete metadata cache even when the pointer is unchanged", async t => {
+  const storage = memorySelectionStorage(), session = liveSession(); let partial = false;
+  const ui = cacheUi(t, { storage, session, handle: ({ kind }) => {
+    if (kind === "options" && partial) { const value = cacheOptions(AUTO_A); value.diagnostics = ["KEYWORD_MONTHLY_PARTITION_UNAVAILABLE"]; return jsonResponse(value); }
+  } });
+  await ui.ready; await ui.controller.open(cacheContext()); assert.ok(storage.getItem(CATALOGUE_KEY));
+  partial = true; await ui.controller.open(cacheContext());
+  assert.equal(storage.getItem(CATALOGUE_KEY), null); assert.match(ui.text(), /저장 자료 목록 확인사항/);
+});
+
+test("hiding a pending cached-status read ends checking truthfully without retries or late status adoption", async t => {
+  const warm = await warmedCatalogue(t), clock = automaticClock(), gate = deferred(); let signal;
+  const ui = cacheUi(t, { ...warm, clock, interval: 250, handle: ({ kind, settings }) => {
+    if (kind === "status") { signal = settings.signal; return gate.promise; }
+  } });
+  await ui.ready; await ui.controller.open(); await settle();
+  const metrics = ui.find("kma-dashboard-metrics")[0], charts = ui.chartCalls.length;
+  assert.ok(metrics); assert.equal(ui.counts.status, 1); assert.equal(signal.aborted, false);
+  assert.match(ui.text(), /갱신·보호 상태는 운영 서버에서 확인 중/);
+  ui.doc.hidden = true; ui.listeners.visibilitychange();
+  assert.equal(signal.aborted, true); assert.doesNotMatch(ui.text(), /갱신·보호 상태는 운영 서버에서 확인 중/);
+  assert.match(ui.text(), /갱신·보호 상태를 확인하지 못했습니다/);
+  ui.doc.hidden = false; ui.listeners.visibilitychange(); await clock.advance(500);
+  assert.equal(ui.counts.version, 4); assert.equal(ui.counts.status, 1, "Cancellation never creates a retry loop");
+  gate.resolve(jsonResponse({ status: "available", errorCode: null, started: true })); await settle();
+  assert.match(ui.text(), /갱신·보호 상태를 확인하지 못했습니다/);
+  assert.equal(ui.find("kma-dashboard-metrics")[0], metrics); assert.equal(ui.chartCalls.length, charts);
+  await ui.controller.open(cacheContext());
+  assert.doesNotMatch(ui.text(), /갱신·보호 상태를 확인하지 못했습니다/);
+  assert.equal(ui.counts.options, 1, "An explicit live-options retry restores the ordinary status contract");
 });
 
 test("automatic prepared refresh polls only a lightweight version when the published pointer is unchanged", async t => {
