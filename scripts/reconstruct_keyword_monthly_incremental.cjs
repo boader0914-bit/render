@@ -115,11 +115,7 @@ async function compile(values, onBound) {
       expectedOutboxInventorySha256: job.outboxInventorySha256, admittedRunIds: job.admittedRunIds });
     const available = await fs.statfs(dataDir, { bigint: true });
     H.need(available.bavail * available.bsize >= 512n * 1024n * 1024n + BigInt(H.LIMITS.scratchBytes) + 64n * 1024n * 1024n, "KEYWORD_INCREMENTAL_JOB_DISK_RESERVE");
-    // Stability inventory and semantic invalidation are distinct contracts.
-    // verifyDependencies retains the full source stamp/byte protection; local
-    // basis changes are already propagated by the company preparation keys.
-    H.need(H.SHA.test(seeded.globalDependencySha256), "KEYWORD_INCREMENTAL_GLOBAL_DEPENDENCY_INVALID");
-    const inputsFingerprint = H.hash(JSON.stringify([seeded.globalDependencySha256, context.wiring.bindings.codeFingerprint, H.hash(JSON.stringify(regions))]));
+    const inputsFingerprint = H.hash(JSON.stringify([seeded.sourceInventorySha256, context.wiring.bindings.codeFingerprint, H.hash(JSON.stringify(regions))]));
     progress.phase = "scope_plan";
     const plan = planScopes({ state: context.state, catalog: job.catalog, evidence, range: job.range, capturedAt: job.capturedAt, inputsFingerprint }); progress.plannedScopes = plan.scopes.length;
     assertDiagnosticExpectation(plan, input["diagnostic-scope"], job.diagnosticExpectation);

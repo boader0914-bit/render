@@ -75,7 +75,7 @@ schema1의 과거 PID가 현재 검증된 서버·조상에서 재사용된 경�
 
 증분 이력 reader는 저장 partition의 회사 식별 header와 숙박월을 먼저 대조한다. 회사 refs가 있는 조회는 해당하지 않는 immutable segment를 열지 않는다. header의 네 필드 순서와 월로 partition key를 다시 검증하고, segment의 key·월·행 수·물리 ordinal 범위를 대조한다. 선택한 blob의 크기·압축 SHA·읽기 전후 상태·압축 해제 상한·행 header 검증은 유지한다. runId는 종전과 같이 실제 행에서 판정하며, 불명확한 숫자나 객체 식별값은 보수적으로 읽는다. 이 최적화는 건너뛴 blob의 본문까지 검수했다는 뜻이 아니다.
 
-seed의 전체 inode·mtime·바이트 SHA와 읽기 전후 안정성 검증은 그대로 유지한다. 재계산 범위를 정하는 전역 지문에서는 `capacity-bases.json`의 회사별 항목만 별도로 취급한다. 각 항목 전체는 해당 회사의 preparation key에 이미 포함돼 있으며, 변경은 alias·Place ID·Booking Business ID 연결과 저장 partition/run의 키워드로 전파된다. 파일 존재 여부·schema·기타 최상위 필드와 다른 seed의 전체 metadata 의존성은 전역으로 유지한다. 기존 미처리 의존성, identity/merge 변경, 코드·지역 변경에 따른 전체 갱신도 유지한다.
+seed의 전체 inode·mtime·바이트 SHA와 읽기 전후 안정성 검증, 재계산 범위를 정하는 전역 지문과 회사별 의존성 전파는 그대로 유지한다. 일부 업체 변경의 scope를 더 좁히는 별도 최적화 초안은 이번 운영 변경에 포함하지 않는다.
 
 코드 지문 변경 직후의 첫 작업은 전체 재검증이 필요할 수 있다. 이후 같은 코드에서 일부 입력만 바뀐 작업과 구분해 성능을 판단한다. 준비 영수증은 정규화·projection 생성·최종 bundle 준비의 실제 자식 프로세스 경과 시간을 나눠 보존한다. 이 시간은 안전 검증과 디스크 I/O를 포함하며 CPU 시간이나 공급자 응답 시간은 아니다.
 

@@ -17,11 +17,7 @@ function companyDependencyKeywords({ companies, companyIds, partitions, runs }) 
   for (const entry of companies) {
     const company = entry.compact, refs = new Set([entry.companyId,
       ...(company.duplicateNotes || []).map(note => note.mergedCompanyId),
-      ...(company.placeIds || []).flatMap(id => [id, `cmp_place_${id}`]),
-      // Saved product matching resolves the full provider population by both
-      // Place and Booking Business identities. Capacity changes must reach a
-      // company connected through either identity, even across keywords.
-      ...(company.bookingBusinessIds || [])].map(identityToken).filter(Boolean));
+      ...(company.placeIds || []).flatMap(id => [id, `cmp_place_${id}`])].map(identityToken).filter(Boolean));
     references.set(entry.companyId, refs);
     for (const ref of refs) { const matches = owners.get(ref) || new Set(); matches.add(entry.companyId); owners.set(ref, matches); }
   }
