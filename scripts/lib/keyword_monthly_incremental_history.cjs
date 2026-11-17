@@ -107,6 +107,20 @@ function createReader({ directory, state, assertCurrent = async () => {} }) {
     const ambiguousNumericReference = values.some(v => v === null || typeof v === "number" && !Number.isFinite(v));
     return [p.key, { month: p.month, header, company: JSON.parse(header), opaqueReference, ambiguousNumericReference }];
   }));
+  // Reader-wide leases cover read + ordered validation/decode. At most two
+  // compressed payloads are retained, even if callers overlap read queries.
+  const readWaiters = []; let activeReads = 0;
+  function readLease() {
+    let released = false;
+    return () => {
+      if (released) return; released = true;
+      if (readWaiters.length) readWaiters.shift()(readLease()); else activeReads--;
+    };
+  }
+  function reserveRead() {
+    if (activeReads < 2) { activeReads++; return Promise.resolve(readLease()); }
+    return new Promise(resolve => readWaiters.push(resolve));
+  }
   const counters = { sourceReads: 0, bytesReadOriginal: 0, segmentReads: 0, segmentBytes: 0, rowsRead: 0, headersRead: 0 };
   const descriptor = () => ({ ready: true, version: VERSION, generation: state.generation, contentDigest: digest, source: { signature: digest }, malformedHistoryLines: state.malformedHistoryLines, rows: state.rows });
   async function read(query, consume, kind) {
@@ -123,20 +137,63 @@ function createReader({ directory, state, assertCurrent = async () => {} }) {
     let selectedRows = 0;
     for (const batch of state.batches) {
       const rows = [];
-      for (const s of batch.segments) {
-        const partition = partitions.get(s.key); need(partition && s.month === partition.month);
-        if (q.month !== undefined && s.month !== q.month || q.partitionKey !== undefined && s.key !== q.partitionKey) continue;
-        if (!partition.opaqueReference && !(partition.ambiguousNumericReference && refs && (refs.has("infinity") || refs.has("-infinity")))
-          && !matchesReferences(partition.company, refs)) continue;
-        const file = path.join(directory, s.sha256 + ".json.gz"), before = await H.checked(file); need(before.size === s.bytes);
-        const bytes = await fs.readFile(file); need(hash(bytes) === s.sha256 && H.same(before, await H.checked(file)));
-        const raw = zlib.gunzipSync(bytes, { maxOutputLength: MAX_BATCH }); need(raw.length === s.rawBytes); const parsed = JSON.parse(raw); need(Array.isArray(parsed) && parsed.length === s.count);
-        for (const entry of parsed) {
-          need(Array.isArray(entry) && entry.length === 2 && Number.isSafeInteger(entry[0]) && entry[0] >= batch.firstOrdinal && entry[0] <= batch.lastOrdinal && typeof entry[1] === "string");
-          rows.push([entry[0], entry[1], partition]);
+      // Prefetch only asynchronous leaf reads. Metadata selection and all
+      // hashing/decoding/counter updates keep the former segment index order.
+      const pending = []; let nextSegment = 0, failedAt = Infinity;
+      const failed = index => { failedAt = Math.min(failedAt, index); };
+      function launch() {
+        while (nextSegment < batch.segments.length && failedAt === Infinity) {
+          const index = nextSegment++, s = batch.segments[index]; let partition;
+          try {
+            partition = partitions.get(s.key); need(partition && s.month === partition.month);
+            if (q.month !== undefined && s.month !== q.month || q.partitionKey !== undefined && s.key !== q.partitionKey) continue;
+            if (!partition.opaqueReference && !(partition.ambiguousNumericReference && refs && (refs.has("infinity") || refs.has("-infinity")))
+              && !matchesReferences(partition.company, refs)) continue;
+          } catch (error) {
+            failed(index); pending.push({ index, promise: Promise.resolve({ error }) }); return true;
+          }
+          const promise = (async () => {
+            const release = await reserveRead();
+            if (index > failedAt) { release(); return { cancelled: true }; }
+            try {
+              const file = path.join(directory, s.sha256 + ".json.gz"), before = await H.checked(file); need(before.size === s.bytes);
+              if (index > failedAt) { release(); return { cancelled: true }; }
+              const bytes = await fs.readFile(file); need(bytes.length === s.bytes && bytes.length <= MAX_BATCH);
+              return { file, before, bytes, release };
+            } catch (error) { failed(index); release(); return { error }; }
+          })();
+          pending.push({ index, s, partition, promise }); return true;
         }
-        counters.segmentReads++; counters.segmentBytes += bytes.length;
+        return false;
       }
+      function refill() { while (pending.length < 2 && launch()) {} }
+      async function drain() {
+        await Promise.allSettled(pending.map(async task => {
+          const loaded = await task.promise; loaded.bytes = null; loaded.release?.(); loaded.release = null;
+        }));
+        pending.length = 0;
+      }
+      try {
+        refill();
+        while (pending.length) {
+          const task = pending.shift(), loaded = await task.promise;
+          if (Object.hasOwn(loaded, "error")) throw loaded.error;
+          need(!loaded.cancelled);
+          try {
+            const { s, partition } = task;
+            need(hash(loaded.bytes) === s.sha256 && H.same(loaded.before, await H.checked(loaded.file)));
+            const raw = zlib.gunzipSync(loaded.bytes, { maxOutputLength: MAX_BATCH }); need(raw.length === s.rawBytes);
+            const parsed = JSON.parse(raw); need(Array.isArray(parsed) && parsed.length === s.count);
+            for (const entry of parsed) {
+              need(Array.isArray(entry) && entry.length === 2 && Number.isSafeInteger(entry[0]) && entry[0] >= batch.firstOrdinal && entry[0] <= batch.lastOrdinal && typeof entry[1] === "string");
+              rows.push([entry[0], entry[1], partition]);
+            }
+            counters.segmentReads++; counters.segmentBytes += loaded.bytes.length;
+          } catch (error) { failed(task.index); throw error; }
+          finally { loaded.bytes = null; loaded.release(); loaded.release = null; }
+          refill();
+        }
+      } catch (error) { failed(-1); await drain(); throw error; }
       rows.sort((a, b) => a[0] - b[0]);
       let previousOrdinal = batch.firstOrdinal - 1;
       for (const [ordinal, line, partition] of rows) {
