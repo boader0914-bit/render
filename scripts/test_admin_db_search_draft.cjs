@@ -203,5 +203,6 @@ test("all direct resets and logout invalidate pending draft restoration", () => 
     const start = source.indexOf(marker); assert.ok(start >= 0, marker);
     assert.match(source.slice(start, start + 130), /resetAdminDbSearchDraft\(\)/, selector);
   }
-  assert.match(declaration("logout"), /^async function logout\(\) \{\s+resetAdminDbSearchDraft\(\);/);
+  const logout = declaration("logout"), reset = logout.indexOf("resetAdminDbSearchDraft();"), firstAwait = logout.search(/\bawait\b/);
+  assert.ok(reset >= 0 && firstAwait > reset, "logout discards the private DB draft synchronously before awaiting its server request; earlier private-cache clears are allowed");
 });

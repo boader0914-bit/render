@@ -19642,13 +19642,14 @@ function queueRecrawlShouldAutoStart(button) {
   return label === "확인 수집";
 }
 
-function startQueueRecrawlIfRequested(button) {
+function startQueueRecrawlIfRequested(button, readinessCurrent = null) {
   if (!queueRecrawlShouldAutoStart(button) || !els.crawlForm) return;
   if (els.crawlStatus) {
     els.crawlStatus.textContent = (els.crawlStatus.textContent || "")
       .replace("조건을 확인한 뒤 수집 실행을 누르세요.", "확인 수집을 바로 시작합니다.");
   }
   window.requestAnimationFrame(() => {
+    if (readinessCurrent && !readinessCurrent()) return;
     if (!recrawlContextMatchesPayload(state.pendingRecrawlContext, currentCrawlFormPayload())) {
       if (els.crawlStatus) {
         els.crawlStatus.textContent = "확인 수집 조건이 바뀌어 자동 실행을 멈췄습니다. 조건 확인 후 수집 실행을 누르세요.";
@@ -41541,13 +41542,41 @@ function applyCollectionQualitySetting(button) {
   setStatus("수집 품질 권장 설정 적용");
 }
 
-function applyQueueRecrawlSetting(button) {
+function adminCrawlReadinessEditRevision() {
+  const form = els.crawlForm;
+  if (!form || typeof form.addEventListener !== "function") return null;
+  if (state.adminCrawlReadinessForm !== form) {
+    const changed = () => { state.adminCrawlReadinessEditRevision = (state.adminCrawlReadinessEditRevision || 0) + 1; };
+    form.addEventListener("input", changed, true); form.addEventListener("change", changed, true);
+    state.adminCrawlReadinessForm = form;
+  }
+  return state.adminCrawlReadinessEditRevision || 0;
+}
+
+function ensureAdminCollectorReady(workerKey) {
+  if (!["manual", "web", "scheduled"].includes(workerKey)) return Promise.reject(new Error("COLLECTOR_READINESS_INVALID"));
+  return new Promise((resolve, reject) => {
+    let settled = false, timer = null;
+    const finish = (error, value) => {
+      if (settled) return; settled = true; clearTimeout(timer);
+      if (error) reject(new Error("COLLECTOR_READINESS_UNAVAILABLE"));
+      else if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 2
+        || value.ready !== true || value.workerKey !== workerKey) reject(new Error("COLLECTOR_READINESS_UNAVAILABLE"));
+      else resolve(value);
+    };
+    timer = setTimeout(() => finish(new Error("COLLECTOR_READINESS_TIMEOUT")), 10000);
+    try { window.dispatchEvent(new CustomEvent("collector:ensure-ready", { detail: { workerKey, resolve: value => finish(null, value), reject: error => finish(error || true) } })); }
+    catch { finish(true); }
+  });
+}
+
+async function applyQueueRecrawlSetting(button) {
   const companyId = button?.dataset?.queueRecrawlCompany || "";
   const source = button?.dataset?.queueRecrawlSource || "decision_queue";
   const inlineDetail = source === "admin_db_detail";
+  const requiresReadiness = inlineDetail || queueRecrawlShouldAutoStart(button);
   const activeInlineBusy = ["preparing", "waiting", "running"].includes(state.adminDbInlineCollect?.status);
-  const crawlSubmitBusy = Boolean(els.crawlForm?.querySelector('button[type="submit"]')?.disabled);
-  if (inlineDetail && (activeInlineBusy || crawlSubmitBusy)) {
+  if (requiresReadiness && (activeInlineBusy || state.adminCrawlSubmitting)) {
     setStatus(activeInlineBusy ? "다른 업체 자동수집 진행 중" : "수집 진행 중");
     if (els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝난 뒤 이 업체의 자동수집을 시작할 수 있습니다.";
     if (isAdminRole()) renderAdminConsoleDashboard();
@@ -41558,10 +41587,43 @@ function applyQueueRecrawlSetting(button) {
     setStatus("재수집 설정 실패");
     return;
   }
+  const readinessTicket = state.adminCrawlReadinessSequence = (state.adminCrawlReadinessSequence || 0) + 1;
   const decision = companyDecisionQueueProfile(company);
   const profile = companyNeedsCorrection(company);
   const plan = applyRecrawlRangeOverride(companyQueueRecrawlPlan(company, profile, decision), button?.dataset?.queueRecrawlRange || "");
   const eta = crawlEtaForPlan(plan);
+  let readinessCurrent = null;
+  if (requiresReadiness) {
+    const session = state.session, origin = { tab: state.activeTab, section: state.adminPanelSection, companyId: state.adminDbSelectedCompanyId || "",
+      navigation: state.analysisNavigationSequence || 0, revision: state.adminDbSearchRenderRevision || 0 },
+      editRevision = adminCrawlReadinessEditRevision(), workerKey = selectedAdminCrawlWorkerKey(), form = JSON.stringify(currentCrawlFormPayload()),
+      selection = JSON.stringify([companyId, source, button?.dataset?.queueRecrawlRange || "", queueRecrawlShouldAutoStart(button)]),
+      ticket = readinessTicket;
+    const current = (expected = origin, requireConnected = true) => isAdminRole() && state.session === session && session?.authenticated === true && !state.adminUserViewMode
+      && state.adminCrawlReadinessSequence === ticket && state.activeTab === expected.tab && state.adminPanelSection === expected.section
+      && (state.adminDbSelectedCompanyId || "") === expected.companyId && (state.analysisNavigationSequence || 0) === expected.navigation
+      && (state.adminDbSearchRenderRevision || 0) === expected.revision && editRevision !== null && adminCrawlReadinessEditRevision() === editRevision
+      && (!requireConnected || button?.isConnected !== false) && selectedAdminCrawlWorkerKey() === workerKey;
+    if (inlineDetail && (origin.tab !== "admin" || origin.section !== "database" || origin.companyId !== companyId)) return;
+    if (!current()) return;
+    setStatus("수집기 최신 상태 확인 중");
+    try { await ensureAdminCollectorReady(workerKey); }
+    catch {
+      if (current()) { setStatus("수집기 최신 상태 확인 필요"); if (els.crawlStatus) els.crawlStatus.textContent = "최신 연결·보호 상태를 확인하지 못해 수집하지 않았습니다. 수집 화면에서 상태를 확인하고 다시 시도하세요."; }
+      return;
+    }
+    if (!current() || form !== JSON.stringify(currentCrawlFormPayload())
+      || selection !== JSON.stringify([button?.dataset?.queueRecrawlCompany || "", button?.dataset?.queueRecrawlSource || "decision_queue", button?.dataset?.queueRecrawlRange || "", queueRecrawlShouldAutoStart(button)])) return;
+    const latestCompany = (companyMasterSource().companies || []).find(row => row.companyId === companyId);
+    if (!latestCompany || JSON.stringify(plan) !== JSON.stringify(applyRecrawlRangeOverride(companyQueueRecrawlPlan(latestCompany,
+      companyNeedsCorrection(latestCompany), companyDecisionQueueProfile(latestCompany)), button?.dataset?.queueRecrawlRange || ""))) return;
+    if (state.adminCrawlSubmitting || ["preparing", "waiting", "running"].includes(state.adminDbInlineCollect?.status)
+      || els.crawlForm?.querySelector('button[type="submit"]')?.disabled) {
+      setStatus("수집 상태 확인 필요"); if (els.crawlStatus) els.crawlStatus.textContent = "현재 실행 또는 보호 상태로 수집을 시작하지 않았습니다. 상태를 확인한 뒤 다시 시도하세요.";
+      return;
+    }
+    readinessCurrent = current;
+  }
   state.pendingRecrawlContext = {
     type: "company",
     key: crawlEtaKey(plan),
@@ -41619,7 +41681,26 @@ function applyQueueRecrawlSetting(button) {
   }
   if (inlineDetail && isAdminRole()) renderAdminConsoleDashboard();
   setStatus(inlineDetail ? "자동수집 준비" : "재수집 설정 적용");
-  startQueueRecrawlIfRequested(button);
+  if (readinessCurrent) {
+    const form = JSON.stringify(currentCrawlFormPayload()), context = state.pendingRecrawlContext, inline = state.adminDbInlineCollect,
+      position = { tab: state.activeTab, section: state.adminPanelSection, companyId: state.adminDbSelectedCompanyId || "",
+        navigation: state.analysisNavigationSequence || 0, revision: state.adminDbSearchRenderRevision || 0 };
+    const current = readinessCurrent;
+    readinessCurrent = () => {
+      // Own synchronous DB paints/navigation may replace the clicked node and
+      // scope. Bind their resulting view, still yielding to subsequent intent.
+      const valid = current(position, false) && state.pendingRecrawlContext === context && form === JSON.stringify(currentCrawlFormPayload());
+      if (!valid && !state.adminCrawlSubmitting) {
+        if (state.pendingRecrawlContext === context) state.pendingRecrawlContext = null;
+        if (inlineDetail && state.adminDbInlineCollect === inline && inline?.status === "preparing") {
+          state.adminDbInlineCollect = null;
+          if (isAdminRole() && !state.adminUserViewMode && state.activeTab === "admin" && state.adminPanelSection === "database") renderAdminConsoleDashboard();
+        }
+      }
+      return valid;
+    };
+  }
+  startQueueRecrawlIfRequested(button, readinessCurrent);
 }
 
 function applyRecrawlBatchSetting(button) {
@@ -44593,7 +44674,7 @@ function bindEvents() {
       return;
     }
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
-    if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
+    if (queueRecrawl) void applyQueueRecrawlSetting(queueRecrawl).catch(() => { if (isAdminRole()) setStatus("확인 수집 준비 실패"); });
     const recrawlBatch = event.target.closest("[data-recrawl-batch-key]");
     if (recrawlBatch) applyRecrawlBatchSetting(recrawlBatch);
     if (event.target.closest("[data-company-master-focus]")) {

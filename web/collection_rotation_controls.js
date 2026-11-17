@@ -191,6 +191,9 @@
     const inputs = {}, buttons = {}, view = {}, trialButtons = {}, trialView = {}; let saved = null, loaded = false, dirty = false, busy = false, readError = false, destroyed = false, sequence = 0, editRevision = 0, lastReadAt = 0, preview = null, pendingRead = null;
     let trialPreview = null, trialEditRevision = 0, trialNeedsRead = false;
     const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
+    const section = parent.closest?.("[data-admin-section-panel]");
+    const visible = () => !destroyed && admin() && !document.hidden && Boolean(section?.classList.contains("active")) && Boolean(parent.getClientRects?.().length);
+    let wasVisible = false;
     const node = (tag, className = "", text = "") => { const el = document.createElement(tag); el.className = className; if (text) el.textContent = text; return el; };
     const details = node("details", "collection-rotation"); details.id = "collectionRotationPanel";
     const summary = node("summary", "rotation-summary"), summaryCopy = node("span", "rotation-summary-copy");
@@ -432,15 +435,19 @@
       try { const result = await api("/trial/cancel", "POST", { trialId: trial.trialId, expectedRevision: saved.revision, expectedPlanHash: saved.basePlanHash }); if (destroyed || !admin()) return; saved = result; trialPreview = null; renderStatus(); await refresh(); if (!readError) trialNotice("미배정 시험을 취소했습니다. 기본 조건과 기존 기록·보호 상태는 유지합니다.", "success"); }
       catch (error) { trialNeedsRead = true; throw error; }
     }));
-    details.addEventListener("toggle", () => { if (!busy && details.open && admin()) refresh(); });
-    const onVisible = () => { if (!busy && admin() && !document.hidden && details.open) refresh(); };
+    details.addEventListener("toggle", () => { if (!busy && details.open && visible()) refresh(); });
+    const onVisible = () => {
+      const current = visible(), entered = current && !wasVisible; wasVisible = current;
+      if (!busy && current && (entered || !loaded)) refresh();
+    };
     document.addEventListener("visibilitychange", onVisible);
     const observer = new MutationObserver(() => {
-      if (!admin()) { sequence++; saved = null; preview = null; trialPreview = null; trialNeedsRead = false; loaded = false; readError = false; dirty = false; fill(defaultDraft(now())); view.table.replaceChildren(); view.headline.textContent = "관리자 연결을 확인하세요."; view.next.textContent = ""; view.reason.textContent = ""; view.freshness.textContent = ""; view.badge.textContent = "관리자 연결 필요"; notice(""); trialNotice(""); renderTrial(); sync(); }
-      else if (!loaded && !pendingRead) refresh();
+      if (!admin()) { wasVisible = false; sequence++; saved = null; preview = null; trialPreview = null; trialNeedsRead = false; loaded = false; readError = false; dirty = false; fill(defaultDraft(now())); view.table.replaceChildren(); view.headline.textContent = "관리자 연결을 확인하세요."; view.next.textContent = ""; view.reason.textContent = ""; view.freshness.textContent = ""; view.badge.textContent = "관리자 연결 필요"; notice(""); trialNotice(""); renderTrial(); sync(); }
+      else onVisible();
     }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-    const timer = window.setInterval(() => { if (!busy && details.open && admin() && !document.hidden && now() - lastReadAt >= 15000) refresh(); }, 15000);
-    sync(); if (admin()) refresh();
+    if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
+    const timer = window.setInterval(() => { if (!busy && details.open && visible() && now() - lastReadAt >= 15000) refresh(); }, 15000);
+    sync(); onVisible();
     const controller = { refresh, destroy() { destroyed = true; sequence++; window.clearInterval(timer); observer.disconnect(); document.removeEventListener("visibilitychange", onVisible); } };
     window.addEventListener("pagehide", () => controller.destroy(), { once: true });
     return controller;

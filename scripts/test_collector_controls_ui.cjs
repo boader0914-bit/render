@@ -95,13 +95,14 @@ function historyFixture(queryString, records) {
   if (q.groupKey) { const rows = filtered.filter(row => grouping(row.date).key === q.groupKey); Object.assign(result, { groupKey: q.groupKey, rows: rows.slice(q.offset, q.offset + q.limit), totalRows: rows.length, offset: q.offset, limit: q.limit, hasMore: q.offset + q.limit < rows.length, nextOffset: q.offset + q.limit < rows.length ? q.offset + q.limit : null }); }
   return result;
 }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, failHistory = false, historyFetch, historyRecords, historyPreferences, expandHistory = true, uncertainSubmit = false, outsideCollection = false, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, failHistory = false, historyFetch, historyRecords, historyPreferences, expandHistory = true, uncertainSubmit = false, outsideCollection = false, explicitInitialRead = false, hiddenPanel = false, hiddenDocument = false, role = "role-admin", statusFetch, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
-  const body = new Element("body", nodes); body.className = "role-admin";
-  const section = new Element("section", nodes); section.className = outsideCollection ? "" : "active"; nodes.get("collectorControlsCard").section = section;
+  const body = new Element("body", nodes); body.className = role;
+  const section = new Element("section", nodes); section.className = outsideCollection ? "" : "active"; nodes.get("collectorControlsCard").section = section; nodes.get("collectorControlsCard").hidden = hiddenPanel;
   const navigation = { clicks: 0, click() { this.clicks++; section.className = "active"; } };
-  const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), querySelector: () => navigation, addEventListener() {} };
+  const documentListeners = {}, intervals = [];
+  const document = { body, hidden: hiddenDocument, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), querySelector: () => navigation, addEventListener(type, fn) { documentListeners[type] = fn; } };
   const saved = Object.fromEntries(keys.map(key => [key, clone(configs[key] || config)])); const calls = [], submissions = [], events = [], windowListeners = {};
   const records = historyRecords || historyEntries(requests.map(row => ({ createdAt: new Date().toISOString(), ...row })), schedulePatch).map((row, index) => normalizedRow(row, { id: `record_${index}`, source: "requests", workerKey: row.workerKey, trigger: row.trigger }));
   // Existing worker/diagnostic tests start with explicit expanded preferences.
@@ -111,7 +112,7 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   const window = { localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, addEventListener(name, callback) { (windowListeners[name] ||= []).push(callback); }, dispatchEvent(event) { events.push(event); if (event.type === "collector:submit-card") { submissions.push(clone(event.detail.input)); event.detail.resolve({ status: "pending", submissionUncertain: uncertainSubmit }); } for (const fn of windowListeners[event.type] || []) fn(event); } };
   const fetch = async (url, options) => {
     const payload = options.body ? JSON.parse(options.body) : undefined; calls.push({ url, method: options.method, payload }); let result;
-    if (url === "/api/collector-status") { if (typeof failStatus === "function" ? failStatus() : failStatus) throw Error("status_unavailable"); result = { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) }; }
+    if (url === "/api/collector-status") { if (typeof failStatus === "function" ? failStatus() : failStatus) throw Error("status_unavailable"); result = statusFetch ? await statusFetch() : { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) }; }
     else if (url === "/api/crawl-requests") { if (failRequests) throw Error("requests_unavailable"); result = { requests }; }
     else if (url.startsWith("/api/collection-history?")) { assert.equal(options.method, "GET"); if (typeof failHistory === "function" ? failHistory(url) : failHistory) throw Error("history_unavailable"); result = historyFetch ? await historyFetch(url, records) : historyFixture(url.split("?")[1], records); }
     else if (/^\/api\/runs\/[^/]+\/diagnostics$/.test(url)) {
@@ -131,19 +132,222 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   };
   class UiEvent { constructor(type, options = {}) { this.type = type; Object.assign(this, options); } }
   const observers = [];
-  vm.runInNewContext(source, { document, fetch, window, console, setInterval() {}, MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} }, Event: UiEvent, CustomEvent: UiEvent, Date, Intl, Number, String, Object, Array, Set, Map, JSON, Promise, Error, Math, URLSearchParams });
+  vm.runInNewContext(source, { document, fetch, window, console, setInterval(fn) { intervals.push(fn); }, MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} }, Event: UiEvent, CustomEvent: UiEvent, Date, Intl, Number, String, Object, Array, Set, Map, JSON, Promise, Error, Math, URLSearchParams });
   const initial = { hiddenCards:nodes.get("collectorWorkerStates").children.map(card => card.hidden), executionChoices:nodes.get("crawlWorkerKey").children.map(option => option.value) };
-  await until(() => events.some(event => event.type === "collector:worker-availability"));
-  await until(() => nodes.get("collectorHistoryFilteredCount").textContent || nodes.get("collectorHistoryReadError").textContent);
-  if (expandHistory && records.length) await until(() => descendants(nodes.get("collectorUnifiedHistory")).filter(el => el.className === "collector-history-row").length >= Math.min(records.filter(row => row.date).length, 50));
+  if (explicitInitialRead) await nodes.get("collectorRefresh").event("click");
+  if (explicitInitialRead || !outsideCollection && !hiddenPanel && !hiddenDocument && role === "role-admin") {
+    await until(() => events.some(event => event.type === "collector:worker-availability"));
+    await until(() => nodes.get("collectorHistoryFilteredCount").textContent || nodes.get("collectorHistoryReadError").textContent);
+    if (expandHistory && records.length) await until(() => descendants(nodes.get("collectorUnifiedHistory")).filter(el => el.className === "collector-history-row").length >= Math.min(records.filter(row => row.date).length, 50));
+  }
   const card = key => nodes.get("collectorWorkerStates").children.find(node => node.dataset.workerKey === key);
   const form = key => descendants(card(key)).find(el => el.tagName === "FORM");
   const input = (key, name) => nodes.get(`collector-${key}-${name}`);
   const button = (key, label) => descendants(card(key)).find(el => el.tagName === "BUTTON" && el.textContent === label);
   async function set(key, name, value) { if (typeof value === "boolean") input(key, name).checked = value; else input(key, name).value = value; await form(key).event("change"); }
   const searchHistory = async () => { await nodes.get("collectorHistoryForm").event("submit"); await until(() => nodes.get("collectorHistoryQueryNotice").hidden || nodes.get("collectorHistoryQueryNotice").dataset.tone === "warning"); await until(() => !descendants(nodes.get("collectorUnifiedHistory")).some(el => el.className.includes("collector-history-more") && el.disabled)); };
-  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial, records, searchHistory, observers, body };
+  return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial, records, searchHistory, observers, body, section, document, documentListeners, intervals };
 }
+
+test("hidden monthly/dashboard F5 performs no automatic collector or history GETs", async () => {
+  const ui = await mockUi({ outsideCollection: true, expandHistory: true, requests: [{ workerKey: "manual", keyword: "저장 이력", status: "complete", result: { runId: "saved_only" } }] });
+  for (let index = 0; index < 3; index++) {
+    for (const observer of ui.observers) observer();
+    ui.document.hidden = true; ui.documentListeners.visibilitychange(); ui.document.hidden = false; ui.documentListeners.visibilitychange();
+    for (const tick of ui.intervals) tick();
+  }
+  assert.deepEqual(ui.calls, []); assert.equal(ui.submissions.length, 0);
+  assert.ok(keys.every(key => ui.card(key).hidden), "unknown server identity is still unavailable for collection");
+  assert.equal(ui.nodes.get("crawlWorkerHint").dataset.ready, "false");
+});
+
+test("actual collection entry reads fresh state once and leaving suppresses automatic polling until the next entry", async () => {
+  const ui = await mockUi({ outsideCollection: true }), before = clone(ui.saved);
+  ui.section.className = "active"; for (const observer of ui.observers) observer(); for (const observer of ui.observers) observer();
+  await until(() => ui.nodes.get("collectorHistoryFilteredCount").textContent);
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+  assert.equal(ui.calls.filter(call => call.url.startsWith("/api/worker-schedule?")).length, 3);
+  assert.equal(ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length, 1);
+  const count = ui.calls.length;
+  ui.section.className = ""; for (const observer of ui.observers) observer();
+  for (const tick of ui.intervals) tick(); ui.documentListeners.visibilitychange();
+  assert.equal(ui.calls.length, count);
+  ui.section.className = "active"; for (const observer of ui.observers) observer();
+  await until(() => ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length === 2);
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 2);
+  assert.deepEqual(ui.saved, before); assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("an active section with an invisible panel or hidden document cannot auto-read management status", async () => {
+  for (const mode of ["panel", "document", "rects", "auth", "customer-view"]) {
+    const ui = await mockUi({ outsideCollection: true, hiddenPanel: mode === "panel", hiddenDocument: mode === "document",
+      role: mode === "auth" ? "" : mode === "customer-view" ? "role-admin admin-user-view" : "role-admin" });
+    if (mode === "rects") ui.nodes.get("collectorControlsCard").getClientRects = () => [];
+    ui.section.className = "active"; for (const observer of ui.observers) observer();
+    ui.documentListeners.visibilitychange(); for (const tick of ui.intervals) tick();
+    assert.deepEqual(ui.calls, [], mode);
+  }
+});
+
+test("DB prepare waits for the real first in-flight state read without duplicate GET or collection", async () => {
+  const gate = defer(), workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 }));
+  const ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+  ui.section.className = "active"; for (const observer of ui.observers) observer();
+  ui.window.dispatchEvent({ type: "collector:prepare-card", detail: { workerKey: "manual", keyword: "DB 선택 업체", searchMode: "company", checkIn: "2026-11-17", checkOut: "2026-12-16", bookingRangeDays: 30 } });
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+  assert.equal(ui.input("manual", "keywords").value, ""); assert.equal(ui.card("manual").hidden, true);
+  gate.resolve({ workers }); await until(() => ui.card("manual").open === true);
+  assert.equal(ui.input("manual", "keywords").value, "DB 선택 업체"); assert.equal(ui.input("manual", "searchMode").value, "company");
+  assert.equal(ui.input("manual", "checkOut").value, "2026-12-16");
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1); assert.equal(ui.submissions.length, 0);
+  assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("explicit hidden prepare still refreshes identity and honors retired or protected workers", async () => {
+  for (const state of ["ready", "retired", "protected"]) {
+    const workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0,
+      ...(workerKey === "manual" && state === "retired" ? { retired: true } : workerKey === "manual" && state === "protected" ? { halted: true, errorCode: "COLLECTOR_REVIEW_HOLD" } : {}) }));
+    const ui = await mockUi({ outsideCollection: true, workers });
+    ui.window.dispatchEvent({ type: "collector:prepare-card", detail: { workerKey: "manual", keyword: "명시 요청", checkIn: "2026-11-17", checkOut: "2026-11-18", bookingRangeDays: 1 } });
+    await until(() => ui.calls.some(call => call.url.startsWith("/api/collection-history?")));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+    if (state === "retired") { assert.equal(ui.card("manual").hidden, true); assert.equal(ui.input("manual", "keywords").value, ""); }
+    else { assert.equal(ui.input("manual", "keywords").value, "명시 요청"); assert.equal(ui.button("manual", "지금 수집").disabled, state === "protected"); }
+    assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+  }
+});
+
+test("leaving an automatic first read prevents hidden history fan-out while explicit request readback remains fresh", async () => {
+  const gate = defer(), ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+  ui.section.className = "active"; for (const observer of ui.observers) observer();
+  ui.section.className = ""; for (const observer of ui.observers) observer();
+  gate.resolve({ workers: keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString() })) });
+  await until(() => ui.events.some(event => event.type === "collector:worker-availability")); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length, 0);
+  ui.window.dispatchEvent({ type: "collector:requests-changed" });
+  await until(() => ui.calls.some(call => call.url.startsWith("/api/collection-history?")));
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 2);
+  assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("logout during initial explicit prepare rejects late identity and never opens or fills a private card", async () => {
+  const gate = defer(), ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+  ui.window.dispatchEvent({ type: "collector:prepare-card", detail: { workerKey: "manual", keyword: "이전 계정 요청", checkIn: "2026-11-17", checkOut: "2026-11-18", bookingRangeDays: 1 } });
+  ui.body.className = ""; for (const observer of ui.observers) observer();
+  gate.resolve({ workers: keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString() })) });
+  for (let index = 0; index < 3; index++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.input("manual", "keywords").value, ""); assert.notEqual(ui.card("manual").open, true);
+  assert.equal(ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length, 0); assert.equal(ui.submissions.length, 0);
+});
+
+test("prepare never trusts an old visible worker after its fresh identity read fails", async () => {
+  let failed = false;
+  const ui = await mockUi({ failStatus: () => failed }); failed = true;
+  ui.card("manual").open = false;
+  ui.window.dispatchEvent({ type: "collector:prepare-card", detail: { workerKey: "manual", keyword: "실패 후 미확정", checkIn: "2026-11-17", checkOut: "2026-11-18", bookingRangeDays: 1 } });
+  await until(() => ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length === 2);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.card("manual").open, false); assert.equal(ui.input("manual", "keywords").value, "");
+  assert.equal(ui.button("manual", "지금 수집").disabled, true); assert.equal(ui.submissions.length, 0);
+});
+
+test("a pending prepare cannot overwrite newer edits or a newer prepare sharing its GET", async () => {
+  for (const mode of ["edit", "newer-prepare", "reauth", "batched-reauth"]) {
+    const gate = defer(), workers = keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString() }));
+    let delayed = false;
+    const ui = await mockUi({ statusFetch: () => delayed ? gate.promise : { workers } }); delayed = true;
+    const prepare = keyword => ui.window.dispatchEvent({ type: "collector:prepare-card", detail: { workerKey: "manual", keyword, checkIn: "2026-11-17", checkOut: "2026-11-18", bookingRangeDays: 1 } });
+    prepare("이전 요청");
+    if (mode === "edit") await ui.set("manual", "keywords", "사용자 최신 입력");
+    else if (mode === "newer-prepare") prepare("새 요청");
+    else if (mode === "batched-reauth") for (const observer of ui.observers) observer([{ target: ui.body, attributeName: "class", oldValue: "role-admin" }, { target: ui.body, attributeName: "class", oldValue: "" }]);
+    else { ui.body.className = ""; for (const observer of ui.observers) observer(); ui.body.className = "role-admin"; for (const observer of ui.observers) observer(); }
+    gate.resolve({ workers }); await until(() => ui.calls.filter(call => call.url.startsWith("/api/collection-history?")).length === 2);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ui.input("manual", "keywords").value, mode === "edit" ? "사용자 최신 입력" : mode === "newer-prepare" ? "새 요청" : "", mode);
+    assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 2, "all pending prepare intents share the one real fresh GET");
+    assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+  }
+});
+
+const ensureReady = (ui, workerKey) => new Promise((resolve, reject) => ui.window.dispatchEvent({ type: "collector:ensure-ready", detail: { workerKey, resolve, reject } }));
+const readyWorkers = () => keys.map(workerKey => ({ workerKey, configured: true, halted: false, connected: true, workerLastSeenAt: new Date().toISOString(), ...(workerKey === "web" ? { ready: true } : {}) }));
+
+test("explicit hidden ensure-ready uses the exact requested broker identity and fresh single-flight without collection", async () => {
+  const gate = defer(), workers = readyWorkers(), ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+  const first = ensureReady(ui, "scheduled"), second = ensureReady(ui, "manual");
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+  gate.resolve({ workers });
+  assert.deepEqual(clone(await first), { ready: true, workerKey: "scheduled" });
+  assert.deepEqual(clone(await second), { ready: true, workerKey: "manual" });
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+  assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+});
+
+test("ensure-ready shares the actual active automatic first read rather than returning before it settles", async () => {
+  const gate = defer(), ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+  ui.section.className = "active"; for (const observer of ui.observers) observer();
+  let settled = false; const prepared = ensureReady(ui, "web").then(value => { settled = true; return value; });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
+  assert.equal(ui.calls.filter(call => call.url === "/api/collector-status").length, 1);
+  gate.resolve({ workers: readyWorkers() }); assert.deepEqual(clone(await prepared), { ready: true, workerKey: "web" });
+  assert.equal(ui.submissions.length, 0);
+});
+
+test("invalid ensure-ready keys never default to manual and unauthenticated or malformed intents never GET", async () => {
+  const ui = await mockUi({ outsideCollection: true });
+  for (const key of [undefined, null, "", "unknown", "manual ", ["manual"], { workerKey: "manual" }])
+    await assert.rejects(ensureReady(ui, key), error => error.code === "COLLECTOR_INVALID_WORKER");
+  ui.window.dispatchEvent({ type: "collector:ensure-ready", detail: { workerKey: "manual", resolve() {} } });
+  ui.body.className = "role-admin admin-user-view";
+  await assert.rejects(ensureReady(ui, "manual"), error => error.code === "COLLECTOR_AUTH_REQUIRED");
+  assert.deepEqual(ui.calls, []); assert.equal(ui.submissions.length, 0);
+});
+
+test("ensure-ready rejects retired held halted unconfigured stale future or explicitly unready workers", async () => {
+  const cases = [
+    [{ retired: true }, "COLLECTOR_WORKER_RETIRED"], [{ holdActive: true }, "COLLECTOR_REVIEW_HOLD"],
+    [{ errorCode: "COLLECTOR_REVIEW_HOLD" }, "COLLECTOR_REVIEW_HOLD"], [{ brokerErrorCode: "COLLECTOR_REVIEW_HOLD" }, "COLLECTOR_REVIEW_HOLD"],
+    [{ halted: true }, "COLLECTOR_HALTED"], [{ configured: false }, "COLLECTOR_NOT_READY"], [{ configured: "true" }, "COLLECTOR_NOT_READY"],
+    [{ workerLastSeenAt: new Date(Date.now() - 91000).toISOString() }, "COLLECTOR_NOT_READY"],
+    [{ workerLastSeenAt: new Date(Date.now() + 60000).toISOString() }, "COLLECTOR_NOT_READY"], [{ ready: false }, "COLLECTOR_NOT_READY"], [{ ready: "true" }, "COLLECTOR_NOT_READY"]
+  ];
+  for (const [patch, code] of cases) {
+    const workers = readyWorkers(); Object.assign(workers.find(worker => worker.workerKey === "manual"), patch);
+    const ui = await mockUi({ outsideCollection: true, workers });
+    await assert.rejects(ensureReady(ui, "manual"), error => error.code === code, JSON.stringify(patch));
+    assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+  }
+});
+
+test("ensure-ready requires unique fresh identity and never trusts last-good worker state on read failure", async () => {
+  for (const mode of ["missing", "duplicate", "read-failure", "web-ready-missing"]) {
+    let failed = false; const workers = readyWorkers();
+    const ui = await mockUi({ outsideCollection: true, workers, failStatus: () => failed });
+    if (mode === "read-failure") { await ensureReady(ui, "manual"); failed = true; }
+    else if (mode === "missing") workers.splice(workers.findIndex(worker => worker.workerKey === "manual"), 1);
+    else if (mode === "duplicate") workers.push({ ...workers.find(worker => worker.workerKey === "manual") });
+    else delete workers.find(worker => worker.workerKey === "web").ready;
+    await assert.rejects(ensureReady(ui, mode === "web-ready-missing" ? "web" : "manual"), error => error.code === (mode === "web-ready-missing" ? "COLLECTOR_NOT_READY" : "COLLECTOR_STATE_UNCONFIRMED"));
+    assert.equal(ui.submissions.length, 0);
+  }
+});
+
+test("ensure-ready invalidates logout-relogin even when class mutations are delivered in one batch", async () => {
+  for (const batched of [false, true]) {
+    const gate = defer(), ui = await mockUi({ outsideCollection: true, statusFetch: () => gate.promise });
+    const prepared = assert.rejects(ensureReady(ui, "manual"), error => error.code === "COLLECTOR_AUTH_CHANGED");
+    if (batched) {
+      for (const observer of ui.observers) observer([{ target: ui.body, attributeName: "class", oldValue: "role-admin" }, { target: ui.body, attributeName: "class", oldValue: "" }]);
+    } else {
+      ui.body.className = ""; for (const observer of ui.observers) observer();
+      ui.body.className = "role-admin"; for (const observer of ui.observers) observer();
+    }
+    gate.resolve({ workers: readyWorkers() }); await prepared;
+    assert.equal(ui.submissions.length, 0); assert.ok(ui.calls.every(call => call.method === "GET"));
+  }
+});
 
 test("drafts default to day-use presence check and inclusive lodging dates", () => {
   assert.equal(defaultDraft().dayUseMode, "inspect");
@@ -289,7 +493,7 @@ test("a retired lane cannot return from old drafts, DB preparation or incomplete
 
 test("retired stale active reports never appear in current progress or compact task guidance", async () => {
   const workers=keys.map(workerKey=>({workerKey,configured:true,connected:true,ready:true,workerLastSeenAt:new Date().toISOString(),...(workerKey==="scheduled"?{retired:true,activeJobId:"previous_job",crawl:{active:true,activeJob:{keyword:"이전 작업"}}}:{})}));
-  const ui=await mockUi({workers,outsideCollection:true,requests:[{workerKey:"scheduled",keyword:"이전 작업",status:"pending",createdAt:new Date().toISOString()}]});
+  const ui=await mockUi({workers,outsideCollection:true,explicitInitialRead:true,requests:[{workerKey:"scheduled",keyword:"이전 작업",status:"pending",createdAt:new Date().toISOString()}]});
   assert.equal(ui.card("scheduled").hidden,true);assert.equal(descendants(ui.card("scheduled")).find(el=>el.className==="collector-live-progress").hidden,true);
   assert.equal(ui.nodes.get("collectorCompactProgress").hidden,true);assert.match(text(ui.nodes.get("collectorUnifiedHistory")),/이전 작업.*AWS worker/s);
   assert.equal(ui.submissions.length,0);assert.ok(ui.calls.every(call=>call.method==="GET"));
@@ -690,7 +894,7 @@ test("worker card exposes measured meter and collapsed summary with accessible s
 });
 
 test("compact monitor follows the existing collection navigation without issuing collection requests", async () => {
-  const worker=progressWorker(), ui=await mockUi({workers:[worker],outsideCollection:true}); const monitor=ui.nodes.get("collectorCompactProgress");
+  const worker=progressWorker(), ui=await mockUi({workers:[worker],outsideCollection:true,explicitInitialRead:true}); const monitor=ui.nodes.get("collectorCompactProgress");
   assert.equal(monitor.hidden,false); assert.match(text(monitor),/BG worker.*경남글램핑.*약 4~6분/);
   const focusedButton=descendants(monitor).find(el=>el.className==="collector-compact-row");
   worker.crawl.remainingSeconds=120; await ui.nodes.get("collectorRefresh").event("click");

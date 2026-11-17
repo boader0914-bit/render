@@ -362,9 +362,11 @@
   const cards = new Map();
   const schedules = {};
   const retiredWorkers = new Set();
-  let workerData = null, lastWorkerData = null, requests = [], refreshInFlight = null, loaded = false, requestsReadError = false, scheduleReadErrors = [], statusReceivedAt = 0, lastRefreshAt = 0;
+  let workerData = null, lastWorkerData = null, requests = [], refreshInFlight = null, refreshExplicit = false, authEpoch = 0, loaded = false, requestsReadError = false, scheduleReadErrors = [], statusReceivedAt = 0, lastRefreshAt = 0;
   const admin = () => document.body.classList.contains("role-admin") && !document.body.classList.contains("admin-user-view");
-  const visible = () => admin() && !document.hidden && Boolean(panel.closest("[data-admin-section-panel]")?.classList.contains("active"));
+  const visible = () => admin() && !document.hidden && !panel.hidden
+    && (typeof panel.getClientRects !== "function" || panel.getClientRects().length > 0)
+    && Boolean(panel.closest("[data-admin-section-panel]")?.classList.contains("active"));
   const storageKey = "staydatalab:collector-drafts:v2";
   let drafts = {};
   try { drafts = JSON.parse(window.localStorage.getItem(storageKey) || "{}"); } catch { /* Drafts remain in memory when local storage is unavailable. */ }
@@ -449,7 +451,7 @@
     return panel;
   }
   function makeCard(key, index) {
-    const card = { key, inputs: {}, fields: {}, dirty: false, busy: false, loaded: false };
+    const card = { key, inputs: {}, fields: {}, dirty: false, busy: false, loaded: false, editRevision: 0, prepareOrdinal: 0 };
     card.root = node("details", "", "collector-worker-card"); card.root.dataset.workerKey = key; card.root.open = false;
     const summary = node("summary", "", "collector-worker-summary");
     const identity = node("div", "", "collector-worker-identity"); identity.append(node("span", `0${index + 1}`, "collector-worker-number"));
@@ -486,8 +488,8 @@
     const footer = node("footer", "", "collector-card-footer"), actions = node("div", "", "collector-card-actions"); card.submit = node("button", "지금 수집", "primary-button"); card.submit.type = "submit"; card.save = button("예약 조건 저장", "secondary-button", () => action(card, () => saveSchedule(card))); card.pause = button("예약 일시정지", "ghost-button", () => action(card, () => pauseSchedule(card))); actions.append(card.submit, card.save, card.pause); footer.append(actions);
     card.actions = actions;
     card.lastResult = node("div", "", "collector-last-result"); footer.append(card.lastResult); card.form.append(footer); card.root.append(card.form);
-    card.form.addEventListener("input", () => { card.dirty = true; syncCard(card); saveDraft(card); });
-    card.form.addEventListener("change", event => { if (event.target === card.inputs.execution && event.target.value === "schedule") card.reservation.open = true; card.dirty = true; syncCard(card); saveDraft(card); });
+    card.form.addEventListener("input", () => { card.editRevision++; card.dirty = true; syncCard(card); saveDraft(card); });
+    card.form.addEventListener("change", event => { card.editRevision++; if (event.target === card.inputs.execution && event.target.value === "schedule") card.reservation.open = true; card.dirty = true; syncCard(card); saveDraft(card); });
     card.form.addEventListener("invalid", event => { if ([card.inputs.firstDate, card.inputs.time, card.inputs.repeat, card.inputs.keywordIntervalMinutes].includes(event.target)) card.reservation.open = true; if (event.target === card.inputs.repeatReason) card.repeat.open = true; }, true);
     card.form.addEventListener("submit", event => { event.preventDefault(); if (card.form.reportValidity()) action(card, () => values(card).execution === "schedule" ? enableSchedule(card) : runNow(card)); });
     cards.set(key, card); fill(card, { ...defaultDraft(), ...(drafts[key] || {}) }); return card.root;
@@ -823,10 +825,13 @@
     let query; try { query = readHistoryQuery(); } catch (error) { historyNotice(`${error.message} 이전 조회 결과를 유지합니다.`, "warning"); return false; }
     historyApplied = query; return loadHistory(query);
   }
-  async function refresh() {
-    if (!admin()) return; if (refreshInFlight) return refreshInFlight;
+  async function refresh({ automatic = false } = {}) {
+    if (!admin() || automatic && !visible()) return;
+    if (!automatic) refreshExplicit = true;
+    if (refreshInFlight) return refreshInFlight;
     refreshInFlight = (async () => {
       const results = await Promise.allSettled([api("/api/collector-status"), api("/api/crawl-requests"), ...WORKER_KEYS.map(key => api(scheduleUrl(key)))]);
+      if (!admin()) return;
       workerData = results[0].status === "fulfilled" ? results[0].value : null;
       if (workerData) { lastWorkerData = workerData; statusReceivedAt = Date.now(); } else statusReceivedAt = 0;
       lastRefreshAt = Date.now();
@@ -841,8 +846,11 @@
           card.loaded = true;
         } else { scheduleReadErrors.push(key); schedules[key] = null; notice(card, "예약 상태를 읽지 못했습니다. 즉시수집과 연결 상태는 별도로 확인합니다.", "error"); }
       }
-      loaded = true; renderWorkers(); renderWorkerLastResults(); await loadHistory();
-    })().finally(() => { refreshInFlight = null; }); return refreshInFlight;
+      loaded = true; renderWorkers(); renderWorkerLastResults();
+      // A hidden collection pane must not start its history fan-out after an
+      // automatic status read. Explicit collection intents retain their readback.
+      if (refreshExplicit || visible()) await loadHistory();
+    })().finally(() => { refreshInFlight = null; refreshExplicit = false; }); return refreshInFlight;
   }
   byId("collectorWorkerStates").replaceChildren(...WORKER_KEYS.map(makeCard));
   syncLegacyAvailability(false);
@@ -855,31 +863,74 @@
   byId("crawlWorkerKey")?.addEventListener("change", syncLegacyAvailability);
   byId("crawlAllowRepeat")?.addEventListener("change", event => { byId("crawlRepeatReason").disabled = !event.target.checked; byId("crawlRepeatReason").required = event.target.checked; });
   window.addEventListener("collector:requests-changed", () => { if (admin()) refresh(); });
-  window.addEventListener("collector:prepare-card", event => {
+  const readinessError = (code, message) => Object.assign(new Error(message), { code });
+  window.addEventListener("collector:ensure-ready", async event => {
+    const input = event.detail || {}, key = input.workerKey;
+    if (typeof input.resolve !== "function" || typeof input.reject !== "function") return;
+    try {
+      if (typeof key !== "string" || !WORKER_KEYS.includes(key)) throw readinessError("COLLECTOR_INVALID_WORKER", "확인할 수집기를 정확히 선택해 주세요.");
+      if (!admin()) throw readinessError("COLLECTOR_AUTH_REQUIRED", "관리자 로그인을 확인한 뒤 다시 준비해 주세요.");
+      const epoch = authEpoch;
+      // Only an explicit UI intent reaches this path. Reuse the real status
+      // flight even while hidden; it neither submits nor resumes collection.
+      await refresh();
+      if (!admin() || epoch !== authEpoch) throw readinessError("COLLECTOR_AUTH_CHANGED", "로그인 상태가 변경되었습니다. 현재 계정에서 다시 준비해 주세요.");
+      const matching = Array.isArray(workerData?.workers) ? workerData.workers.filter(worker => worker.workerKey === key) : [];
+      if (matching.length !== 1) throw readinessError("COLLECTOR_STATE_UNCONFIRMED", "선택한 수집기의 최신 연결 상태를 확인하지 못했습니다. 다시 확인해 주세요.");
+      const worker = matching[0], card = cards.get(key);
+      if (retirement(card).retired) throw readinessError("COLLECTOR_WORKER_RETIRED", "인사이트 서버로 전환된 수집기는 신규 수집을 받지 않습니다.");
+      if (worker.holdActive === true || worker.errorCode === "COLLECTOR_REVIEW_HOLD" || worker.brokerErrorCode === "COLLECTOR_REVIEW_HOLD")
+        throw readinessError("COLLECTOR_REVIEW_HOLD", "수집기 보호를 유지하고 있습니다. 보호 상태를 확인해 주세요.");
+      if (worker.halted) throw readinessError("COLLECTOR_HALTED", "선택한 수집기가 보호 상태입니다. 원인을 확인해 주세요.");
+      // Remote broker status has no optional ready field. Its existing
+      // configured/fresh/hold checks remain authoritative; web supplies ready.
+      const availability = workerAvailability(workerData, key);
+      if (worker.configured !== true || !availability.ready || key === "web" && worker.ready !== true
+        || Object.hasOwn(worker, "ready") && typeof worker.ready !== "boolean")
+        throw readinessError("COLLECTOR_NOT_READY", "선택한 수집기의 연결과 실행 준비 상태를 확인한 뒤 다시 준비해 주세요.");
+      input.resolve({ ready: true, workerKey: key });
+    } catch (cause) {
+      input.reject(/^COLLECTOR_[A-Z0-9_]{1,60}$/.test(cause?.code || "") ? cause
+        : readinessError("COLLECTOR_STATE_UNCONFIRMED", "수집기 상태를 확인하지 못했습니다. 다시 준비해 주세요."));
+    }
+  });
+  window.addEventListener("collector:prepare-card", async event => {
     const input = event.detail || {}, card = cards.get(workerKey(input.workerKey));
-    if (!card || retirement(card).retired || card.root.hidden) return;
+    if (!admin() || !card || retirement(card).retired) return;
+    const revision = card.editRevision, ordinal = ++card.prepareOrdinal, epoch = authEpoch;
+    // DB recrawl navigation may dispatch before the collection pane's first
+    // observer read. Await that real single flight before trusting worker identity.
+    await refresh();
+    if (!admin() || epoch !== authEpoch || revision !== card.editRevision || ordinal !== card.prepareOrdinal
+      || !workerData?.workers?.some(worker => worker.workerKey === card.key) || retirement(card).retired || card.root.hidden) return;
     fill(card, { keywords: input.keyword || "", searchMode: input.searchMode === "company" ? "company" : "keyword", period: "custom", checkIn: input.checkIn, checkOut: input.bookingRangeDays === 1 ? input.checkIn : input.checkOut, purpose: input.collectionPurpose || "revenue_detail", ranks: input.detailRankRanges || "1-20", dayUseMode: input.dayUseMode || "inspect", execution: "now" });
     card.root.open = true; card.root.scrollIntoView({ block: "start", behavior: "smooth" }); saveDraft(card);
   });
-  let wasAdmin = admin();
-  const observer = new MutationObserver(() => {
+  let wasAdmin = admin(), wasVisible = visible();
+  const observer = new MutationObserver((records = []) => {
     const isAdmin = admin();
+    const oldAdmin = value => { const classes = String(value || "").split(/\s+/); return classes.includes("role-admin") && !classes.includes("admin-user-view"); };
+    if (wasAdmin !== isAdmin || records.some(record => record.target === document.body && record.attributeName === "class" && oldAdmin(record.oldValue) !== isAdmin)) authEpoch++;
     if (wasAdmin && !isAdmin) {
+      for (const card of cards.values()) card.prepareOrdinal++;
       historySequence++; historyDataVersion++; historyData = null; historyDataQuery = null; historyPages.clear(); historyGroupNodes.clear(); historyPending.clear(); loaded = false;
       byId("collectorUnifiedHistory").replaceChildren(); byId("collectorHistoryLatest").textContent = "관리자 연결을 확인하세요."; byId("collectorHistoryCount").textContent = "기간 기록 확인 전";
       byId("collectorHistoryFilteredCount").textContent = ""; byId("collectorHistorySources").textContent = ""; byId("collectorHistoryReadError").hidden = true; historyNotice("");
       for (const id of ["collectorHistoryFailed", "collectorHistoryPartial", "collectorHistoryReview"]) byId(id).hidden = true;
     }
-    wasAdmin = isAdmin; renderProgress(); if (isAdmin && !loaded) refresh();
-  }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    const isVisible = visible(), entering = isVisible && !wasVisible;
+    wasAdmin = isAdmin; wasVisible = isVisible; renderProgress();
+    if (isVisible && (!loaded || entering)) refresh({ automatic: true });
+  }); observer.observe(document.body, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
   const section = panel.closest("[data-admin-section-panel]"); if (section) observer.observe(section, { attributes: true, attributeFilter: ["class"] });
-  document.addEventListener("visibilitychange", () => { if (admin() && !document.hidden) refresh(); });
+  document.addEventListener("visibilitychange", () => { wasVisible = visible(); if (wasVisible) refresh({ automatic: true }); });
   window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
   setInterval(() => {
     if (!admin() || document.hidden) { compactProgress.hidden = true; return; }
     renderProgress();
+    if (!visible()) return;
     const active = (workerData || lastWorkerData)?.workers?.some(worker => worker.activeJobId || worker.crawl?.active || workerQueueCount(worker));
-    if (Date.now() - lastRefreshAt >= (active ? 5000 : visible() ? 15000 : 60000)) refresh();
+    if (Date.now() - lastRefreshAt >= (active ? 5000 : 15000)) refresh({ automatic: true });
   }, 1000);
-  if (admin()) refresh();
+  if (visible()) refresh({ automatic: true });
 })();

@@ -237,3 +237,145 @@ test("ETA preview preserves selected worker and day-use scope and separates cach
   const explicit=ctx.crawlEstimatePayloadFromPlan({workerKey:"web",dayUseMode:"lodging_only"});
   assert.equal(explicit.workerKey,"web"); assert.equal(explicit.dayUseMode,"lodging_only");
 });
+
+function inlineReadyUi() {
+  const ui = harness(), c = ui.context, forms = {}, frames = [], submissions = [], readiness = [];
+  const company = { companyId: "cmp-synthetic", primaryName: "합성 업체" }, plan = { keyword: "합성 업체", checkIn: "2026-11-17", checkOut: "2026-11-18", range: "1-5", searchMode: "company", collectionPurpose: "revenue_detail" };
+  let admin = true, currentPlan = plan;
+  Object.assign(c.state, { session: { authenticated: true, role: "admin", username: "synthetic-admin" }, activeTab: "admin", adminPanelSection: "database", adminDbSelectedCompanyId: company.companyId, analysisNavigationSequence: 1, adminDbSearchRenderRevision: 1 });
+  ui.nodes.crawlWorkerHint = { dataset: { ready: "false" }, textContent: "수집기 상태 미확인" }; ui.submit.disabled = true;
+  for (const key of ["checkInInput", "checkOutInput", "collectionPurposeInput", "collectionModeInput", "productModeInput", "detailRankRangesInput"]) ui.els[key] = { value: key.includes("Purpose") ? "basic_db" : "" };
+  ui.els.crawlForm.dataset = {}; ui.els.crawlForm.addEventListener = (type, callback) => { (forms[type] ||= []).push(callback); };
+  ui.els.crawlForm.requestSubmit = () => { submissions.push(c.submitCrawl({ preventDefault() {} })); };
+  c.isAdminRole = () => admin; c.window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  c.window.dispatchEvent = event => { ui.events.push(event); if (event.type === "collector:ensure-ready") readiness.push(event.detail); };
+  c.companyMasterSource = () => ({ companies: [company] }); c.companyDecisionQueueProfile = () => ({}); c.companyNeedsCorrection = () => ({});
+  c.companyQueueRecrawlPlan = () => ({ ...currentPlan }); c.applyRecrawlRangeOverride = value => value; c.crawlEtaForPlan = () => ({ estimatedTotalSeconds: 60 });
+  c.crawlEtaKey = () => "synthetic-key"; c.companyCollectionTargetNames = () => ["합성 업체"]; c.activeKeyword = () => "initial-keyword";
+  c.crawlEtaShortText = () => "1분"; c.collectionPurposeProfile = () => ({ label: "상세" }); c.renderCrawlReadinessPreview = () => {}; c.syncCollectionModeInputs = () => {};
+  c.focusAdminCrawlProgress = () => { throw Error("inline must not change the current DB screen"); }; c.correctedSearchMode = (keyword, mode) => mode;
+  c.setDetailRankRange = value => { ui.els.detailRankRangesInput.value = value; }; c.renderAdminConsoleDashboard = () => { c.state.adminDbSearchRenderRevision++; button.isConnected = false; };
+  c.currentCrawlFormPayload = () => ({ keyword: ui.els.keywordInput.value, checkIn: ui.els.checkInInput.value, checkOut: ui.els.checkOutInput.value,
+    collectionPurpose: ui.els.collectionPurposeInput.value, searchMode: ui.els.searchModeInput.value, detailRankRanges: ui.els.detailRankRangesInput.value, workerKey: ui.nodes.crawlWorkerKey.value });
+  c.recrawlContextMatchesPayload = (context, payload) => context?.companyIds?.[0] === company.companyId && context.keyword === payload.keyword && context.checkIn === payload.checkIn && context.checkOut === payload.checkOut;
+  const declarations = ["queueRecrawlShouldAutoStart", "startQueueRecrawlIfRequested", "adminCrawlReadinessEditRevision", "ensureAdminCollectorReady", "applyQueueRecrawlSetting"]
+    .map(name => { const d = source.match(new RegExp(`^(?:async )?function ${name}\\([^]*?^}`, "m"))?.[0]; assert.ok(d, name); return d; });
+  vm.runInContext(declarations.join("\n"), c);
+  const button = { dataset: { queueRecrawlCompany: company.companyId, queueRecrawlSource: "admin_db_detail", queueRecrawlAutostart: "1" }, textContent: "확인 수집", isConnected: true };
+  const ready = (index = readiness.length - 1, value = null) => { ui.nodes.crawlWorkerHint.dataset.ready = "true"; c.syncAdminCrawlSubmitAvailability(); const r = readiness[index]; r.resolve(value === null ? { ready: true, workerKey: r.workerKey } : value); };
+  return { ...ui, button, company, plan, readiness, frames, submissions, ready, setAdmin(value) { admin = value; }, changePlan(value) { currentPlan = { ...currentPlan, ...value }; },
+    edit(type = "input") { for (const listener of forms[type] || []) listener(); }, async frame() { for (const callback of frames.splice(0)) callback(); await Promise.all(submissions); },
+    posts() { return ui.calls.filter(call => call.url === "/api/crawl?async=1"); } };
+}
+
+test("DB inline first use awaits fresh readiness before interpreting an unknown disabled submit as busy", async () => {
+  const ui = inlineReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button);
+  assert.equal(ui.readiness.length, 1); assert.equal(ui.posts().length, 0); assert.equal(ui.frames.length, 0); assert.equal(ui.context.state.pendingRecrawlContext, undefined);
+  assert.equal(ui.readiness[0].workerKey, "scheduled"); ui.ready(); await pending; assert.equal(ui.frames.length, 1); assert.equal(ui.context.state.adminDbInlineCollect.status, "preparing");
+  await ui.frame(); assert.equal(ui.posts().length, 1, "the existing synthetic receipt submission is invoked only after readiness");
+  const body = JSON.parse(ui.posts()[0].options.body); assert.equal(body.keyword, ui.plan.keyword); assert.equal(body.workerKey, "scheduled"); assert.equal(ui.context.state.adminPanelSection, "database");
+});
+
+test("DB readiness rejection, missing listener timeout and late success never submit or create preparing state", async () => {
+  for (const mode of ["reject", "timeout"]) {
+    const ui = inlineReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); assert.equal(ui.readiness.length, 1);
+    if (mode === "reject") ui.readiness[0].reject(Object.assign(Error("DO_NOT_PRINT_PRIVATE"), { code: "COLLECTOR_HALTED" }));
+    else { const timer = ui.timers.find(timer => timer.delay === 10000); assert.ok(timer); timer.fn(); }
+    await pending; ui.ready(); await ui.frame(); assert.equal(ui.posts().length, 0); assert.equal(ui.context.state.adminDbInlineCollect, undefined); assert.equal(ui.context.state.pendingRecrawlContext, undefined);
+    assert.match(ui.els.crawlStatus.textContent, /수집하지 않았습니다/); assert.doesNotMatch(ui.els.crawlStatus.textContent, /DO_NOT_PRINT_PRIVATE/);
+  }
+});
+
+test("DB readiness requires the exact computed worker result rather than a boolean or an unrelated capability", async () => {
+  for (const value of [true, {}, { ready: false, workerKey: "scheduled" }, { ready: true, workerKey: "manual" }, { ready: true, workerKey: "scheduled", private: "DO_NOT_PRINT" }]) {
+    const ui = inlineReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); ui.ready(0, value); await pending; await ui.frame(); assert.equal(ui.posts().length, 0);
+  }
+});
+
+test("authentication, DB selection, navigation, range and user edits invalidate an outstanding inline readiness intent", async () => {
+  for (const change of [ui => ui.setAdmin(false), ui => { ui.context.state.session = { ...ui.context.state.session }; }, ui => { ui.context.state.adminUserViewMode = true; },
+    ui => { ui.context.state.adminDbSelectedCompanyId = "another-company"; }, ui => { ui.context.state.analysisNavigationSequence++; }, ui => { ui.context.state.adminDbSearchRenderRevision++; },
+    ui => { ui.nodes.crawlWorkerKey.value = "manual"; }, ui => { ui.button.dataset.queueRecrawlRange = "1-20"; }, ui => { ui.button.isConnected = false; },
+    ui => { ui.els.keywordInput.value = "new input"; }, ui => ui.edit(), ui => ui.edit("change"), ui => ui.changePlan({ checkIn: "2026-11-18" })]) {
+    const ui = inlineReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); change(ui); ui.ready(); await pending; await ui.frame(); assert.equal(ui.posts().length, 0); assert.equal(ui.context.state.pendingRecrawlContext, undefined);
+  }
+});
+
+test("real collection busy and protection-disabled state remain blocks before and after readiness", async () => {
+  for (const before of [{ adminCrawlSubmitting: true }, { adminDbInlineCollect: { status: "running" } }]) {
+    const ui = inlineReadyUi(); Object.assign(ui.context.state, before); await ui.context.applyQueueRecrawlSetting(ui.button); assert.equal(ui.readiness.length, 0); assert.equal(ui.posts().length, 0);
+  }
+  for (const mode of ["busy", "inline", "disabled"]) {
+    const ui = inlineReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); ui.ready();
+    if (mode === "busy") ui.context.state.adminCrawlSubmitting = true; if (mode === "inline") ui.context.state.adminDbInlineCollect = { status: "running" }; if (mode === "disabled") ui.submit.disabled = true;
+    await pending; await ui.frame(); assert.equal(ui.posts().length, 0); assert.equal(ui.context.state.pendingRecrawlContext, undefined);
+  }
+});
+
+test("only the newest inline intent may prepare and the next real frame rechecks user selection", async () => {
+  const ui = inlineReadyUi(), first = ui.context.applyQueueRecrawlSetting(ui.button), second = ui.context.applyQueueRecrawlSetting(ui.button);
+  assert.equal(ui.readiness.length, 2); ui.ready(0); ui.ready(1); await Promise.all([first, second]); assert.equal(ui.frames.length, 1); await ui.frame(); assert.equal(ui.posts().length, 1);
+  for (const change of [ui => { ui.context.state.adminDbSelectedCompanyId = "another-company"; }, ui => ui.edit(), ui => ui.setAdmin(false),
+    ui => { ui.context.state.analysisNavigationSequence++; }, ui => { ui.context.state.pendingRecrawlContext = null; }]) {
+    const other = inlineReadyUi(), pending = other.context.applyQueueRecrawlSetting(other.button); other.ready(); await pending; change(other); await other.frame(); assert.equal(other.posts().length, 0);
+    assert.equal(other.context.state.adminDbInlineCollect, null, "cancel only this still-unsubmitted preparing owner, so later retries are not falsely busy");
+  }
+});
+
+test("non-inline recrawl preparation retains its immediate manual navigation without a hidden readiness request", async () => {
+  const ui = inlineReadyUi(); ui.button.dataset.queueRecrawlSource = "decision_queue"; ui.button.dataset.queueRecrawlAutostart = "0"; ui.button.textContent = "설정";
+  let navigated = 0; ui.context.focusAdminCrawlProgress = () => { navigated++; }; await ui.context.applyQueueRecrawlSetting(ui.button);
+  assert.equal(navigated, 1); assert.equal(ui.readiness.length, 0); assert.equal(ui.frames.length, 0); assert.equal(ui.posts().length, 0);
+});
+
+function automaticReadyUi(sourceName = "admin_db_decision") {
+  const ui = inlineReadyUi(); ui.button.dataset.queueRecrawlSource = sourceName;
+  Object.assign(ui.context.state, { activeTab: "rank", adminPanelSection: "overview", adminDbSelectedCompanyId: "origin-company" });
+  ui.navigations = 0; ui.context.focusAdminCrawlProgress = () => {
+    ui.navigations++; Object.assign(ui.context.state, { activeTab: "admin", adminPanelSection: "collect" }); ui.context.state.analysisNavigationSequence++;
+  };
+  return ui;
+}
+
+test("every explicit automatic confirm-collection source waits for fresh readiness before navigation and its original receipt POST", async () => {
+  for (const sourceName of ["admin_db_decision", "admin_db", "admin_region_audit_queue", "admin_confirm_collect", "decision_queue"]) {
+    const ui = automaticReadyUi(sourceName); if (sourceName === "decision_queue") ui.button.dataset.queueRecrawlAutostart = "0";
+    const pending = ui.context.applyQueueRecrawlSetting(ui.button);
+    assert.equal(ui.readiness.length, 1, sourceName); assert.equal(ui.navigations, 0); assert.equal(ui.frames.length, 0); assert.equal(ui.posts().length, 0);
+    ui.ready(); await pending; assert.equal(ui.navigations, 1); assert.equal(ui.frames.length, 1); assert.equal(ui.context.state.adminDbInlineCollect, undefined);
+    await ui.frame(); assert.equal(ui.posts().length, 1, sourceName);
+    const body = JSON.parse(ui.posts()[0].options.body); assert.equal(body.keyword, ui.plan.keyword); assert.equal(body.recrawlContext.companyIds[0], ui.company.companyId);
+    assert.equal(ui.context.state.adminPanelSection, "collect");
+  }
+});
+
+test("automatic confirmation yields to newer authentication, navigation, selection, plan or input while waiting", async () => {
+  for (const change of [ui => ui.setAdmin(false), ui => { ui.context.state.session = { ...ui.context.state.session }; },
+    ui => { ui.context.state.analysisNavigationSequence++; }, ui => { ui.context.state.activeTab = "reports"; },
+    ui => { ui.context.state.adminDbSelectedCompanyId = "new-origin"; }, ui => ui.edit(), ui => { ui.els.checkInInput.value = "2026-11-20"; },
+    ui => ui.changePlan({ checkOut: "2026-11-20" }), ui => { ui.button.dataset.queueRecrawlRange = "1-20"; }]) {
+    const ui = automaticReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); change(ui); ui.ready(); await pending; await ui.frame();
+    assert.equal(ui.navigations, 0); assert.equal(ui.posts().length, 0); assert.equal(ui.context.state.pendingRecrawlContext, undefined);
+  }
+});
+
+test("automatic confirmation timeout or protection rejection never navigates, retries or submits late", async () => {
+  for (const mode of ["timeout", "reject", "busy"]) {
+    const ui = automaticReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button);
+    if (mode === "timeout") ui.timers.find(timer => timer.delay === 10000).fn();
+    else if (mode === "reject") ui.readiness[0].reject(Object.assign(Error("protected"), { code: "COLLECTOR_REVIEW_HOLD" }));
+    else { ui.ready(); ui.context.state.adminCrawlSubmitting = true; }
+    await pending; if (mode !== "busy") ui.ready(); await ui.frame();
+    assert.equal(ui.navigations, 0); assert.equal(ui.posts().length, 0); assert.equal(ui.readiness.length, 1);
+  }
+});
+
+test("automatic confirmation rebinds only its own navigation and still yields before the next frame or to manual setup", async () => {
+  for (const change of [ui => { ui.context.state.analysisNavigationSequence++; }, ui => { ui.context.state.adminDbSelectedCompanyId = "new-view-company"; }, ui => ui.edit(), ui => ui.setAdmin(false)]) {
+    const ui = automaticReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button); ui.ready(); await pending; assert.equal(ui.navigations, 1);
+    change(ui); await ui.frame(); assert.equal(ui.posts().length, 0); assert.equal(ui.context.state.pendingRecrawlContext, null);
+  }
+  const ui = automaticReadyUi(), pending = ui.context.applyQueueRecrawlSetting(ui.button), manual = { ...ui.button, dataset: { ...ui.button.dataset, queueRecrawlAutostart: "0" }, textContent: "설정 적용" };
+  await ui.context.applyQueueRecrawlSetting(manual); assert.equal(ui.readiness.length, 1, "manual setup does not issue another readiness GET");
+  ui.ready(); await pending; await ui.frame(); assert.equal(ui.navigations, 1, "the older automatic intent cannot navigate a second time"); assert.equal(ui.posts().length, 0);
+});

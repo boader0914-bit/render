@@ -41,6 +41,8 @@ class Element {
   addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
   removeEventListener() {}
   querySelector(selector) { return selector.startsWith("#") ? this.registry.get(selector.slice(1)) : null; }
+  closest(selector) { for (let node = this; node; node = node.parentNode) if (selector === "[data-admin-section-panel]" && Object.hasOwn(node.attributes, "data-admin-section-panel")) return node; return null; }
+  getClientRects() { for (let node = this; node; node = node.parentNode) if (node.hidden || Object.hasOwn(node.attributes, "data-admin-section-panel") && !node.classList.contains("active")) return []; return [{}]; }
   async event(type) { if (type === "click" && this.disabled) return; await Promise.all((this.listeners[type] || []).map(callback => callback({ type, target: this, preventDefault() {} }))); }
 }
 const descendants = node => [node, ...node.children.flatMap(descendants)];
@@ -48,19 +50,22 @@ const allText = node => descendants(node).map(el => el.textContent).join(" ");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) { for (let index = 0; index < 100; index++) { if (predicate()) return; await tick(); } throw new Error("UI condition not reached"); }
 function deferred() { let resolve; const promise = new Promise(value => { resolve = value; }); return { promise, resolve }; }
-async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure, modeHeadings = false, persistedOpen = null } = {}) {
-  const nodes = new Map(), body = new Element("body", nodes), parent = new Element("section", nodes), workers = new Element("div", nodes);
-  body.className = "role-admin"; parent.id = "collectorControlsCard"; workers.id = "collectorWorkerStates";
+async function mockUi({ saved = true, previewGate, readFailure = false, trialSupported = false, trialPreviewGate, trialWriteGate, trialFailure, modeHeadings = false, persistedOpen = null,
+  activeSection = true, documentHidden = false, parentHidden = false, bodyRole = "role-admin", readGate = null } = {}) {
+  const nodes = new Map(), body = new Element("body", nodes), section = new Element("section", nodes), parent = new Element("section", nodes), workers = new Element("div", nodes), listeners = {};
+  body.className = bodyRole; section.setAttribute("data-admin-section-panel", "collect"); section.className = activeSection ? "active" : ""; body.append(section); section.append(parent);
+  parent.hidden = parentHidden; parent.id = "collectorControlsCard"; workers.id = "collectorWorkerStates";
   if (modeHeadings) for (const id of ["collectorRegularHeading", "collectorExecutionHeading"]) { const heading = new Element("div", nodes); heading.id = id; parent.append(heading); }
   parent.append(workers);
-  const document = { body, hidden: false, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes), addEventListener() {}, removeEventListener() {} };
+  const document = { body, hidden: documentHidden, getElementById: id => nodes.get(id), createElement: tag => new Element(tag, nodes),
+    addEventListener(type, callback) { (listeners[type] ||= new Set()).add(callback); }, removeEventListener(type, callback) { listeners[type]?.delete(callback); } };
   const config = defaultConfig(new Date(now)); config.firstDate = "2026-10-16"; let state = { config, enabled: false, revision: saved ? 1 : 0, planState: "disabled", cursor: 0, nextKeyword: "경남글램핑", todayItems: [], upcomingItems: planDays(config).items, nextRunAt: null };
   if (trialSupported) { config.enabled = true; Object.assign(state, { enabled: true, planState: "scheduled", basePlanHash: "a".repeat(64), oneDayTrials: [], oneDayTrial: null }); }
   const calls = [], events = [], timers = [], observers = [];
   async function fetch(url, options) {
     const method = options.method, payload = options.body === undefined ? undefined : JSON.parse(options.body); calls.push({ url, method, payload });
     let result;
-    if (method === "GET") { if (readFailure) return { ok: false, status: 401, json: async () => ({ error: "AUTH_REQUIRED" }) }; result = clone(state); }
+    if (method === "GET") { result = clone(state); if (readGate) await readGate.promise; if (readFailure) return { ok: false, status: 401, json: async () => ({ error: "AUTH_REQUIRED" }) }; }
     else if (url.endsWith("/trial/preview")) {
       if (trialPreviewGate) await trialPreviewGate.promise;
       if (trialFailure?.preview) return { ok: false, status: 409, json: async () => ({ code: trialFailure.preview }) };
@@ -89,14 +94,17 @@ async function mockUi({ saved = true, previewGate, readFailure = false, trialSup
   }
   const storage = new Map(persistedOpen === null ? [] : [["staydatalab:collection-rotation-open:v1", persistedOpen]]);
   const window = { fetch, localStorage: { getItem(key) { return storage.get(key) ?? null; }, setItem(key, value) { storage.set(key, value); } }, dispatchEvent(event) { events.push(event); }, addEventListener() {}, setInterval(callback) { timers.push(callback); return timers.length; }, clearInterval() {} };
-  class MutationObserver { constructor(callback) { this.callback = callback; observers.push(this); } observe() {} disconnect() {} }
+  class MutationObserver { constructor(callback) { this.callback = callback; this.targets = []; observers.push(this); } observe(target) { this.targets.push(target); } disconnect() {} }
+  let currentTime = now;
   const context = vm.createContext({ window, document, MutationObserver, CustomEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } }, console, Intl,
-    Date: class extends Date { static now() { return now; } }, Set, Object, Array, Number, String, Promise });
-  vm.runInContext(source, context);
-  await until(() => calls.length && nodes.get("collectionRotationPanel")); for (let index = 0; index < 6; index++) await tick();
+    Date: class extends Date { static now() { return currentTime; } }, Set, Object, Array, Number, String, Promise });
+  const instrumented = source.replace("if (parent) mount(parent);", "if (parent) window.testRotationController = mount(parent);");
+  assert.notEqual(instrumented, source, "observe the controller returned by the real automatic mount"); vm.runInContext(instrumented, context);
+  await until(() => nodes.get("collectionRotationPanel")); for (let index = 0; index < 6; index++) await tick();
   const panel = nodes.get("collectionRotationPanel"), button = label => descendants(panel).find(el => el.tagName === "BUTTON" && el.textContent === label), input = name => nodes.get(`rotation_${name}`);
   async function change(name, value) { const el = input(name); if (el.type === "checkbox") el.checked = value; else el.value = value; await el.event("input"); }
-  return { nodes, body, parent, workers, panel, button, input, change, calls, events, observers, timers, storage, get state() { return state; } };
+  return { nodes, body, section, parent, workers, panel, button, input, change, calls, events, observers, timers, storage, document, controller: window.testRotationController,
+    visibility() { for (const callback of listeners.visibilitychange || []) callback(); }, setNow(value) { currentTime = value; }, get state() { return state; } };
 }
 const tableRows = ui => descendants(ui.panel).filter(el => el.tagName === "TR" && el.parentNode?.tagName === "TBODY");
 const postprocessNodes = row => descendants(row).filter(el => ["collector-postprocess-status", "collector-worker-alert"].includes(el.className));
@@ -426,4 +434,71 @@ test("a past allocated trial remains visible without blocking a later one-day pr
   assert.equal(ui.button("미배정 시험 취소").disabled, true); assert.equal(ui.button("시험 배정표 미리보기").disabled, false);
   await ui.button("시험 배정표 미리보기").event("click");
   assert.equal(ui.button("하루 시험 등록").disabled, false);
+});
+
+test("automatic rotation reads stay dormant outside the visible authenticated collect section", async () => {
+  for (const hidden of [{ activeSection: false }, { documentHidden: true }, { parentHidden: true }, { bodyRole: "role-admin admin-user-view" }, { bodyRole: "role-b2b" }]) {
+    const ui = await mockUi(hidden); ui.panel.open = true;
+    for (let i = 0; i < 5; i++) { ui.observers[0].callback(); ui.visibility(); for (const timer of ui.timers) timer(); await ui.panel.event("toggle"); }
+    for (let i = 0; i < 6; i++) await tick();
+    assert.equal(ui.calls.length, 0, JSON.stringify(hidden)); assert.equal(ui.events.length, 0); assert.equal(ui.state.enabled, false);
+  }
+});
+
+test("collect-section entry performs one fresh single-flight rotation read and reentry preserves edited inputs", async () => {
+  const gate = deferred(), ui = await mockUi({ activeSection: false, readGate: gate });
+  assert.equal(ui.calls.length, 0); assert.ok(ui.observers[0].targets.includes(ui.section));
+  ui.section.className = "active"; ui.observers[0].callback();
+  for (let i = 0; i < 5; i++) { ui.observers[0].callback(); ui.visibility(); }
+  ui.panel.open = true; await ui.panel.event("toggle"); assert.equal(ui.calls.length, 1, "entry, repeated mutations and expansion share one GET");
+  gate.resolve(); for (let i = 0; i < 6; i++) await tick();
+  await ui.change("bookingDays", "14"); await ui.change("startKeyword", "부산글램핑");
+  ui.observers[0].callback(); ui.visibility(); assert.equal(ui.calls.length, 1, "an unchanged active screen does not revalidate repeatedly");
+  ui.section.className = ""; ui.observers[0].callback();
+  ui.state.todayItems = [{ id: "fresh_status", day: "2026-10-15", keyword: "NEW_SAVED_STATUS", workerKey: "manual", status: "complete" }];
+  ui.section.className = "active"; ui.observers[0].callback(); ui.observers[0].callback();
+  await until(() => allText(ui.panel).includes("NEW_SAVED_STATUS"));
+  assert.equal(ui.calls.length, 2); assert.equal(ui.input("bookingDays").value, "14"); assert.equal(ui.input("startKeyword").value, "부산글램핑");
+  assert.ok(ui.calls.every(c => c.method === "GET")); assert.equal(ui.state.enabled, false); assert.equal(ui.events.length, 0);
+});
+
+test("document visibility return refreshes rotation once only when its collection section is active", async () => {
+  const ui = await mockUi(); assert.equal(ui.calls.length, 1); ui.panel.open = true;
+  ui.document.hidden = true; ui.visibility(); ui.setNow(now + 60000); for (const timer of ui.timers) timer();
+  assert.equal(ui.calls.length, 1); ui.document.hidden = false; ui.visibility(); ui.visibility();
+  for (let i = 0; i < 6; i++) await tick(); assert.equal(ui.calls.length, 2);
+  ui.section.className = ""; ui.observers[0].callback(); ui.document.hidden = true; ui.visibility(); ui.document.hidden = false; ui.visibility();
+  for (const timer of ui.timers) timer(); for (let i = 0; i < 6; i++) await tick(); assert.equal(ui.calls.length, 2);
+});
+
+test("rotation timer requires actual panel geometry, active collection and an open disclosure", async () => {
+  const ui = await mockUi(); ui.setNow(now + 20000);
+  for (const timer of ui.timers) timer(); assert.equal(ui.calls.length, 1, "folded details do not poll");
+  ui.panel.open = true; ui.parent.hidden = true; for (const timer of ui.timers) timer(); assert.equal(ui.calls.length, 1);
+  ui.parent.hidden = false; for (const timer of ui.timers) timer(); await until(() => ui.calls.length === 2); for (let i = 0; i < 6; i++) await tick();
+  ui.setNow(now + 40000); ui.section.className = ""; ui.observers[0].callback(); for (const timer of ui.timers) timer();
+  assert.equal(ui.calls.length, 2); assert.ok(ui.calls.every(c => c.method === "GET"));
+});
+
+test("explicit rotation refresh and post-save read remain fresh even when the collection panel is hidden", async () => {
+  const ui = await mockUi({ activeSection: false }); assert.equal(ui.calls.length, 0);
+  await ui.controller.refresh(); assert.equal(ui.calls.length, 1); await ui.button("상태 새로고침").event("click"); assert.equal(ui.calls.length, 2);
+  await ui.change("bookingDays", "14"); const before = ui.calls.length; await ui.button("조건 저장").event("click");
+  assert.deepEqual(ui.calls.slice(before).map(c => c.method), ["PUT", "GET"]); assert.equal(ui.state.enabled, false);
+  assert.equal(ui.state.config.collection.bookingDays, 14); assert.equal(ui.events.length, 0, "saving conditions does not start a schedule");
+});
+
+test("authorization loss blocks automatic rotation reads and late private status adoption", async () => {
+  const gate = deferred(), ui = await mockUi({ readGate: gate }); assert.equal(ui.calls.length, 1);
+  ui.body.className = "role-b2b"; ui.observers[0].callback(); ui.panel.open = true; ui.setNow(now + 60000);
+  ui.visibility(); for (const timer of ui.timers) timer(); await ui.panel.event("toggle"); await ui.controller.refresh();
+  gate.resolve(); for (let i = 0; i < 6; i++) await tick();
+  assert.equal(ui.calls.length, 1); assert.match(allText(ui.panel), /관리자 연결을 확인/); assert.doesNotMatch(allText(ui.panel), /오늘 배정|다음 배정/);
+  assert.equal(ui.button("순환예약 시작").disabled, true); assert.equal(ui.events.length, 0);
+});
+
+test("a zero-geometry rotation parent cannot start its automatic read until it becomes visible", async () => {
+  const ui = await mockUi({ parentHidden: true }); assert.equal(ui.calls.length, 0);
+  ui.parent.hidden = false; ui.observers[0].callback(); await until(() => ui.calls.length === 1); for (let i = 0; i < 6; i++) await tick();
+  ui.observers[0].callback(); ui.visibility(); assert.equal(ui.calls.length, 1);
 });
