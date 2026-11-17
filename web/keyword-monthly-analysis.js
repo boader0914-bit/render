@@ -316,7 +316,7 @@
     // clock. Never retain a URL, query, body, response header or raw exception.
     const requestClock = typeof win.performance?.now === "function" ? win.performance.now.bind(win.performance) : Date.now;
     const clockValue = () => { try { const value = requestClock(); return known(value) ? value : null; } catch { return null; } };
-    let draft = { ...initialView.draft }, appliedSelection = null, draftRevision = 0, cutoffMode = "auto", draftCutoffMode = "auto", listQuery = "", listPage = 1, mobileView = "list", expanded = {}, scopes = [], resultTarget = null, workspace = null, listPanel = null, detailPanel = null;
+    let draft = { ...initialView.draft }, appliedSelection = null, draftRevision = 0, cutoffMode = "auto", draftCutoffMode = "auto", listQuery = "", listPage = 1, mobileView = "list", expanded = {}, scopes = [], resultTarget = null, workspace = null, listPanel = null, detailPanel = null, resumeBenchmark = null;
     const PAGE_SIZE = 20;
     const chartRoots = new Set();
     const el = (tag, cls = "", text = "") => { const node = doc.createElement(tag); node.className = cls; node.textContent = text; return node; };
@@ -397,9 +397,9 @@
       keyword = word; month = stayMonth; cutoffDate = saved?.cutoffDate || ""; cutoffMode = saved?.cutoffMode || "auto";
       product = saved?.product || product; benchmarkCompanyId = saved ? saved.companyId : carriedCompanyId; listQuery = saved?.listQuery || ""; listPage = saved?.listPage || 1; mobileView = saved?.mobileView || "list"; expanded = { ...(saved?.expanded || {}) }; companyChoices = [];
     }
-    function disclose(details, key) {
+    function disclose(details, key, valid = null) {
       details.open = expanded[key] === true;
-      details.addEventListener("toggle", () => { if (!allowed() || destroyed || paused) return; expanded = { ...expanded, [key]: details.open === true }; rememberScope(); });
+      details.addEventListener("toggle", () => { if (!allowed() || destroyed || paused || valid && !valid()) return; expanded = { ...expanded, [key]: details.open === true }; rememberScope(); });
       return details;
     }
     function externalSelection() { return { ...selected(), cutoffMode, product, benchmarkCompanyId, companyId: benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded } }; }
@@ -421,8 +421,8 @@
       for (const key of Object.keys(PRODUCTS)) productButtons[key].setAttribute("aria-pressed", String(product === key));
     }
     function card(label, value, detail = "", cls = "") { const node = el("div", `kma-metric ${cls}`); node.append(el("span", "", label), el("strong", "", value)); if (detail) node.append(el("small", "", detail)); return node; }
-    function section(label, note = "", collapsible = false) { const node = el("section", "mr-card kma-panel"), head = el("div", "mr-section-title"); head.append(el("h3", "", label)); node.append(head); if (note) node.append(el("p", "kma-note", note));
-      if (collapsible) { const details = disclose(el("details", "kma-chart-data kma-supporting-details"), `support:${label}`); details.append(el("summary", "", label), node); (resultTarget || results).append(details); } else (resultTarget || results).append(node); return node; }
+    function section(label, note = "", collapsible = false, valid = null) { const node = el("section", "mr-card kma-panel"), head = el("div", "mr-section-title"); head.append(el("h3", "", label)); node.append(head); if (note) node.append(el("p", "kma-note", note));
+      if (collapsible) { const details = disclose(el("details", "kma-chart-data kma-supporting-details"), `support:${label}`, valid); details.append(el("summary", "", label), node); (resultTarget || results).append(details); } else (resultTarget || results).append(node); return node; }
     function renderIdentityReview(snapshot) {
       const quality = snapshot.quality || {}, review = identityReviewView(quality.identityReview, Object.hasOwn(quality, "identityReview"));
       const block = section("업체 연결 검토", "구형 이력의 업체 연결 분류이며 관측기록 건수입니다. 객실수·예약수·월 합산건수와 다릅니다.", true);
@@ -579,13 +579,33 @@
       table(flowData, ["숙박일", selectedLabel, wholeLabel, "선택 업체 − 전체", "전체 유효 / 목록 업체"], model.daily.map(day => [day.date, rate(day.selectedRate), rate(day.wholeRate), known(day.difference) ? `${day.difference > 0 ? "+" : ""}${number(day.difference * 100)}%p` : "—", `${number(day.wholeCompanyCount)} / ${number(day.rosterCompanyCount)}`]), "월 전체 날짜 표시 · 미관측은 — · 수치가 없는 날짜를 연결하지 않음"); flowPanel.append(flowData);
     }
     function renderBenchmark(snapshot, info) {
-      const block = section("업체 선택 · 전체 평균 비교", "같은 키워드·숙박월·상품의 유효 관측만 비교합니다. 전체 평균에는 선택 업체를 포함하고, 선택 업체를 제외한 값도 따로 보여줍니다.", true);
+      const revision = chartRevision, token = sequence, source = payload, productType = product, companyId = benchmarkCompanyId;
+      let block, built = false;
+      const valid = () => !destroyed && !paused && visible() && revision === chartRevision && token === sequence
+        && source === payload && payload?.snapshot === snapshot && productType === product && companyId === benchmarkCompanyId && block?.isConnected === true;
+      block = section("업체 선택 · 전체 평균 비교", "같은 키워드·숙박월·상품의 유효 관측만 비교합니다. 전체 평균에는 선택 업체를 포함하고, 선택 업체를 제외한 값도 따로 보여줍니다.", true, valid);
       block.className += " kma-benchmark";
+      const details = block.parentNode;
+      const populate = () => {
+        if (!valid()) return;
+        if ((details.open === true || expanded["support:업체 선택 · 전체 평균 비교"] === true)
+          && expanded["support:업체 선택 · 전체 평균 비교"] !== (details.open === true)) {
+          expanded = { ...expanded, ["support:업체 선택 · 전체 평균 비교"]: details.open === true }; rememberScope();
+        }
+        if (built || !details.open) return;
+        built = true;
+        renderBenchmarkContents(block, snapshot, info, productType, companyId);
+      };
+      resumeBenchmark = populate;
+      details.addEventListener("toggle", populate);
+      populate();
+    }
+    function renderBenchmarkContents(block, snapshot, info, productType, companyId) {
       const calculate = (root.KeywordMonthlyBenchmark || benchmarkModule)?.buildKeywordMonthlyBenchmark;
       if (typeof calculate !== "function") { block.append(el("p", "kma-note", "업체 평균 계산 모듈을 확인하지 못했습니다. 미확인 평균을 0으로 표시하지 않습니다.")); return; }
-      const value = calculate(snapshot, { productType: product, companyId: benchmarkCompanyId });
+      const value = calculate(snapshot, { productType, companyId });
       if (value.status === "needs_verification") { block.append(el("p", "kma-note", "비교할 저장 관측의 업체 고유번호·수량·중복 근거를 확인해야 합니다. 정상 평균이나 0으로 대신 계산하지 않습니다.")); return; }
-      if (benchmarkCompanyId && value.selectedCompanyId !== benchmarkCompanyId) { block.append(el("p", "kma-selection-unavailable", "선택 업체를 이 범위에서 확보하지 못해 선택 제외·동일 관측일 비교는 표시하지 않습니다. 전체 표본 비교선과 막대는 기존 전체 범위를 유지합니다.")); return; }
+      if (companyId && value.selectedCompanyId !== companyId) { block.append(el("p", "kma-selection-unavailable", "선택 업체를 이 범위에서 확보하지 못해 선택 제외·동일 관측일 비교는 표시하지 않습니다. 전체 표본 비교선과 막대는 기존 전체 범위를 유지합니다.")); return; }
       const selectedCompany = value.selected, all = value.monthly.all, peers = value.monthly.peers, fair = value.sameDates;
       const bars = el("div", "kma-benchmark-bars");
       for (const [name, item, cls] of [[selectedCompany?.name || "선택 업체", selectedCompany, "kma-benchmark-selected"], ["전체 표본 · 선택 업체 포함", all, "kma-benchmark-all"], ["다른 표본 · 선택 업체 제외", peers, "kma-benchmark-peers"]]) {
@@ -687,6 +707,7 @@
     }
     function render() {
       clearDisplayedMarker();
+      resumeBenchmark = null;
       clearCharts(); resultTarget = results; workspace = listPanel = detailPanel = null;
       const candidate = allowed() && !paused && payload ? buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)) : null;
       const retained = candidate?.usable && (loading || Boolean(error) || resumeNeeded);
@@ -1246,9 +1267,9 @@
         const resume = resumeRequest; resumeNeeded = false; resumeRequest = null;
         if (resume) void load(resume.context, { renewCatalog: resume.renewCatalog, applyInput: resume.applyInput, restored: resume.restored });
         else if (catalog) void load(); else void open(pendingContext);
-      } else armAutomatic();
+      } else { resumeBenchmark?.(); armAutomatic(); }
     };
-    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (!visible()) stopAutomatic(); else if (!catalog && !loading && !error) void open(pendingContext); else armAutomatic(); }) : null;
+    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => { if (!allowed()) clearPrivate(); else if (!visible()) stopAutomatic(); else if (!catalog && !loading && !error) void open(pendingContext); else { resumeBenchmark?.(); armAutomatic(); } }) : null;
     observer?.observe(doc.body, { attributes: true, attributeFilter: ["class"] }); doc.addEventListener("visibilitychange", onVisibility);
     for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) win.addEventListener?.(type, cancelScrollRestore, { capture: true, passive: true });
     win.addEventListener?.("resize", onViewportResize); win.addEventListener?.("pagehide", saveScrollOnPageHide);

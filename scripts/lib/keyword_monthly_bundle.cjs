@@ -147,10 +147,20 @@ async function partition(bundle, key, now, staleAfterMs, { optionsReader, measur
   return { descriptor, directory, index: { file: index.file, sha256: index.sha256, size: index.size }, service, options: narrowOptions(options, declared) };
 }
 const safeError = error => /^KEYWORD_MONTHLY_[A-Z0-9_]+$/.test(error?.code || "") ? error.code : "KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE";
+async function settledIndexBatches(items, concurrency, operation, consume) {
+  for (let offset = 0; offset < items.length; offset += concurrency) {
+    const batch = items.slice(offset, offset + concurrency);
+    // Every started read settles before consuming an error or starting the
+    // next batch. Descriptor order, not completion order, owns the outcome.
+    const results = await Promise.allSettled(batch.map(item => Promise.resolve().then(() => operation(item))));
+    for (let index = 0; index < batch.length; index++) consume(results[index], batch[index]);
+  }
+}
 function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.now(), staleAfterMs, measure = measureDefault,
-  runLegacyAnalysis = runKeywordMonthlyMemoryAdmission } = {}) {
+  runLegacyAnalysis = runKeywordMonthlyMemoryAdmission, optionsReadConcurrency = 4 } = {}) {
   ensure(typeof projectionDir === "string" && path.isAbsolute(projectionDir), "KEYWORD_MONTHLY_BUNDLE_ABSOLUTE_DIRECTORY_REQUIRED");
   if (typeof runLegacyAnalysis !== "function") throw new TypeError("A guarded legacy analysis callback is required");
+  if (!Number.isSafeInteger(optionsReadConcurrency) || optionsReadConcurrency < 1 || optionsReadConcurrency > 8) throw new TypeError("Invalid keyword options read concurrency");
   const directory = path.resolve(projectionDir), legacy = createKeywordMonthlyAnalysis({ projectionDir: directory, now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
   const optionsReader = createKeywordMonthlyOptionsIndexReader({ now, measure, ...(staleAfterMs === undefined ? {} : { staleAfterMs }) });
   const optionsFlights = new Map();
@@ -183,25 +193,32 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
     try { await fs.lstat(path.join(directory, "current.json")); throw fault("KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); } catch (error) { if (error.code !== "ENOENT") throw error; }
     return result;
   }
-  async function unchanged(bundle, part) {
+  async function unchanged(bundle, part, indexReadConcurrency = 1) {
     const after = await loadBundle(directory); ensure(after.pointerRead.sha256 === bundle.pointerRead.sha256 && after.catalogRead.sha256 === bundle.catalogRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-    for (const item of part ? Array.isArray(part) ? part : [part] : []) {
+    const items = part ? Array.isArray(part) ? part : [part] : [];
+    const verifyIndex = async item => {
       const index = await measure("keyword_index_read", { readCount: 1, inputBytes: item.index.size }, () => readFile(path.join(item.directory, "index.json"), CHILD_LIMITS.indexBytes));
       ensure(index.sha256 === item.index.sha256 && index.size === item.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-    }
+    };
+    if (indexReadConcurrency === 1) for (const item of items) await verifyIndex(item);
+    else await settledIndexBatches(items, indexReadConcurrency, verifyIndex, result => { if (result.status === "rejected") throw result.reason; });
     // A publication during the final index pass cannot return the old generation.
     const final = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes);
     ensure(final.sha256 === bundle.pointerRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
   }
   async function loadOptions(bundle) {
     const parts = new Map(), failures = [];
-    for (const descriptor of bundle.catalog.partitions) {
-      try { parts.set(descriptor.key, await partition(bundle, descriptor.key, now, staleAfterMs, { optionsReader, measure, verifyAfter: false })); }
-      catch (error) { failures.push({ partition: descriptor.key, code: safeError(error) }); }
-    }
+    // Each active index is bounded to 1MiB; only up to eight such reads are
+    // admitted here. The unchanged 8MiB/64-entry cache retains metadata only.
+    await settledIndexBatches(bundle.catalog.partitions, optionsReadConcurrency,
+      descriptor => partition(bundle, descriptor.key, now, staleAfterMs, { optionsReader, measure, verifyAfter: false }),
+      (result, descriptor) => {
+        if (result.status === "fulfilled") parts.set(descriptor.key, result.value);
+        else failures.push({ partition: descriptor.key, code: safeError(result.reason) });
+      });
     // The final pass retains all index and pointer race checks, instead of
     // reparsing each index through a second child service before this pass.
-    await unchanged(bundle, [...parts.values()]);
+    await unchanged(bundle, [...parts.values()], optionsReadConcurrency);
     return composeOptions(bundle.catalog, parts, failures, basic(), { catalogSha256: bundle.catalogRead.sha256, pointerSha256: bundle.pointerRead.sha256, generation: bundle.pointer.generation });
   }
   async function options() {

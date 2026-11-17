@@ -58,7 +58,7 @@ const deferred = () => { let resolve; const promise = new Promise(value => { res
 function mockUi({ hidden = false, role = "role-admin", request: customRequest, chartMount, mobile = false, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs,
   setTimeout: schedule = setTimeout, clearTimeout: unschedule = clearTimeout, now = () => Date.parse(NOW), storage, session, customerView = false,
   requestAnimationFrame, cancelAnimationFrame, performance, viewport } = {}) {
-  const listeners = {}, observers = [], calls = [], chartCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
+  const listeners = {}, observers = [], calls = [], chartCalls = [], benchmarkCalls = [], doc = { hidden: false, scrolls: [], addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener(type) { delete listeners[type]; } };
   doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement("body"); doc.body.className = role;
   const parent = doc.createElement("div"); parent.screenHidden = hidden; doc.body.append(parent);
   async function request(url, settings) { calls.push({ url, settings }); if (customRequest) return customRequest(url, settings); const query = new URL(url, "https://local.test"); return { ok: true, status: 200, json: async () => clone(url.endsWith("/options") ? optionsFixture() : payloadFixture(Object.fromEntries(query.searchParams))) }; }
@@ -71,12 +71,14 @@ function mockUi({ hidden = false, role = "role-admin", request: customRequest, c
     crypto: require("node:crypto").webcrypto, TextEncoder, AdminViewState: viewState, matchMedia: query => ({ matches: mobile && query.includes("767px") }), KeywordMonthlyCharts: { mount(container, config) { chartCalls.push({ container, config }); return chartMount ? chartMount(container, config) : Promise.resolve(); } } };
   class MutationObserver { constructor(fn) { this.callback = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } }
   vm.runInNewContext(benchmarkScript, { window });
+  const calculateBenchmark = window.KeywordMonthlyBenchmark.buildKeywordMonthlyBenchmark;
+  window.KeywordMonthlyBenchmark = { ...window.KeywordMonthlyBenchmark, buildKeywordMonthlyBenchmark(snapshot, settings) { benchmarkCalls.push({ snapshot, settings: { ...settings } }); return calculateBenchmark(snapshot, settings); } };
   vm.runInNewContext(dashboardScript, { window });
   vm.runInNewContext(catalogueScript, { window, Date });
   vm.runInNewContext(script, { window, document: doc, MutationObserver, Date, Intl, URLSearchParams, console });
   const api = window.KeywordMonthlyAnalysis, ready = session ? api.configure(session, { customerView }) : Promise.resolve(false), controller = api.mount(parent, {
     autoStart: false, fetch: request, requestTimeoutMs, autoRefreshIntervalMs, autoRefreshTimeoutMs, setTimeout: schedule, clearTimeout: unschedule, now });
-  return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls, window, windowScrolls, windowListeners,
+  return { api, controller, ready, parent, doc, observers, listeners, calls, chartCalls, benchmarkCalls, window, windowScrolls, windowListeners,
     fireWindow(type) { for (const handler of windowListeners[type] || []) handler({ type }); },
     find(cls) { return descendants(parent).filter(node => node.className.split(/\s+/).includes(cls)); }, field(name) { return descendants(parent).find(node => node.name === name); },
     button(label) { return descendants(parent).find(node => node.tagName === "BUTTON" && node.textContent === label); }, text() { return text(parent); },
@@ -132,6 +134,7 @@ test("company selection compares whole inclusive and peer means locally without 
   value.snapshot = buildMonthlyReportSnapshot({ type: "keyword", targetId: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, source, NOW);
   const ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? optionsFixture() : value }) });
   await ui.controller.open(); const beforeCalls = ui.calls.length;
+  const details = ui.find("kma-benchmark")[0].parentNode; details.open = true; await details.fire("toggle");
   assert.match(text(ui.find("kma-benchmark")[0]), /전체 평균에는 선택 업체를 포함/); assert.match(text(ui.find("kma-benchmark")[0]), /공급 가중/); assert.match(text(ui.find("kma-benchmark")[0]), /업체 동일가중 참고 평균/);
   assert.equal(ui.controller.state().benchmarkCompanyId, "a"); ui.field("benchmarkCompany").value = "b"; await ui.field("benchmarkCompany").fire("change");
   assert.equal(ui.controller.state().benchmarkCompanyId, "b"); assert.equal(ui.calls.length, beforeCalls);
@@ -494,9 +497,125 @@ test("supporting tables stay accessible in collapsed details while prior compari
   const ui = mockUi(); await ui.controller.open(); await settle();
   assert.equal(ui.find("kma-supporting-details").length, 6);
   assert.equal(ui.find("kma-supporting-details").every(node => node.tagName === "DETAILS" && !node.open), true);
-  assert.match(text(ui.find("kma-supporting-details")[0]), /업체 동일가중 참고 평균|공급 가중/);
+  const benchmark = ui.find("kma-supporting-details")[0];
+  assert.match(text(benchmark), /업체 선택 · 전체 평균 비교|전체 평균에는 선택 업체를 포함/);
+  assert.equal(ui.find("kma-benchmark-bars").length, 0);
+  benchmark.open = true; await benchmark.fire("toggle"); assert.match(text(benchmark), /업체 동일가중 참고 평균|공급 가중/);
   assert.equal(ui.find("kma-comparison")[0].parentNode.className, "kma-detail-panel");
   assert.match(ui.text(), /출처와 채택·제외 근거|입력 근거 지문/);
+});
+
+const BENCHMARK_DETAIL_KEY = "support:업체 선택 · 전체 평균 비교";
+test("closed benchmark defers its extra monthly calculation and builds only once on first open", async t => {
+  const value = dashboardPayload(), ui = mockUi({ request: dashboardRequest(value) }); t.after(() => ui.controller.destroy());
+  await ui.controller.open(); await settle();
+  const block = ui.find("kma-benchmark")[0], details = block.parentNode;
+  assert.equal(details.open, false); assert.equal(ui.find("kma-benchmark-bars").length, 0);
+  assert.equal(ui.benchmarkCalls.filter(row => row.snapshot === value.snapshot).length, 1, "dashboard remains eager; supporting benchmark does not run");
+  assert.match(text(block), /전체 평균에는 선택 업체를 포함/);
+  assert.equal(ui.find("kma-dashboard-metrics")[0].children.length, 4); assert.equal(ui.chartCalls.length, 2);
+  assert.match(ui.text(), /입력 근거 지문/); assert.ok(ui.find("kma-identity-review").length);
+  const requests = ui.calls.length, chartCalls = ui.chartCalls.length;
+  details.open = true; await details.fire("toggle");
+  assert.equal(ui.benchmarkCalls.filter(row => row.snapshot === value.snapshot).length, 2);
+  assert.equal(ui.find("kma-benchmark-bars").length, 1); assert.match(text(block), /업체 동일가중 참고 평균|동일 관측일/);
+  const contents = block.children.slice(), count = ui.benchmarkCalls.length;
+  details.open = false; await details.fire("toggle"); details.open = true; await details.fire("toggle");
+  assert.equal(ui.benchmarkCalls.length, count); assert.deepEqual(block.children, contents);
+  assert.equal(ui.calls.length, requests); assert.equal(ui.chartCalls.length, chartCalls);
+});
+
+test("restored open benchmark immediately follows the current company product and refreshed snapshot", async t => {
+  let value = dashboardPayload(2), ui = mockUi({ request: async url => ({ ok: true, status: 200, json: async () => url.endsWith("/options") ? optionsFixture() : value }) });
+  t.after(() => ui.controller.destroy());
+  await ui.controller.open({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30", expanded: { [BENCHMARK_DETAIL_KEY]: true } });
+  assert.equal(ui.find("kma-benchmark")[0].parentNode.open, true); assert.equal(ui.find("kma-benchmark-bars").length, 1);
+  assert.equal(ui.benchmarkCalls.filter(row => row.snapshot === value.snapshot).length, 2);
+  const requests = ui.calls.length;
+  ui.field("benchmarkCompany").value = "company-1"; await ui.field("benchmarkCompany").fire("change");
+  assert.match(text(ui.find("kma-benchmark-bars")[0]), /비교 업체 1 20%/);
+  await ui.button("데이유즈").fire("click");
+  assert.equal(ui.find("kma-benchmark")[0].parentNode.open, true);
+  assert.deepEqual(ui.benchmarkCalls.at(-1).settings, { productType: "dayuse", companyId: "company-1" });
+  assert.equal(ui.calls.length, requests);
+  const prior = ui.find("kma-benchmark")[0]; value = dashboardPayload(1); await ui.controller.refresh();
+  assert.notEqual(ui.find("kma-benchmark")[0], prior); assert.equal(ui.find("kma-benchmark")[0].parentNode.open, true);
+  assert.match(text(ui.find("kma-benchmark")[0]), /선택 업체를 이 범위에서 확보하지 못해/);
+  assert.equal(ui.find("kma-benchmark-bars").length, 0, "missing selected identity never substitutes another company");
+});
+
+test("late benchmark toggles cannot build or change expansion after another render or private clear", async t => {
+  for (const action of ["company", "product", "refresh", "pause", "clear", "destroy", "auth", "hidden", "inactive"]) await t.test(action, async () => {
+    const value = dashboardPayload(2), ui = mockUi({ request: dashboardRequest(value) });
+    await ui.controller.open(); const stale = ui.find("kma-benchmark")[0], details = stale.parentNode;
+    if (action === "company") { ui.field("benchmarkCompany").value = "company-1"; await ui.field("benchmarkCompany").fire("change"); }
+    else if (action === "product") await ui.button("데이유즈").fire("click");
+    else if (action === "refresh") await ui.controller.refresh();
+    else if (action === "pause") ui.controller.pause();
+    else if (action === "clear") ui.api.clear();
+    else if (action === "destroy") ui.controller.destroy();
+    else if (action === "auth") ui.doc.body.className = "role-customer";
+    else if (action === "hidden") ui.doc.hidden = true;
+    else ui.parent.screenHidden = true;
+    const count = ui.benchmarkCalls.length, requests = ui.calls.length, expanded = clone(ui.controller.state().expanded);
+    details.open = true; await details.fire("toggle");
+    assert.equal(ui.benchmarkCalls.length, count); assert.equal(ui.calls.length, requests);
+    assert.equal(descendants(stale).some(node => node.className.includes("kma-benchmark-bars")), false);
+    assert.deepEqual(clone(ui.controller.state().expanded), expanded);
+    ui.controller.destroy();
+  });
+});
+
+test("a benchmark opened just before hiding resumes once on visible return without rerendering or requesting", async t => {
+  for (const kind of ["document", "body"]) await t.test(kind, async () => {
+    const value = dashboardPayload(2), ui = mockUi({ request: dashboardRequest(value) });
+    t.after(() => ui.controller.destroy()); await ui.controller.open(); await settle();
+    const block = ui.find("kma-benchmark")[0], details = block.parentNode, metrics = ui.find("kma-dashboard-metrics")[0];
+    const charts = ui.chartCalls.map(row => row.container), requests = ui.calls.length, calculations = ui.benchmarkCalls.length;
+    details.open = true;
+    if (kind === "document") ui.doc.hidden = true; else ui.parent.screenHidden = true;
+    await details.fire("toggle");
+    assert.equal(ui.benchmarkCalls.length, calculations); assert.equal(ui.controller.state().expanded[BENCHMARK_DETAIL_KEY], undefined);
+    if (kind === "document") { ui.doc.hidden = false; await ui.listeners.visibilitychange(); }
+    else { ui.parent.screenHidden = false; ui.observers[0].callback(); }
+    assert.equal(ui.controller.state().expanded[BENCHMARK_DETAIL_KEY], true);
+    assert.equal(ui.benchmarkCalls.length, calculations + 1); assert.equal(ui.find("kma-benchmark-bars").length, 1);
+    assert.equal(ui.find("kma-benchmark")[0], block); assert.equal(ui.find("kma-dashboard-metrics")[0], metrics);
+    assert.deepEqual(ui.chartCalls.map(row => row.container), charts); assert.equal(ui.calls.length, requests);
+    if (kind === "document") await ui.listeners.visibilitychange(); else ui.observers[0].callback();
+    assert.equal(ui.benchmarkCalls.length, calculations + 1); assert.equal(ui.calls.length, requests);
+  });
+});
+
+test("visibility recovery discards the old benchmark after a private clear or a new current render", async t => {
+  for (const kind of ["clear", "company"]) await t.test(kind, async () => {
+    const ui = mockUi({ request: dashboardRequest(dashboardPayload(2)) }); t.after(() => ui.controller.destroy());
+    await ui.controller.open(); const prior = ui.find("kma-benchmark")[0]; prior.parentNode.open = true;
+    ui.doc.hidden = true; await prior.parentNode.fire("toggle");
+    if (kind === "clear") ui.api.clear();
+    else { ui.field("benchmarkCompany").value = "company-1"; await ui.field("benchmarkCompany").fire("change"); }
+    const count = ui.benchmarkCalls.length, requests = ui.calls.length;
+    ui.doc.hidden = false; await ui.listeners.visibilitychange();
+    assert.equal(descendants(prior).some(node => node.className.includes("kma-benchmark-bars")), false);
+    assert.equal(ui.benchmarkCalls.length, count); assert.equal(ui.calls.length, requests);
+    assert.notEqual(ui.controller.state().expanded[BENCHMARK_DETAIL_KEY], true);
+  });
+});
+
+test("first benchmark open preserves unknown quantities and observed zero instead of inventing values", async t => {
+  const value = dashboardPayload(2, true), ui = mockUi({ request: dashboardRequest(value) }); t.after(() => ui.controller.destroy());
+  await ui.controller.open(); ui.field("benchmarkCompany").value = "rank-only"; await ui.field("benchmarkCompany").fire("change");
+  const details = ui.find("kma-benchmark")[0].parentNode; details.open = true; await details.fire("toggle");
+  const selected = ui.find("kma-benchmark-selected")[0]; assert.match(text(selected), /순위만 관측한 업체 — 미확인/);
+  assert.equal(descendants(selected).some(node => node.tagName === "METER"), false);
+  assert.match(text(ui.find("kma-benchmark")[0]), /차이를 0으로 만들지 않습니다/);
+  assert.equal(ui.calls.length, 2);
+  const zeroSource = sourceFixture(); zeroSource.observations = zeroSource.observations.map(row => ({ ...row, sold: 0, publicBookings: 0, phoneBookings: 0, publicRevenue: 0, phoneRevenue: 0, estimatedRevenue: 0 }));
+  const zero = payloadFixture(); zero.snapshot = buildMonthlyReportSnapshot(zero.snapshot.request, zeroSource, NOW);
+  const zeroUi = mockUi({ request: dashboardRequest(zero) }); t.after(() => zeroUi.controller.destroy()); await zeroUi.controller.open();
+  const zeroDetails = zeroUi.find("kma-benchmark")[0].parentNode; zeroDetails.open = true; await zeroDetails.fire("toggle");
+  assert.match(text(zeroUi.find("kma-benchmark-selected")[0]), /0%/);
+  assert.equal(descendants(zeroUi.find("kma-benchmark-selected")[0]).find(node => node.tagName === "METER").value, 0);
 });
 
 test("local company search and twenty-row pages never narrow the whole charts or their population", async () => {
