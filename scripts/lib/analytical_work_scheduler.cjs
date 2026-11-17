@@ -3,6 +3,7 @@
 const { AsyncLocalStorage, AsyncResource } = require("node:async_hooks");
 const { runWithCooperativeWork, YIELD_CODE } = require("./cooperative_work_checkpoint.cjs");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
+const { withKeywordMonthlyGuardDiagnostic } = require("./keyword_monthly_guard_diagnostics.cjs");
 
 function fault(code, name = "Error") { return Object.assign(new Error(code), { code, name }); }
 const aborted = () => fault("ANALYTICAL_WORK_ABORTED", "AbortError");
@@ -510,22 +511,30 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     return Boolean(owner && ["industry-build", "company-month"].includes(owner.kind)
       && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0);
   }
+  function savedReadBusy(reason, owner = null) {
+    return withKeywordMonthlyGuardDiagnostic(fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"), {
+      component: "scheduler", reason, activeKind: active?.kind ?? null,
+      flags: { externalChecking: Boolean(externalChecking), maintenancePaused: Boolean(maintenance.paused),
+        checkpointReaderActive: Boolean(checkpointReader), atomicWork: Boolean(active?.checkpointScope?.nonInterruptibleDepth > 0),
+        ownerMatches: owner === null ? null : active === owner && owner.active }
+    });
+  }
   function acquireCheckpointSavedReadPermit(owner) {
     // The reservation owns no graph and must not fence the owner out of the
     // checkpoint it needs to reach. Only the actual loan claims the permit.
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
       controller, priority: "foreground", kind: "keyword_monthly_saved_read", running: false, invoked: false };
     let reservedAt;
-    try { reservedAt = timestamp(); } catch { throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"); }
+    try { reservedAt = timestamp(); } catch { throw savedReadBusy("checkpoint_clock_invalid", owner); }
     const admitUntil = reservedAt + savedReadCheckpointWaitMs;
-    let lastAdmissionAt = reservedAt, admissionClosed = false;
+    let lastAdmissionAt = reservedAt, admissionClosed = false, admissionClosedReason = null;
     const admissionTime = () => {
       if (admissionClosed) return null;
-      try { const at = timestamp(); if (at < lastAdmissionAt || at >= admitUntil) { admissionClosed = true; return null; } lastAdmissionAt = at; return at; }
-      catch { admissionClosed = true; return null; }
+      try { const at = timestamp(); if (at < lastAdmissionAt || at >= admitUntil) { admissionClosed = true; admissionClosedReason = at < lastAdmissionAt ? "checkpoint_clock_invalid" : "checkpoint_expired"; return null; } lastAdmissionAt = at; return at; }
+      catch { admissionClosed = true; admissionClosedReason = "checkpoint_clock_invalid"; return null; }
     };
     savedReadReservation = token;
-    let admissionTimer = null, loan = null, began = false, released = false, resolveRelease;
+    let admissionTimer = null, loan = null, began = false, released = false, resolveRelease, admissionTimeoutFired = false;
     const releaseGate = new Promise(resolve => { resolveRelease = resolve; });
     const clearAdmissionTimer = () => { if (admissionTimer !== null) { clearTimeoutImpl(admissionTimer); admissionTimer = null; } };
     const sameOwner = () => active === owner && owner.active && canLendSavedReadCheckpoint(owner);
@@ -539,8 +548,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
         try {
           const admittedAt = admissionTime();
-          if (admittedAt === null) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
-          admissionTimer = setTimeoutImpl(() => { if (!began) controller.abort(); }, Math.max(1, admitUntil - admittedAt));
+          if (admittedAt === null) throw savedReadBusy(admissionClosedReason, owner);
+          admissionTimer = setTimeoutImpl(() => { if (!began) { admissionTimeoutFired = true; controller.abort(); } }, Math.max(1, admitUntil - admittedAt));
           admissionTimer?.unref?.();
           loan = runCheckpointRead(async info => {
             // Generic proof loans remain unchanged. This private capability
@@ -549,10 +558,18 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
             // atomic section. A delayed timer is not admission authority.
             const borrower = context.getStore();
             if (!sameOwner() || !borrower?.checkpointRead || borrower.ownerId !== owner.id
-              || closed || externalChecking || maintenance.paused || controller.signal.aborted || admissionTime() === null)
-              throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+              || closed || externalChecking || maintenance.paused || controller.signal.aborted || admissionTime() === null) {
+              const reason = active !== owner || !owner.active ? "owner_changed"
+                : owner.checkpointScope?.nonInterruptibleDepth > 0 ? "atomic_work"
+                  : !canLendSavedReadCheckpoint(owner) ? "ineligible_owner"
+                    : !borrower?.checkpointRead || borrower.ownerId !== owner.id ? "checkpoint_context_mismatch"
+                      : closed ? "scheduler_closed" : externalChecking ? "external_checking" : maintenance.paused ? "maintenance"
+                        : controller.signal.aborted ? owner.controller.signal.aborted ? "owner_aborted" : "checkpoint_aborted"
+                          : admissionClosedReason;
+              throw savedReadBusy(reason, owner);
+            }
             began = true; clearAdmissionTimer();
-            if (savedReadReservation !== token || savedReadPermit) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+            if (savedReadReservation !== token || savedReadPermit) throw savedReadBusy(savedReadReservation !== token ? "reservation_changed" : "saved_permit_busy", owner);
             savedReadReservation = null; accountWaiting(); savedReadPermit = token;
             token.running = true;
             let failure;
@@ -571,7 +588,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
               token.active = false;
               if (savedReadReservation === token) savedReadReservation = null;
             }
-            rejectReady(!began && error?.code === "ANALYTICAL_WORK_ABORTED" ? fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY") : error);
+            rejectReady(!began && error?.code === "ANALYTICAL_WORK_ABORTED"
+              ? savedReadBusy(admissionTimeoutFired ? "checkpoint_expired" : owner.controller.signal.aborted ? "owner_aborted" : "checkpoint_aborted", owner) : error);
           }).finally(clearAdmissionTimer);
         } catch (error) {
           clearAdmissionTimer(); token.active = false;
@@ -598,7 +616,11 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (!externalChecking && !maintenance.paused && !checkpointReader && canLendSavedReadCheckpoint(active))
       return acquireCheckpointSavedReadPermit(active);
     if (externalChecking || maintenance.paused || checkpointReader || active && !(active.kind === "keyword_monthly_refresh"
-      && active.priority === "background" && window?.accepting)) throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+      && active.priority === "background" && window?.accepting)) {
+      throw savedReadBusy(externalChecking ? "external_checking" : maintenance.paused ? "maintenance" : checkpointReader ? "checkpoint_reader_active"
+        : active?.checkpointScope?.nonInterruptibleDepth > 0 ? "atomic_work"
+          : active?.kind === "keyword_monthly_refresh" && active.priority === "background" ? "child_window_closed" : "ineligible_owner");
+    }
     const controller = new AbortController(), token = { id: ++taskSequence, active: true, savedRead: true,
       controller, priority: "foreground", kind: "keyword_monthly_saved_read", running: false, invoked: false };
     // This synchronous claim also fences an old external-admission callback:

@@ -10,11 +10,23 @@ const LIMITS = Object.freeze({ files: 15000, directories: 15000, depth: 10, file
   bytes: 4 * 1024 ** 3, sourceMetadataBytes: 8 * 1024 ** 3, manifestBytes: 1024 ** 2, seedBytes: 64 * 1024 ** 2, seedFileBytes: 8 * 1024 ** 2 });
 const SOURCES = ["company_master/companies.json", "history/observations.jsonl"];
 const SEEDS = ["company_integrated/capacity-bases.json", "history/special_days", "history/saved_product_recoveries"];
+const CAPACITY_BASES = "company_integrated/capacity-bases.json";
 const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const digest = value => hash(JSON.stringify(value));
 const need = (value, code = "KEYWORD_INCREMENTAL_INPUTS_INVALID") => H.need(value, code);
 const slash = value => value.split(path.sep).join("/");
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+function globalSeedContentHash(relative, bytes) {
+  if (relative !== CAPACITY_BASES) return hash(bytes);
+  // Individual basis entries already participate in each company's exact
+  // preparation key. A single reviewed company must not dirty every keyword.
+  // Unknown top-level fields remain global dependencies; source byte/stamp
+  // checks below still pin the complete file, including all company entries.
+  let value; try { value = JSON.parse(bytes.toString("utf8")); } catch { need(false, "KEYWORD_INCREMENTAL_CAPACITY_SEED_INVALID"); }
+  need(value && typeof value === "object" && !Array.isArray(value) && value.schemaVersion === 1
+    && value.companies && typeof value.companies === "object" && !Array.isArray(value.companies), "KEYWORD_INCREMENTAL_CAPACITY_SEED_INVALID");
+  return digest(Object.fromEntries(Object.entries(value).filter(([key]) => key !== "companies")));
+}
 function limits(input = {}) {
   need(input && typeof input === "object" && !Array.isArray(input) && Object.entries(input).every(([key, value]) => Object.hasOwn(LIMITS, key)
     && Number.isSafeInteger(value) && value > 0 && value <= LIMITS[key]), "KEYWORD_INCREMENTAL_INPUT_LIMITS_INVALID");
@@ -136,7 +148,7 @@ async function seedDependencies({ dataDir, workDataDir, limits: input } = {}) {
   H.absolute(dataDir); H.absolute(workDataDir); const bounds = limits(input);
   need(dataDir !== workDataDir && !H.inside(workDataDir, dataDir), "KEYWORD_INCREMENTAL_SEED_TARGET_INVALID");
   await checkedPath(dataDir, true); const work = await checkedPath(workDataDir, true);
-  const before = await seedMetadata(dataDir, bounds), copied = [];
+  const before = await seedMetadata(dataDir, bounds), copied = [], globalFiles = [];
   for (const row of before.directories) await ensureChildDirectories(workDataDir, path.join(workDataDir, ...row.relative.split("/")));
   for (const row of before.files) {
     const source = path.join(dataDir, ...row.relative.split("/")), target = path.join(workDataDir, ...row.relative.split("/"));
@@ -155,6 +167,9 @@ async function seedDependencies({ dataDir, workDataDir, limits: input } = {}) {
     const saved = await checkedPath(target), sourceHash = hash(bytes);
     need(Number(saved.size) === bytes.length && hash(await fs.readFile(target)) === sourceHash, "KEYWORD_INCREMENTAL_SEED_READBACK_FAILED");
     copied.push({ relative: row.relative, bytes: bytes.length, sha256: sourceHash, sourceStamp: row.stamp, copyStamp: stamp(saved) });
+    globalFiles.push(row.relative === CAPACITY_BASES
+      ? { relative: row.relative, sha256: globalSeedContentHash(row.relative, bytes) }
+      : { relative: row.relative, bytes: row.bytes, sha256: sourceHash, sourceStamp: row.stamp });
   }
   const after = await seedMetadata(dataDir, bounds);
   need(same(before, after), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
@@ -162,6 +177,8 @@ async function seedDependencies({ dataDir, workDataDir, limits: input } = {}) {
   need(work.dev === workAfter.dev && work.ino === workAfter.ino, "KEYWORD_INCREMENTAL_SEED_TARGET_CHANGED");
   return { schemaVersion: 1, dataDir, workDataDir, roots: before.roots, sourceDirectories: before.directories, copied,
     bytes: copied.reduce((sum, row) => sum + row.bytes, 0), sourceInventorySha256: digest(before), preserved: true,
+    globalDependencySha256: digest({ kind: "keyword_monthly_global_seed_dependencies_v1", roots: before.roots,
+      directories: before.directories, files: globalFiles }),
     sourceWrites: 0, masterBodyReads: 0, historyBodyReads: 0, kosisCopied: false };
 }
 async function verifyDependencies({ seeded, dataDir, limits: input } = {}) {

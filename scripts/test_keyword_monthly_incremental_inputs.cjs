@@ -138,3 +138,43 @@ test("seed absence and byte bounds are explicit and source files remain untouche
   assert.equal(await fs.readFile(path.join(f.dataDir, "company_integrated/capacity-bases.json"), "utf8"), "12345");
   await assert.rejects(seedDependencies({ dataDir: f.dataDir, workDataDir: f.dataDir }), { code: "KEYWORD_INCREMENTAL_SEED_TARGET_INVALID" });
 });
+
+test("capacity file identity stays local but full source verification still detects replacement", async t => {
+  const f = await fixture(t), seed = path.join(f.dataDir, "company_integrated/capacity-bases.json"), body = '{"schemaVersion":1,"companies":{}}';
+  await fs.mkdir(path.dirname(seed), { recursive: true }); await fs.writeFile(seed, body);
+  const first = await seedDependencies(f);
+  await fs.rename(seed, seed + ".prior"); await fs.writeFile(seed, body); await fs.unlink(seed + ".prior");
+  const workDataDir = path.join(f.root, "second-job/data"); await fs.mkdir(workDataDir, { recursive: true });
+  const second = await seedDependencies({ dataDir: f.dataDir, workDataDir });
+  assert.notEqual(first.sourceInventorySha256, second.sourceInventorySha256);
+  assert.equal(first.globalDependencySha256, second.globalDependencySha256);
+  await assert.rejects(verifyDependencies({ seeded: first, dataDir: f.dataDir }), { code: "KEYWORD_INCREMENTAL_INPUTS_CHANGED" });
+});
+
+test("company basis edits stay local while schema, unknown global fields and other seed contents remain global", async t => {
+  const f = await fixture(t), basis = path.join(f.dataDir, "company_integrated/capacity-bases.json");
+  await fs.mkdir(path.dirname(basis), { recursive: true });
+  let sequence = 0;
+  async function capture(value, special = '{"day":1}') {
+    await fs.writeFile(basis, JSON.stringify(value));
+    await fs.mkdir(path.join(f.dataDir, "history/special_days"), { recursive: true });
+    const specialFile = path.join(f.dataDir, "history/special_days/2026.json");
+    if (await fs.readFile(specialFile, "utf8").catch(e => { if(e.code === "ENOENT")return null;throw e; }) !== special) await fs.writeFile(specialFile, special);
+    const workDataDir = path.join(f.root, `semantic-job-${++sequence}/data`); await fs.mkdir(workDataDir, { recursive: true });
+    return seedDependencies({ dataDir: f.dataDir, workDataDir });
+  }
+  const original = { schemaVersion: 1, companies: { a: { count: 10, revision: 1 }, b: { count: 8, revision: 1 } } };
+  const first = await capture(original);
+  const changed = structuredClone(original); changed.companies.a = { count: 11, revision: 2, updatedAt: "2026-11-17T01:00:00Z", history: [{ count: 10 }] };
+  const second = await capture(changed);
+  assert.equal(first.globalDependencySha256, second.globalDependencySha256);
+  assert.notEqual(first.copied.find(r => r.relative.endsWith("capacity-bases.json")).sha256, second.copied.find(r => r.relative.endsWith("capacity-bases.json")).sha256);
+  const removed = structuredClone(changed); delete removed.companies.a;
+  assert.equal((await capture(removed)).globalDependencySha256, first.globalDependencySha256);
+  const added = structuredClone(original); added.companies.c = { count: 4, revision: 1 };
+  assert.equal((await capture(added)).globalDependencySha256, first.globalDependencySha256);
+  assert.notEqual((await capture({ ...original, futureRule: "reviewed-global-v2" })).globalDependencySha256, first.globalDependencySha256);
+  assert.notEqual((await capture(original, '{"day":2}')).globalDependencySha256, first.globalDependencySha256);
+  for (const invalid of [{ schemaVersion: 2, companies: {} }, { schemaVersion: 1, companies: null }, { schemaVersion: 1, companies: [] }])
+    await assert.rejects(capture(invalid), { code: "KEYWORD_INCREMENTAL_CAPACITY_SEED_INVALID" });
+});

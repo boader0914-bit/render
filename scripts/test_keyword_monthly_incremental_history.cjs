@@ -82,7 +82,7 @@ test("immutable segment tampering and truncation reject without changing the com
 test("declared raw size and row counts bind compressed segment decoding", async t => {
   const directory = await fixture(t), state = await H.append(directory, H.empty(), [line("a")]);
   for (const field of ["count", "rawBytes"]) { const altered = structuredClone(state); altered.batches[0].segments[0][field]++;
-    await assert.rejects(rows(H.createReader({ directory, state: altered }), {}), { code: "KEYWORD_INCREMENTAL_HISTORY_INVALID" }); }
+    await assert.rejects(async () => rows(H.createReader({ directory, state: altered }), {}), { code: "KEYWORD_INCREMENTAL_HISTORY_INVALID" }); }
   const files = await fs.readdir(directory); assert.equal(files.length, 1);
   assert.deepEqual(JSON.parse(zlib.gunzipSync(await fs.readFile(path.join(directory, files[0])))), [[1, line("a")]]);
 });

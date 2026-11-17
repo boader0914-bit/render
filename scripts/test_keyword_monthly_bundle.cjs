@@ -3,6 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const { buildKeywordMonthlyProjection, createKeywordMonthlyAnalysis } = require("./lib/keyword_monthly_analysis.cjs");
 const { createKeywordMonthlyBundleAnalysis, publishKeywordMonthlyBundle, loadBundle, composeOptions, KEYWORD_MONTHLY_BUNDLE_LIMITS } = require("./lib/keyword_monthly_bundle.cjs");
 const { args } = require("./build_keyword_monthly_bundle.cjs");
+const { withKeywordMonthlyGuardDiagnostic } = require("./lib/keyword_monthly_guard_diagnostics.cjs");
 const NOW = "2026-10-30T00:00:00.000Z", A = "가평글램핑", B = "경남글램핑", sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 function fixture(keyword, sold, marker) {
   const runs = [], observations = [];
@@ -29,6 +30,24 @@ async function files(directory) { const result = []; for (const row of await fs.
 test("legacy single index remains byte-compatible and introduces no bundle wrapper fields", async t => {
   const { prepare } = await setup(t), directory = await prepare("a", A, 2), legacy = createKeywordMonthlyAnalysis({ projectionDir: directory, now: () => NOW }), bundle = createKeywordMonthlyBundleAnalysis({ projectionDir: directory, now: () => NOW });
   assert.deepEqual(await bundle.options(), await legacy.options()); assert.deepEqual(await bundle.analyze(query(A)), await legacy.analyze(query(A)));
+});
+
+test("a guard denial inside prepared decoding retains its safe snapshot without changing verification status or starting fallback", async t => {
+  const { prepare, output } = await setup(t), directory = await prepare("a", A, 2);
+  await publishKeywordMonthlyBundle({ inputs: [{ directory }], outputDir: output, now: NOW, prepareResults: true });
+  let decoded = 0;
+  const service = createKeywordMonthlyBundleAnalysis({ projectionDir: output, now: () => NOW, measure: async (phase, metadata, operation) => {
+    if (phase === "keyword_prepared_result_parse") {
+      decoded++;
+      throw withKeywordMonthlyGuardDiagnostic(Object.assign(Error("private source path"), { code: "KEYWORD_MONTHLY_MEMORY_DEFERRED", statusCode: 503 }),
+        { component: "memory", reason: "high_watermark", observedAt: 1000, activeKind: null, memory: { sampledAt: 1000, ratio: .7, paused: true, lowSamples: 0 } });
+    }
+    return operation();
+  } });
+  const result = await service.readPrepared(query(A));
+  assert.equal(result.status, "needs_verification"); assert.equal(result.snapshot, null); assert.equal(decoded, 1);
+  assert.deepEqual(result.diagnostics, ["KEYWORD_MONTHLY_MEMORY_DEFERRED"]); assert.equal(result.readGuard.reason, "high_watermark");
+  assert.equal(result.readGuard.memory.ratio, .7); assert.ok(!JSON.stringify(result).includes("private"));
 });
 test("two independent keywords preserve source provenance, month metadata, values and read-only source files", async t => {
   const { prepare, output } = await setup(t), a = await prepare("a", A, 2), b = await prepare("b", B, 4), beforeA = await files(a), beforeB = await files(b);

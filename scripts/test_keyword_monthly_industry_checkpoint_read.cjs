@@ -101,7 +101,7 @@ test("not_prepared releases and settles its loan before queuing legacy work and 
 
 test("the admission deadline is exactly bounded and removes only a queued loan without restarting its owner",async()=>{
   const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),bg=await industry(scheduler),permit=scheduler.acquireSavedReadPermit();let reads=0;
-  const ready=permit.run(()=>{reads++;return {};});const rejection=assert.rejects(ready,{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
+  const ready=permit.run(()=>{reads++;return {};});const rejection=assert.rejects(ready,error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="checkpoint_expired");
   assert.ok([...c.timers.values()].some(t=>t.ms===1500));await c.advance(1499);assert.equal(scheduler.status().queuedCheckpointReads,1);await c.advance(1);await rejection;
   assert.equal(scheduler.status().queuedCheckpointReads,0);assert.equal(scheduler.status().savedRead.checkpointPending,false);assert.equal(reads,0);
   permit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;assert.equal(bg.attempts(),1);await scheduler.close();
@@ -112,9 +112,9 @@ test("wrong owners, foreground work, noncooperative work and atomic publication 
     ["company-month-repair","foreground",true,true],["company-month","foreground",true,true],["company-month","background",true,false],
     ["industry-build","foreground",true,true],["industry-build","background",false,true]]){
     const scheduler=createAnalyticalWorkScheduler({cooperativeYield,cooperativeCompanyMonthYield}),entered=gate(),finish=gate(),done=scheduler.run(async()=>{entered.resolve();await finish.promise;},{kind,priority});await entered.promise;
-    assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});finish.resolve();await done;await scheduler.close();
+    assert.throws(()=>scheduler.acquireSavedReadPermit(),error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="ineligible_owner");finish.resolve();await done;await scheduler.close();
   }
-  const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),bg=await industry(scheduler,{atomic:true});assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
+  const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),bg=await industry(scheduler,{atomic:true});assert.throws(()=>scheduler.acquireSavedReadPermit(),error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="atomic_work"&&error.readGuard.flags.atomicWork===true);
   bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;await assert.rejects(scheduler.runCheckpointRead(()=>{}, {kind:"keyword-monthly-saved-read"}),TypeError);await scheduler.close();
 });
 
@@ -127,6 +127,7 @@ test("an owner that finishes before reaching its checkpoint cannot transfer the 
 test("memory pressure arriving after reservation is sampled at the actual checkpoint before allocating a saved graph",async()=>{
   let ratio=.3;const memory=createKeywordMonthlyMemoryAdmission({sampleMemory:()=>({ratio,sampledAt:Date.now()})}),s=system({memory:memory.run}),bg=await industry(s.scheduler),r=s.request();
   await until(()=>s.scheduler.status().savedRead.checkpointPending);ratio=.66;bg.proceed.resolve();await r.done;assert.equal(body(r.res).code,"KEYWORD_MONTHLY_MEMORY_DEFERRED");assert.equal(s.calls.prepared,0);
+  assert.equal(body(r.res).readGuard.reason,"high_watermark");assert.equal(body(r.res).readGuard.memory.ratio,.66);assert.equal(body(r.res).readGuard.memory.paused,true);
   await bg.resumed.promise;assert.equal(s.service.status().active,false);bg.finish.resolve();await bg.done;await s.scheduler.close();
 });
 

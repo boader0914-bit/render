@@ -3,6 +3,7 @@
 const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
 const { runKeywordMonthlyMemoryAdmission } = require("./keyword_monthly_memory_admission.cjs");
+const { withKeywordMonthlyGuardDiagnostic } = require("./keyword_monthly_guard_diagnostics.cjs");
 const fault = code => Object.assign(new Error(code), { code, statusCode: 503 });
 
 // One immutable saved-result cohort, including ALL shared HTTP responses and
@@ -36,8 +37,11 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     const key=crypto.createHash("sha256").update(identity).digest("hex");let entry=entries.get(key);
     // A closed child window can drain only its original callers. Repeated
     // joins cannot indefinitely postpone final parent decode/publication.
-    if(entry && (entry.permit && !entry.permit.acceptsNewResponses()
-      || entry.readStarted && !entry.flightActive))throw fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+    const responseWindowClosed = Boolean(entry?.permit && !entry.permit.acceptsNewResponses());
+    if(entry && (responseWindowClosed
+      || entry.readStarted && !entry.flightActive))throw withKeywordMonthlyGuardDiagnostic(fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"), {
+        component:"saved_read",reason:responseWindowClosed?"response_window_closed":"response_flight_settled",activeKind:null
+      });
     if(!entry){if(entries.size>=4)throw busy();entry={key,refs:new Set(),producers:0,responseOperations:0,flightActive:false,readStarted:false,permit:null};entries.set(key,entry);}
     const ref={released:false};entry.refs.add(ref);entry.responseOperations++;
     const native=typeof res.once==="function"&&typeof res.removeListener==="function"&&typeof res.writeHead==="function"&&typeof res.end==="function";

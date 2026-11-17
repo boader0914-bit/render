@@ -1,6 +1,7 @@
 "use strict";
 const { AsyncLocalStorage } = require("node:async_hooks");
 const { createAnalyticalMemorySampler } = require("./analytical_memory.cjs");
+const { withKeywordMonthlyGuardDiagnostic } = require("./keyword_monthly_guard_diagnostics.cjs");
 const contexts = new AsyncLocalStorage();
 const LARGE_PHASES = new Set(["keyword_projection_read", "keyword_source_validate", "keyword_snapshot_current",
   "keyword_snapshot_previous", "keyword_compare", "keyword_prepared_result_read", "keyword_prepared_result_parse"]);
@@ -19,26 +20,37 @@ function createKeywordMonthlyMemoryAdmission({ sampleMemory, now = Date.now,
     || !Number.isSafeInteger(resumeSamples) || resumeSamples < 1 || resumeSamples > 10
     || !Number.isSafeInteger(maxSampleAgeMs) || maxSampleAgeMs < 1) throw new TypeError("Invalid keyword memory admission");
   const instance = Symbol("keyword-memory-admission");
-  const state = { paused: false, ratio: null, lowSamples: 0, sampledAt: null,
+  const state = { paused: false, ratio: null, lowSamples: 0, sampledAt: null, reason: null,
     samples: 0, admitted: 0, deferred: 0, unavailable: 0, checkpoints: 0 };
+  const denied = (code, at) => withKeywordMonthlyGuardDiagnostic(fault(code), {
+    component: "memory", reason: state.reason, observedAt: at, activeKind: null,
+    memory: { sampledAt: state.sampledAt, ratio: state.ratio, paused: state.paused, lowSamples: state.lowSamples }
+  });
   async function inspect() {
-    let sample, at;
+    let sample, at, unavailableReason = "sample_read_failed";
     try {
-      sample = await sampleMemory(); at = Number(now());
+      sample = await sampleMemory(); unavailableReason = "clock_invalid"; at = Number(now()); unavailableReason = "sample_invalid";
       if (!sample || typeof sample.ratio !== "number" || !Number.isFinite(sample.ratio) || sample.ratio < 0
         || !Number.isFinite(at) || !Number.isFinite(sample.sampledAt)
-        || at - sample.sampledAt > maxSampleAgeMs || sample.sampledAt - at > 1000) throw Error();
+        || at - sample.sampledAt > maxSampleAgeMs || sample.sampledAt - at > 1000) {
+        unavailableReason = !Number.isFinite(at) ? "clock_invalid"
+          : !sample || typeof sample.ratio !== "number" || !Number.isFinite(sample.ratio) || sample.ratio < 0 || !Number.isFinite(sample.sampledAt) ? "sample_invalid"
+            : at - sample.sampledAt > maxSampleAgeMs ? "sample_stale" : sample.sampledAt - at > 1000 ? "sample_future" : "sample_invalid";
+        throw Error();
+      }
     } catch {
       state.paused = true; state.ratio = null; state.lowSamples = 0; state.sampledAt = null;
-      state.unavailable++; throw fault("KEYWORD_MONTHLY_MEMORY_UNAVAILABLE");
+      state.reason = unavailableReason;
+      state.unavailable++; throw denied("KEYWORD_MONTHLY_MEMORY_UNAVAILABLE", at ?? null);
     }
     state.samples++; state.ratio = sample.ratio; state.sampledAt = sample.sampledAt;
-    if (sample.ratio >= highWatermark) { state.paused = true; state.lowSamples = 0; }
+    if (sample.ratio >= highWatermark) { state.paused = true; state.lowSamples = 0; state.reason = "high_watermark"; }
     else if (state.paused) {
       state.lowSamples = sample.ratio <= lowWatermark ? state.lowSamples + 1 : 0;
-      if (state.lowSamples >= resumeSamples) { state.paused = false; state.lowSamples = 0; }
-    }
-    if (state.paused) { state.deferred++; throw fault("KEYWORD_MONTHLY_MEMORY_DEFERRED"); }
+      state.reason = sample.ratio <= lowWatermark ? "low_watermark_recovery_pending" : "hysteresis_middle_pressure";
+      if (state.lowSamples >= resumeSamples) { state.paused = false; state.lowSamples = 0; state.reason = null; }
+    } else state.reason = null;
+    if (state.paused) { state.deferred++; throw denied("KEYWORD_MONTHLY_MEMORY_DEFERRED", at); }
   }
   async function run(operation) {
     if (typeof operation !== "function") throw new TypeError("Keyword read must be a function");
@@ -60,4 +72,10 @@ function runKeywordMonthlyMemoryAdmission(operation) {
   shared ||= createKeywordMonthlyMemoryAdmission();
   return shared.run(operation);
 }
-module.exports = { createKeywordMonthlyMemoryAdmission, keywordMonthlyAllocationCheckpoint, runKeywordMonthlyMemoryAdmission };
+function readKeywordMonthlyMemoryAdmissionState() {
+  // Inspecting this state never creates a sampler, samples memory or resumes it.
+  const value = shared?.status();
+  return Object.freeze({ initialized: Boolean(value), sampledAt: value?.sampledAt ?? null, ratio: value?.ratio ?? null,
+    paused: value?.paused ?? null, lowSamples: value?.lowSamples ?? null, reason: value?.reason ?? null });
+}
+module.exports = { createKeywordMonthlyMemoryAdmission, keywordMonthlyAllocationCheckpoint, runKeywordMonthlyMemoryAdmission, readKeywordMonthlyMemoryAdmissionState };

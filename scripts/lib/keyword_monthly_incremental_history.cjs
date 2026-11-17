@@ -8,19 +8,45 @@ const VERSION = "keyword-monthly-incremental-history-v1", MAX_BATCH = 8 * 1024 *
 const hash = b => crypto.createHash("sha256").update(b).digest("hex"), plain = v => v && typeof v === "object" && !Array.isArray(v);
 const token = v => String(v || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 const need = v => H.need(v, "KEYWORD_INCREMENTAL_HISTORY_INVALID");
+const COMPANY_FIELDS = ["companyKey", "companyId", "placeId", "place_id"];
+const companyHeader = row => Object.fromEntries(COMPANY_FIELDS.filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]]));
+function rowMonth(row) {
+  const date = String(row.stayDate || row.date || ""), candidate = date.slice(0, 7);
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(candidate) && date.startsWith(candidate + "-") ? candidate : "";
+}
+function matchesReferences(row, refs) {
+  if (!refs) return true;
+  const key = token(row.companyKey || row.companyId), inferred = key.match(/^cmp_place_(.+)$/)?.[1] || (/^\d+$/.test(key) ? key : "");
+  return [row.companyKey, row.companyId, row.placeId, row.place_id, inferred].map(token).some(x => refs.has(x));
+}
 function empty() { return { version: VERSION, generation: 0, lastOrdinal: 0, malformedHistoryLines: 0, blankLines: 0, rows: 0, batches: [], partitions: [] }; }
 function validate(state) {
   need(state?.version === VERSION && Number.isSafeInteger(state.generation) && state.generation >= 0 && Number.isSafeInteger(state.lastOrdinal) && state.lastOrdinal >= 0
     && Number.isSafeInteger(state.malformedHistoryLines) && state.malformedHistoryLines >= 0 && Number.isSafeInteger(state.rows) && state.rows >= 0
     && Array.isArray(state.batches) && state.batches.length <= 100000 && Array.isArray(state.partitions) && state.partitions.length <= 100000);
-  let last = 0; const ids = new Set();
-  for (const batch of state.batches) {
-    need(batch.firstOrdinal > last && batch.lastOrdinal >= batch.firstOrdinal && Array.isArray(batch.segments)); last = batch.lastOrdinal;
-    for (const s of batch.segments) need(H.SHA.test(s.sha256) && H.SHA.test(s.key) && s.bytes > 0 && s.bytes <= MAX_BATCH && s.rawBytes > 0 && s.rawBytes <= MAX_BATCH && Number.isSafeInteger(s.count) && s.count > 0);
+  need(Buffer.byteLength(JSON.stringify(state)) <= MAX_STATE);
+  let last = 0, rows = 0; const partitions = new Map(), counts = new Map();
+  for (const p of state.partitions) {
+    need(H.SHA.test(p.key) && H.SHA.test(p.digest) && !partitions.has(p.key) && Number.isSafeInteger(p.count) && p.count > 0 && Array.isArray(p.runIds)
+      && typeof p.month === "string" && (p.month === "" || /^\d{4}-(0[1-9]|1[0-2])$/.test(p.month))
+      && p.key === hash(JSON.stringify([companyHeader(p), p.month])));
+    partitions.set(p.key, p); counts.set(p.key, 0);
   }
-  need(last <= state.lastOrdinal);
-  for (const p of state.partitions) { need(H.SHA.test(p.key) && H.SHA.test(p.digest) && !ids.has(p.key) && p.count > 0 && Array.isArray(p.runIds)); ids.add(p.key); }
-  need(Buffer.byteLength(JSON.stringify(state)) <= MAX_STATE); return state;
+  for (const batch of state.batches) {
+    need(Number.isSafeInteger(batch.firstOrdinal) && batch.firstOrdinal > last && Number.isSafeInteger(batch.lastOrdinal) && batch.lastOrdinal >= batch.firstOrdinal && Array.isArray(batch.segments)); last = batch.lastOrdinal;
+    let batchRows = 0;
+    for (const s of batch.segments) {
+      need(H.SHA.test(s.sha256) && H.SHA.test(s.key) && Number.isSafeInteger(s.bytes) && s.bytes > 0 && s.bytes <= MAX_BATCH
+        && Number.isSafeInteger(s.rawBytes) && s.rawBytes > 0 && s.rawBytes <= MAX_BATCH && Number.isSafeInteger(s.count) && s.count > 0
+        && partitions.has(s.key) && s.month === partitions.get(s.key).month);
+      rows += s.count; batchRows += s.count; counts.set(s.key, counts.get(s.key) + s.count);
+      need(Number.isSafeInteger(rows) && rows <= state.rows);
+    }
+    need(batchRows <= batch.lastOrdinal - batch.firstOrdinal + 1);
+  }
+  need(last <= state.lastOrdinal && rows === state.rows);
+  for (const p of partitions.values()) need(counts.get(p.key) === p.count);
+  return state;
 }
 async function writeBlob(directory, bytes, { beforeNewBlob = null } = {}) {
   need(beforeNewBlob === null || typeof beforeNewBlob === "function");
@@ -54,8 +80,7 @@ async function append(directory, previous, lines, { beforeNewBlob = null } = {})
     if (!line.trim()) { state.blankLines++; continue; }
     let row; try { row = JSON.parse(line.replace(/^\uFEFF/, "")); } catch { state.malformedHistoryLines++; continue; }
     if (!plain(row)) { state.malformedHistoryLines++; continue; }
-    const date = String(row.stayDate || row.date || ""), candidate = date.slice(0, 7), month = /^\d{4}-(0[1-9]|1[0-2])$/.test(candidate) && date.startsWith(candidate + "-") ? candidate : "";
-    const header = Object.fromEntries(["companyKey", "companyId", "placeId", "place_id"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]]));
+    const month = rowMonth(row), header = companyHeader(row);
     const key = hash(JSON.stringify([header, month]));
     let p = partitions.get(key);
     if (!p) { p = { key, ...header, month, digest: hash(VERSION), count: 0, runIds: [], keywords: [] }; partitions.set(key, p); }
@@ -71,6 +96,17 @@ async function append(directory, previous, lines, { beforeNewBlob = null } = {})
 }
 function createReader({ directory, state, assertCurrent = async () => {} }) {
   validate(state); const digest = hash(JSON.stringify(state));
+  // Existing bounded partition metadata only: no reference index, decoded row
+  // cache or runId-based narrowing. Snapshot the header used to bind each blob.
+  const partitions = new Map(state.partitions.map(p => {
+    const company = companyHeader(p), header = JSON.stringify(company), values = Object.values(company);
+    // JSON number overflow can round-trip as null in the saved metadata. An
+    // opaque value's String conversion may also throw after the row run filter.
+    // Neither case may become a new false-negative or earlier conversion error.
+    const opaqueReference = values.some(v => v !== null && typeof v === "object");
+    const ambiguousNumericReference = values.some(v => v === null || typeof v === "number" && !Number.isFinite(v));
+    return [p.key, { month: p.month, header, company: JSON.parse(header), opaqueReference, ambiguousNumericReference }];
+  }));
   const counters = { sourceReads: 0, bytesReadOriginal: 0, segmentReads: 0, segmentBytes: 0, rowsRead: 0, headersRead: 0 };
   const descriptor = () => ({ ready: true, version: VERSION, generation: state.generation, contentDigest: digest, source: { signature: digest }, malformedHistoryLines: state.malformedHistoryLines, rows: state.rows });
   async function read(query, consume, kind) {
@@ -82,23 +118,32 @@ function createReader({ directory, state, assertCurrent = async () => {} }) {
     if (refs && refs.size > 4000) throw new TypeError("Too many refs");
     const matching = row => {
       if (q.runId !== undefined && String(row.runId || "") !== String(q.runId)) return false;
-      if (!refs) return true;
-      const key = token(row.companyKey || row.companyId), inferred = key.match(/^cmp_place_(.+)$/)?.[1] || (/^\d+$/.test(key) ? key : "");
-      return [row.companyKey, row.companyId, row.placeId, row.place_id, inferred].map(token).some(x => refs.has(x));
+      return matchesReferences(row, refs);
     };
     let selectedRows = 0;
     for (const batch of state.batches) {
       const rows = [];
       for (const s of batch.segments) {
+        const partition = partitions.get(s.key); need(partition && s.month === partition.month);
         if (q.month !== undefined && s.month !== q.month || q.partitionKey !== undefined && s.key !== q.partitionKey) continue;
+        if (!partition.opaqueReference && !(partition.ambiguousNumericReference && refs && (refs.has("infinity") || refs.has("-infinity")))
+          && !matchesReferences(partition.company, refs)) continue;
         const file = path.join(directory, s.sha256 + ".json.gz"), before = await H.checked(file); need(before.size === s.bytes);
         const bytes = await fs.readFile(file); need(hash(bytes) === s.sha256 && H.same(before, await H.checked(file)));
         const raw = zlib.gunzipSync(bytes, { maxOutputLength: MAX_BATCH }); need(raw.length === s.rawBytes); const parsed = JSON.parse(raw); need(Array.isArray(parsed) && parsed.length === s.count);
-        rows.push(...parsed); counters.segmentReads++; counters.segmentBytes += bytes.length;
+        for (const entry of parsed) {
+          need(Array.isArray(entry) && entry.length === 2 && Number.isSafeInteger(entry[0]) && entry[0] >= batch.firstOrdinal && entry[0] <= batch.lastOrdinal && typeof entry[1] === "string");
+          rows.push([entry[0], entry[1], partition]);
+        }
+        counters.segmentReads++; counters.segmentBytes += bytes.length;
       }
       rows.sort((a, b) => a[0] - b[0]);
-      for (const [ordinal, line] of rows) {
-        const row = JSON.parse(line.replace(/^\uFEFF/, "")); if (!matching(row)) continue;
+      let previousOrdinal = batch.firstOrdinal - 1;
+      for (const [ordinal, line, partition] of rows) {
+        need(ordinal > previousOrdinal); previousOrdinal = ordinal;
+        const row = JSON.parse(line.replace(/^\uFEFF/, ""));
+        need(plain(row) && rowMonth(row) === partition.month && JSON.stringify(companyHeader(row)) === partition.header);
+        if (!matching(row)) continue;
         if (kind === "headers") { const h = Object.fromEntries(["companyKey", "companyId", "placeId", "place_id", "stayDate", "date", "runId"].filter(k => Object.hasOwn(row, k)).map(k => [k, row[k]])); await consume(h, ordinal); counters.headersRead++; }
         else if (kind === "lines") await consume(line, row, ordinal); else await consume(row, ordinal);
         counters.rowsRead++; selectedRows++;

@@ -115,21 +115,32 @@ async function compile(values, onBound) {
       expectedOutboxInventorySha256: job.outboxInventorySha256, admittedRunIds: job.admittedRunIds });
     const available = await fs.statfs(dataDir, { bigint: true });
     H.need(available.bavail * available.bsize >= 512n * 1024n * 1024n + BigInt(H.LIMITS.scratchBytes) + 64n * 1024n * 1024n, "KEYWORD_INCREMENTAL_JOB_DISK_RESERVE");
-    const inputsFingerprint = H.hash(JSON.stringify([seeded.sourceInventorySha256, context.wiring.bindings.codeFingerprint, H.hash(JSON.stringify(regions))]));
+    // Stability inventory and semantic invalidation are distinct contracts.
+    // verifyDependencies retains the full source stamp/byte protection; local
+    // basis changes are already propagated by the company preparation keys.
+    H.need(H.SHA.test(seeded.globalDependencySha256), "KEYWORD_INCREMENTAL_GLOBAL_DEPENDENCY_INVALID");
+    const inputsFingerprint = H.hash(JSON.stringify([seeded.globalDependencySha256, context.wiring.bindings.codeFingerprint, H.hash(JSON.stringify(regions))]));
     progress.phase = "scope_plan";
     const plan = planScopes({ state: context.state, catalog: job.catalog, evidence, range: job.range, capturedAt: job.capturedAt, inputsFingerprint }); progress.plannedScopes = plan.scopes.length;
     assertDiagnosticExpectation(plan, input["diagnostic-scope"], job.diagnosticExpectation);
     const parts = [], inputs = [];
+    const preparationTiming = { version: 1, beforeScopePreparationMs: Date.now() - started,
+      normalizedScopeCount: 0, normalizationMs: 0, projectionMs: 0, bundlePreparationMs: null,
+      interpretation: "Observed child wall time, including guarded I/O; not CPU time or provider request latency." };
     for (const i of selectedScopeIndexes(plan, input["diagnostic-scope"])) {
       progress.phase = "scope_normalize"; progress.scopeIndex = i;
       await failure.writePhase({ binding, phase: "normalize_before", scopeIndex: i, startedAt: started });
+      const normalizationStarted = Date.now();
       await context.assertCurrent(); const scope = plan.scopes[i], normalized = await normalizePair({ wiring: context.wiring, ...scope, capturedAt: job.capturedAt, checkpoint: admission, retainBytes: false });
+      preparationTiming.normalizationMs += Date.now() - normalizationStarted; preparationTiming.normalizedScopeCount++;
       await failure.writePhase({ binding, phase: "normalize_after", scopeIndex: i, startedAt: started });
       const directory = path.join(jobRoot, "part-" + String(i).padStart(3, "0"));
       progress.phase = "scope_projection";
       await failure.writePhase({ binding, phase: "projection_before", scopeIndex: i, startedAt: started });
+      const projectionStarted = Date.now();
       const built = await buildKeywordMonthlyProjection({ source: normalized.source, sourceFingerprint: normalized.inputSha256, sourceProvenance: normalized.provenance,
         materializedAt: job.capturedAt, dataThrough: job.capturedAt, outputDir: directory, now: () => new Date(job.capturedAt), compression: "gzip", publishMonths: [scope.month] });
+      preparationTiming.projectionMs += Date.now() - projectionStarted;
       await failure.writePhase({ binding, phase: "projection_after", scopeIndex: i, startedAt: started });
       if (built.scopeCount === 0 && !job.catalog.scopes.some(s => H.scopeId(s) === H.scopeId(scope))) {
         parts.push({ ...scope, status: "not_observed", sourceSha256: normalized.inputSha256, inputBytes: normalized.inputBytes }); progress.completedParts = parts.length; continue;
@@ -159,8 +170,10 @@ async function compile(values, onBound) {
     // Financial semantic validation stays in this bounded, disposable child.
     // The web parent later checks exact bytes and this attested descriptor only.
     progress.phase = "prepared_results"; progress.scopeIndex = null;
+    const bundlePreparationStarted = Date.now();
     const publicationPreparation = await bundle.prepareKeywordMonthlyBundle({ inputs: H.mergeInputs(initial, inputs), now: job.capturedAt, maxTotalBytes: H.LIMITS.generationBytes,
       prepareResults: true, preparedOutputDir: path.join(jobRoot, "prepared-results") });
+    preparationTiming.bundlePreparationMs = Date.now() - bundlePreparationStarted;
     progress.phase = "final_verification";
     H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_INCREMENTAL_INITIAL_BUNDLE_CHANGED");
     await context.assertCurrent(); await verifyInventory({ expected: before, dataDir }); await verifyDependencies({ seeded, dataDir });
@@ -168,7 +181,7 @@ async function compile(values, onBound) {
     H.need(!Object.values(guards.metrics).some(Boolean) && context.wiring.metrics.deniedRequires === 0 && outputView.metrics.originalWriteAttempts === 0 && outputView.metrics.uncapturedReadAttempts === 0 && outputView.metrics.validationDenials === 0, "KEYWORD_INCREMENTAL_SIDE_EFFECT_ATTEMPTED");
     const result = { schemaVersion: 1, version: VERSION, status: "complete", executionBasis: "verified_incremental_source_checkpoint_and_dirty_partition_rebuild", capturedAt: job.capturedAt,
       bootstrap: context.bootstrap, stateSha256: context.current.stateSha256, statePointerSha256: context.current.pointerSha256, sourceInventorySha256: before.inventorySha256,
-      inputsFingerprint, outboxInventorySha256: context.outboxInventorySha256, inputs, parts, plan, metrics: context.metrics(), isolation,
+      inputsFingerprint, outboxInventorySha256: context.outboxInventorySha256, inputs, parts, plan, metrics: context.metrics(), performance: preparationTiming, isolation,
       initialBundle: job.initialBundle, publicationPreparation, publicationPreparationSha256: H.hash(JSON.stringify(publicationPreparation)),
       originalOutputVerification: verifiedOutputs, staticDependencies: seeded, providerCalls: 0, sourceWrites: 0, appEntryExecutions: 0, kosisReadOrChanged: false,
       guardMetrics: guards.metrics, sourceMetadata: before, scratch: scratch.status(), elapsedMs: Date.now() - started };

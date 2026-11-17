@@ -8,6 +8,7 @@ const { runKeywordMonthlyMemoryAdmission } = require("./keyword_monthly_memory_a
 const { KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
 const { createKeywordMonthlyHttpReadAdmission } = require("./keyword_monthly_http_read_admission.cjs");
 const { createKeywordMonthlyRequestDiagnostics } = require("./keyword_monthly_request_diagnostics.cjs");
+const { keywordMonthlyGuardDiagnosticFromError } = require("./keyword_monthly_guard_diagnostics.cjs");
 
 function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefreshStatus = null,
   readAdmission = null, requestDiagnostics = createKeywordMonthlyRequestDiagnostics({onLog:null}),
@@ -36,6 +37,10 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle,trackSavedFlight:!statusRead}));
       if(req.aborted||res.destroyed||signal?.aborted)return;
       let body=result.body;
+      if(result.http===503 && body && Object.hasOwn(body,"readGuard")) {
+        const readGuard=keywordMonthlyGuardDiagnosticFromError(body);
+        body={...body};delete body.readGuard;if(readGuard)body.readGuard=readGuard;
+      }
       if(nativeResponse){
         try { body=await requestDiagnostics.measure("serialize",()=>runKeywordMonthlyMemoryAdmission(()=>boundedJsonBuffer(body,maxResponseBytes))); }
         catch(error){if(error?.code==="COMPANY_RESPONSE_TOO_LARGE")error.code="KEYWORD_MONTHLY_RESPONSE_TOO_LARGE";throw error;}
@@ -100,9 +105,10 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     } catch (error) {
       if (req.aborted || res.destroyed) return true;
       const status = error.statusCode === 400 ? 400 : 503;
+      const readGuard = keywordMonthlyGuardDiagnosticFromError(error);
       reply(res, status, { status: "needs_verification", code: /^KEYWORD_MONTHLY_[A-Z0-9_]{1,100}$/.test(error.code || "") ? error.code : "KEYWORD_MONTHLY_UNAVAILABLE",
         error: status === 400 ? "정확한 키워드·숙박월·관측 마감일을 확인해 주세요." : "저장 파생자료의 근거를 확인하지 못했습니다. 미확인 값을 0으로 바꾸지 않습니다.",
-        snapshot: null, readOnly: true, networkAttempted: false });
+        snapshot: null, readOnly: true, networkAttempted: false, ...(readGuard ? { readGuard } : {}) });
     }
     return true;
     });
