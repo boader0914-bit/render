@@ -184,6 +184,51 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
         diagnostics: [error?.code === "ENOENT" ? "KEYWORD_MONTHLY_BUNDLE_POINTER_MISSING" : safeError(error)] };
     }
   }
+  async function catalogue() {
+    // A selector is a declaration in the immutable prepared-result catalog,
+    // not verification of the financial result or its partition indexes. This
+    // bounded metadata capability must never enter a legacy/source calculator.
+    try {
+      const bundle = await loadBundle(directory), current = basic();
+      ensure(bundle.catalog.schemaVersion === 2, "KEYWORD_MONTHLY_CATALOGUE_NOT_PREPARED");
+      const rows = new Map(), cutoffSets = new Map();
+      for (const descriptor of bundle.catalog.preparedResults) {
+        ensure(descriptor.calculationFingerprint === calculationFingerprint(), "KEYWORD_MONTHLY_RESULT_CALCULATION_CHANGED");
+        ensure(descriptor.cutoffDate <= current.currentDay, "KEYWORD_MONTHLY_RESULT_CLOCK_INVALID");
+        let row = rows.get(descriptor.keyword);
+        if (!row) {
+          row = { keyword: descriptor.keyword, stayMonths: [], collectionMonths: [], inventoryStayMonths: [], rankMonths: [],
+            defaultCutoffs: {}, supportedCutoffs: {}, provenanceByMonth: {}, availabilityByMonth: {} };
+          rows.set(descriptor.keyword, row);
+        }
+        const id = scopeId(descriptor.keyword, descriptor.month);
+        if (!cutoffSets.has(id)) { cutoffSets.set(id, new Set()); row.stayMonths.push(descriptor.month); }
+        cutoffSets.get(id).add(descriptor.cutoffDate);
+        if (!row.defaultCutoffs[descriptor.month] || descriptor.cutoffDate > row.defaultCutoffs[descriptor.month]) row.defaultCutoffs[descriptor.month] = descriptor.cutoffDate;
+        row.availabilityByMonth[descriptor.month] = "declared";
+      }
+      for (const row of rows.values()) {
+        row.stayMonths.sort();
+        for (const month of row.stayMonths) {
+          const cutoffs = cutoffSets.get(scopeId(row.keyword, month));
+          if (cutoffs.size === 1) row.supportedCutoffs[month] = [...cutoffs][0];
+        }
+        if (!Object.keys(row.supportedCutoffs).length) row.supportedCutoffs = null;
+      }
+      const result = { ...current, status: "available", metadataOnly: true, financialResultValidated: false,
+        keywords: [...rows.values()].sort((a, b) => a.keyword.localeCompare(b.keyword)),
+        diagnostics: ["KEYWORD_MONTHLY_CATALOGUE_METADATA_ONLY"],
+        provenance: { basis: "immutable_prepared_result_catalogue", bundleSha256: bundle.catalogRead.sha256,
+          currentPointerSha256: bundle.pointerRead.sha256, catalogAssembledAt: bundle.catalog.createdAt, originalFreshnessVerified: false },
+        bundle: { generation: bundle.pointer.generation, partitionCount: bundle.catalog.partitions.length,
+          scopeCount: bundle.catalog.scopes.length, preparedResultCount: bundle.catalog.preparedResults.length } };
+      ensure(Buffer.byteLength(JSON.stringify(result)) <= LIMITS.optionsBytes, "KEYWORD_MONTHLY_BUNDLE_OPTIONS_RESPONSE_LIMIT");
+      // Revalidate the complete bounded catalog and pointer, not a cached stat.
+      // The ordinary financial read still validates each selected index/result.
+      await unchanged(bundle);
+      return result;
+    } catch (error) { return { ...absent(error), metadataOnly: true, financialResultValidated: false }; }
+  }
   async function open() { try { return await loadBundle(directory); } catch (error) { if (error.code === "ENOENT") {
       // Only a genuinely absent pointer permits the unchanged legacy reader.
       try { await fs.lstat(path.join(directory, "current.json")); } catch (missing) { if (missing.code === "ENOENT") return null; throw missing; }
@@ -295,7 +340,7 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
         bundle: { generation: bundle.pointer.generation, partition: scope.partition, catalogSha256: bundle.catalogRead.sha256 } };
     } catch (error) { if (error.statusCode === 400) throw error; return absent(error, input); }
   }
-  return Object.freeze({ options, readPrepared, analyze, version });
+  return Object.freeze({ options, readPrepared, analyze, version, catalogue });
 }
 async function ensureDirectory(directory) {
   try { await checkPath(directory, true); } catch (error) { if (error.code !== "ENOENT") throw error; await checkPath(path.dirname(directory), true); await fs.mkdir(directory, { mode: 0o700 }); await checkPath(directory, true); }

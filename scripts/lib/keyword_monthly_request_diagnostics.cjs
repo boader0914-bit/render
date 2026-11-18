@@ -2,7 +2,7 @@
 
 const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
-const ROUTES = new Set(["options", "data", "refresh_status", "version", "unknown"]);
+const ROUTES = new Set(["options", "catalogue", "data", "refresh_status", "version", "unknown"]);
 const PHASES = new Set(["admission", "read", "serialize", "refresh_status"]);
 const METRICS = ["queueWaitMs", "leaseMs", "busyWaitMs", "memoryWaitMs", "samplingWaitMs", "otherWaitMs"];
 const code = value => typeof value === "string" && /^(?:KEYWORD_MONTHLY|KEYWORD_INCREMENTAL|ANALYTICAL)_[A-Z0-9_]{1,78}$/.test(value) && value.length <= 100 ? value : null;

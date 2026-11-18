@@ -37,10 +37,11 @@ function parseLine(line, ordinal, mode) {
 }
 
 function createHistoryObservationIndex({ file, indexFile, checkpoint = async () => {}, fileSystem = fs,
-  maxLineBytes = 32 * 1024 * 1024, onBeforePublish = null, busyTimeoutMs = 1000, integrityCheck = null } = {}) {
+  maxLineBytes = 32 * 1024 * 1024, onBeforePublish = null, busyTimeoutMs = 1000, integrityCheck = null, monthsQuery = null } = {}) {
   if (typeof file !== "string" || !file || typeof indexFile !== "string" || !indexFile || path.resolve(file) === path.resolve(indexFile)) throw new TypeError("Distinct file and indexFile are required");
   if (typeof checkpoint !== "function" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes < 1) throw new TypeError("Invalid index options");
   if (integrityCheck !== null && typeof integrityCheck !== "function" || fileSystem !== fs && integrityCheck === null) throw new TypeError("Custom index filesystems require an explicit full integrity checker");
+  if (monthsQuery !== null && typeof monthsQuery !== "function" || fileSystem !== fs && monthsQuery === null) throw new TypeError("Custom index filesystems require an explicit month query capability");
   file = path.resolve(file); indexFile = path.resolve(indexFile);
   let db = null, closed = false, serial = Promise.resolve(), last = null;
   const counters = { sourceReads: 0, bytesReadOriginal: 0, rebuilt: 0, incremental: 0, unchanged: 0, rowsRead: 0, headersRead: 0, idLookups: 0,
@@ -265,6 +266,29 @@ function createHistoryObservationIndex({ file, indexFile, checkpoint = async () 
     else result = await rebuild(old, current, localCheckpoint);
     last = result; return clone(result);
   }
+  async function listMonthsOwned() {
+    const descriptor = await ensureOwned();
+    const indexStat = async () => { try { return await fileSystem.lstat(indexFile, { bigint: true }); }
+      catch { throw fault("HISTORY_OBSERVATION_INDEX_MONTHS_CHANGED"); } };
+    const before = await indexStat();
+    if (!before.isFile() || before.isSymbolicLink()) throw fault("HISTORY_OBSERVATION_INDEX_INVALID");
+    const input = { indexFile, expectedSignature: signature(before), busyTimeoutMs: Math.max(0, Math.min(5000, Number(busyTimeoutMs) || 0)),
+      synchronousQuery: () => db.prepare("SELECT DISTINCT options_month AS month FROM physical_rows WHERE monthly_object=1 AND options_month IS NOT NULL ORDER BY options_month DESC").all().map(row => row.month) };
+    // The existing index is intentionally unchanged. Its month lookup is not
+    // covering: checking monthly_object can visit the large raw-row table. A
+    // web request must not synchronously wait for that SQLite scan on its HTTP
+    // event loop. Private isolated-copy readers inject this exact original SQL
+    // inside their already-owned child; no worker escapes that guarded scope.
+    const query = monthsQuery || (options => require("./history_index_months.cjs").readHistoryIndexMonths(options));
+    const result = await getAnalyticalPhaseDiagnostics().measure("history_index_months_query", { inputBytes: Number(before.size), readCount: 1 }, () => query(input));
+    const after = await indexStat();
+    if (!after.isFile() || after.isSymbolicLink() || signature(after) !== signature(before)) throw fault("HISTORY_OBSERVATION_INDEX_MONTHS_CHANGED");
+    await assertSource(descriptor.source);
+    if (!Array.isArray(result) || result.length > 120000) throw fault("HISTORY_OBSERVATION_INDEX_INVALID");
+    for (let index = 0; index < result.length; index++) if (!Object.hasOwn(result, index) || typeof result[index] !== "string" || !monthValid(result[index])
+      || index > 0 && result[index - 1] <= result[index]) throw fault("HISTORY_OBSERVATION_INDEX_INVALID");
+    return result.slice();
+  }
   function queryParts(query = {}) {
     const mode = query.parseMode || "monthly";
     if (!["monthly", "append", "detail"].includes(mode)) throw new TypeError("Invalid parseMode");
@@ -386,7 +410,7 @@ function createHistoryObservationIndex({ file, indexFile, checkpoint = async () 
         return { key: row.partition_key, ...JSON.parse(row.identity_header), month: row.month, digest: row.digest, count: Number(row.row_count), runIds: JSON.parse(row.run_ids) }; });
       await assertSource(descriptor.source); return { source: descriptor.source, contentDigest: descriptor.contentDigest,
         malformedLines: descriptor.malformedLines, malformedHistoryLines: descriptor.malformedLines, partitions }; }),
-    listMonths: () => schedule(async () => { const descriptor = await ensureOwned(); const result = db.prepare("SELECT DISTINCT options_month AS month FROM physical_rows WHERE monthly_object=1 AND options_month IS NOT NULL ORDER BY options_month DESC").all().map(row => row.month); await assertSource(descriptor.source); return result; }),
+    listMonths: () => schedule(listMonthsOwned),
     findObservationIds: options => schedule(() => findOwned(options)),
     append: (payload, options) => schedule(() => appendOwned(payload, options)),
     describe: () => last ? clone({ ...last, stats: { ...counters } }) : { version: VERSION, ready: false, stats: { ...counters } },

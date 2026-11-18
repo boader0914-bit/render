@@ -80,6 +80,19 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     if(typeof saved.version!=="function")throw fault("KEYWORD_MONTHLY_VERSION_UNAVAILABLE");
     return saved.version();
   }
+  async function catalogue(){
+    if(typeof saved.catalogue!=="function")throw fault("KEYWORD_MONTHLY_CATALOGUE_UNAVAILABLE");
+    // Explicit bounded metadata only: no graph cohort, execution-loan claim,
+    // legacy fallback or source reconstruction. Memory and conversion holds
+    // remain authoritative before and after the immutable catalogue read.
+    await assertReadAdmission();
+    return runMemoryAdmission(async()=>{
+      await assertReadAdmission();
+      const result=await saved.catalogue();
+      await assertReadAdmission();
+      return result;
+    });
+  }
   async function options(){return savedRead(()=>saved.options());}
   // Automatic refresh is an explicit capability: even the not_prepared
   // sentinel returns unchanged; only a manual analyze call may fall back.
@@ -102,7 +115,7 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
   async function beforeResponse(){
     current();await runMemoryAdmission(async()=>undefined);await assertReadAdmission();
   }
-  return Object.freeze({version,options,readPrepared,analyze,withResponse,withProducer,lifecycleOptions,beforeResponse,
+  return Object.freeze({version,catalogue,options,readPrepared,analyze,withResponse,withProducer,lifecycleOptions,beforeResponse,
     status:()=>({...counts,active:Boolean(owner),cohorts:entries.size,responseOwners:[...entries.values()].reduce((n,e)=>n+e.refs.size,0),
       operationPending:[...entries.values()].filter(e=>e.flightActive).length,producers:[...entries.values()].reduce((n,e)=>n+e.producers,0),
       responseOperations:[...entries.values()].reduce((n,e)=>n+e.responseOperations,0),permitActive:Boolean(owner?.permit)})});

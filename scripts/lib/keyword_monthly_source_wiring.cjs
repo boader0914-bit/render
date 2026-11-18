@@ -118,6 +118,13 @@ function buildSourceWiring({ codeRoot, copyDataDir, now, readOnlyOriginalOutputs
               need(indexFile === privateIndexFile && typeof synchronousCheck === "function", "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED");
               return synchronousCheck();
             };
+            // The web host runs the unchanged month selector in a read-only
+            // worker. The guarded source-copy child is already isolated and
+            // must keep this exact query inside its existing path boundary.
+            args[0].monthsQuery = ({ indexFile, synchronousQuery } = {}) => {
+              need(indexFile === privateIndexFile && typeof synchronousQuery === "function", "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED");
+              return synchronousQuery();
+            };
           }
           if (!["createAnalyticalWorkScheduler", "createAnalyticalMemorySampler"].includes(to)) args[0].now = () => new Date(now);
           if (to === "createMonthlyCompanyRecalculation") {

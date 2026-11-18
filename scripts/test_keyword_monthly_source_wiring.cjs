@@ -214,12 +214,16 @@ test("an existing private SQLite index runs the same full quick_check inside the
   await fs.writeFile(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
   const module = require("./lib/history_observation_index.cjs"), originalFactory = module.createHistoryObservationIndex;
   const seed = originalFactory({ file, indexFile }); await seed.ensure(); await seed.close();
-  let captured, checks = 0, actualChecks = 0;
+  let captured, capturedMonths, checks = 0, actualChecks = 0, monthQueries = 0;
   module.createHistoryObservationIndex = options => {
     captured = options.integrityCheck; assert.equal(typeof captured, "function");
+    capturedMonths = options.monthsQuery; assert.equal(typeof capturedMonths, "function");
     return originalFactory({ ...options, integrityCheck: details => {
       checks++; assert.equal(details.indexFile, indexFile); assert.equal(typeof details.synchronousCheck, "function");
       return captured({ ...details, synchronousCheck: () => { actualChecks++; return details.synchronousCheck(); } });
+    }, monthsQuery: details => {
+      monthQueries++; assert.equal(details.indexFile, indexFile); assert.equal(typeof details.synchronousQuery, "function");
+      return capturedMonths(details);
     } });
   };
   const guard = installGuards(root, { codeRoot }); let wiring;
@@ -229,8 +233,12 @@ test("an existing private SQLite index runs the same full quick_check inside the
     const headers = []; await bounded(wiring.index.readHeaders({ parseMode: "monthly" }, row => { headers.push(row); }));
     assert.equal(checks, 1); assert.equal(actualChecks, 1, "the injected path must execute the unchanged complete SQLite check");
     assert.deepEqual(headers.map(row => [row.companyId, row.runId, row.stayDate]), rows.map(row => [row.companyId, row.runId, row.stayDate]));
+    assert.deepEqual(await bounded(wiring.index.listMonths()), ["2026-11"]);
+    assert.equal(monthQueries, 1, "the private child must execute the exact month query without a new worker");
     let unsafeCalled = false;
     assert.throws(() => captured({ indexFile: path.join(root, "outside-index.sqlite"), synchronousCheck: () => { unsafeCalled = true; } }),
+      { code: "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED" }); assert.equal(unsafeCalled, false);
+    assert.throws(() => capturedMonths({ indexFile: path.join(root, "outside-index.sqlite"), synchronousQuery: () => { unsafeCalled = true; } }),
       { code: "KEYWORD_WIRING_PRIVATE_INDEX_REQUIRED" }); assert.equal(unsafeCalled, false);
     for (const key of ["networkAttempts", "childProcessAttempts", "outsideReadAttempts", "outsideCopyWriteAttempts", "appEntryExecutions", "providerFactories"]) assert.equal(guard.metrics[key], 0);
   } finally { await wiring?.index?.close?.(); await wiring?.scheduler?.close?.(); guard.restore(); module.createHistoryObservationIndex = originalFactory; }

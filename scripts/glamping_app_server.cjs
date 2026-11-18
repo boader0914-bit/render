@@ -760,6 +760,7 @@ const monthlyReportSources = createMonthlyReportSources({
   selectorCacheVersion: crypto.createHash("sha256").update(fs.readFileSync(__filename))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "history_observation_index.cjs")))
+    .update(fs.readFileSync(path.join(__dirname, "lib", "history_index_months.cjs")))
     .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_selector_revision.cjs"))).digest("hex"),
   listRuns,
   projectCapacityCompany: compactMonthlyCapacityCompany,

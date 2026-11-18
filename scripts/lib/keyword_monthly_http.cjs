@@ -32,7 +32,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       ...(trackSavedFlight&&typeof service.lifecycleOptions==="function"?service.lifecycleOptions():{}) }); }
     finally { req.removeListener?.("aborted", onAbort); res.removeListener?.("close", onClose);signal?.removeEventListener("abort",onAbort); }
   }
-  async function deliver(req,res,identity,operation,{statusRead=false}={}) {
+  async function deliver(req,res,identity,operation,{statusRead=false,metadataRead=false}={}) {
     const produce=async({signal,maxResponseBytes,nativeResponse})=>{
       const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle,trackSavedFlight:!statusRead}));
       if(req.aborted||res.destroyed||signal?.aborted)return;
@@ -46,6 +46,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
         catch(error){if(error?.code==="COMPANY_RESPONSE_TOO_LARGE")error.code="KEYWORD_MONTHLY_RESPONSE_TOO_LARGE";throw error;}
       }
       if(!statusRead&&typeof service.beforeResponse==="function")await service.beforeResponse();
+      if(metadataRead)await assertReadAdmission();
       if(req.aborted||res.destroyed||signal?.aborted)return;
       // Native serialization deliberately keeps the already safe result code
       // separate from its bounded encoded buffer for numeric diagnostics.
@@ -62,11 +63,17 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Vary", "Cookie");
     if (!requireAdmin(session, req, res)) return true;
-    const route = url.pathname === `${base}/options` ? "options" : url.pathname === base ? "data"
+    const route = url.pathname === `${base}/options` ? "options" : url.pathname === `${base}/catalogue` ? "catalogue" : url.pathname === base ? "data"
       : url.pathname === `${base}/refresh-status` ? "refresh_status" : url.pathname === `${base}/version` ? "version" : "unknown";
     return requestDiagnostics.run(route, async()=>{
     try {
       if (req.method !== "GET") { reply(res, 405, { code: "KEYWORD_MONTHLY_METHOD_NOT_ALLOWED", error: "저장된 월별 키워드 자료 조회만 지원합니다.", readOnly: true, networkAttempted: false }); return true; }
+      if (url.pathname === `${base}/catalogue`) {
+        if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
+        if (typeof service.catalogue !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_CATALOGUE_UNAVAILABLE", statusCode: 503 });
+        await requestDiagnostics.measure("admission",assertReadAdmission);
+        await deliver(req,res,"catalogue",async()=>{const result=await service.catalogue();return {http:result.status==="available"?200:503,body:result};},{statusRead:true,metadataRead:true});return true;
+      }
       if (url.pathname === `${base}/version`) {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         if (typeof service.version !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_VERSION_UNAVAILABLE", statusCode: 503 });

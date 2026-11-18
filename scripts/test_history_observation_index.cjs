@@ -12,6 +12,7 @@ async function fixture(t, content = "", options = {}) {
     // Explicit filesystem fault adapters retain the original full SQLite check
     // inside that adapter's controlled test lifetime; no fresh worker bypass.
     if (input.fileSystem && input.integrityCheck === undefined) input.integrityCheck = ({ synchronousCheck }) => synchronousCheck();
+    if (input.fileSystem && input.monthsQuery === undefined) input.monthsQuery = ({ synchronousQuery }) => synchronousQuery();
     const store = createHistoryObservationIndex(input); stores.push(store); return store; };
   t.after(async () => { for (const store of stores) await store.close().catch(() => {}); assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir())); await fs.rm(directory, { recursive: true, force: true }); });
   return { directory, file, indexFile, create, store: create() };
