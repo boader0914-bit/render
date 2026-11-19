@@ -19,7 +19,9 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
   statusResponseBudget = createKeywordMonthlyResponseBudget({maxResponseBytes:2*1024*1024,maxReservedBytes:4*1024*1024}) } = {}) {
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   const assertReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission});
-  const reply = (res,status,body) => { requestDiagnostics.guard?.(body); requestDiagnostics.response(res,status,body?.code); return send(res,status,body); };
+  const invokeSend = (res,status,body) => typeof requestDiagnostics.measureSync === "function"
+    ? requestDiagnostics.measureSync("response_send",()=>send(res,status,body)) : send(res,status,body);
+  const reply = (res,status,body) => { requestDiagnostics.guard?.(body); requestDiagnostics.response(res,status,body?.code); return invokeSend(res,status,body); };
   async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal,trackSavedFlight=false}={}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
@@ -52,7 +54,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       // Native serialization deliberately keeps the already safe result code
       // separate from its bounded encoded buffer for numeric diagnostics.
       requestDiagnostics.guard?.(result.body);requestDiagnostics.response(res,result.http,result.body?.code);
-      send(res,result.http,body);
+      invokeSend(res,result.http,body);
     };
     const production=()=> (statusRead?statusResponseBudget:responseBudget).run(res,context=>
       !statusRead&&typeof service.withProducer==="function"?service.withProducer(()=>produce(context)):produce(context));

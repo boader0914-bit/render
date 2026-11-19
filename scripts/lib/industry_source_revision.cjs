@@ -8,6 +8,8 @@ const readline = require("node:readline");
 const { savedIndustryRevisionScope } = require("./saved_source_revision_scope.cjs");
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 
+const ownedPeriodReaders = new WeakMap();
+function industrySourceRevisionOwnedCapability(reader) { return typeof reader === "function" ? ownedPeriodReaders.get(reader) || null : null; }
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
@@ -419,8 +421,10 @@ function createIndustrySourceRevision({ dataDir, outputsDir, regionMasterFile, t
     return periodInventory().then(({ fingerprint }) => finalCache?.fingerprint === fingerprint
       ? structuredClone(finalCache.value) : acquire());
   };
+  // Explicit trusted capability: acquire/reenter before creating or joining a shared scan.
+  ownedPeriodReaders.set(readIndustrySourceRevision, readIndustrySourceRevision.periodRevisions);
   readIndustrySourceRevision.industrySourceScope = savedIndustryRevisionScope({ dataDir, outputsDir, regionMasterFile, tourismRegionMapFile });
   return readIndustrySourceRevision;
 }
 
-module.exports = { createIndustrySourceRevision };
+module.exports = { createIndustrySourceRevision, industrySourceRevisionOwnedCapability };

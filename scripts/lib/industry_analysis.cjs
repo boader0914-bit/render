@@ -3,6 +3,7 @@
 // Read-only view over saved evidence. Inventory validation and capacity review
 // stay owned by the monthly-report pipeline; search rank is a separate cohort.
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
+const { industrySourceRevisionOwnedCapability } = require("./industry_source_revision.cjs");
 const { createIndustryAnalysisStore } = require("./industry_analysis_store.cjs");
 const { createIndustryAnalysisSavedReader } = require("./industry_analysis_saved_reader.cjs");
 const fs = require("node:fs/promises");
@@ -565,8 +566,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     return { industries: INDUSTRIES.map(publicIndustry), regions: catalogRegions(options.regions), months: options.months,
       defaultMonth, availableEvidenceMonths, defaultIndustry: "glamping", today, cohort: COHORT, features: FEATURES, scalePolicy: DEFERRED_SCALE };
   }
-  async function calculate(input) {
-    return runWork(async () => {
+  async function calculateOwned(input) {
       const date = now(), request = normalizeRequest(input, date);
       const { source, catalog } = await savedSource(request, date);
       const result = buildIndustryAnalysis(source, request, { now: date });
@@ -576,7 +576,9 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
         result.context = context;
       } else result.context.warnings = ["지역을 선택하면 저장된 방문·체류·소비 지표를 함께 확인할 수 있습니다. 사천은 남해안 지표 지역에 포함합니다."];
       return result;
-    }, { priority: "background", kind: "industry-build", detached: true });
+  }
+  async function calculate(input) {
+    return runWork(() => calculateOwned(input), { priority: "background", kind: "industry-build", detached: true });
   }
   const emptyCatalogue = storage => ({ industries: INDUSTRIES.map(publicIndustry), regions: [], months: [], defaultMonth: "",
     defaultIndustry: "glamping", cohort: COHORT, features: FEATURES, scalePolicy: DEFERRED_SCALE, metadataOnly: true, catalogue: storage });
@@ -597,10 +599,16 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     try { const stat = await fs.stat(path.join(dataDir, filename), { bigint: true }); return [filename, String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)]; }
     catch (error) { if (error.code === "ENOENT") return [filename, null]; throw error; }
   })));
-  const store = createIndustryAnalysisStore({ dataDir, calculate, calculationVersion, calculationFingerprint, now, autoStart, savedReferenceRevisionScope,
+  const storeSourceRevision = typeof readSourceRevision?.periodRevisions === "function" ? options => readSourceRevision.periodRevisions(options)
+    : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]);
+  const ownedSourceRevision = industrySourceRevisionOwnedCapability(readSourceRevision);
+  const hasOwnedSourceRevision = ownedSourceRevision !== null;
+  const store = createIndustryAnalysisStore({ dataDir, calculate: hasOwnedSourceRevision ? calculateOwned : calculate,
+    ...(hasOwnedSourceRevision ? { runWork } : {}), calculationVersion, calculationFingerprint, now, autoStart, savedReferenceRevisionScope,
     normalizeStoredRequest: request => normalizeRequest(request, now()),
-    readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? options => readSourceRevision.periodRevisions(options)
-      : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,
+    readSourceRevision: storeSourceRevision,
+    // Only this explicitly owner-aware factory path bypasses an external queued store tokenTask.
+    readSourceRevisionOwned: ownedSourceRevision, onInvalidate: clearSources,
     needsResultRefresh: result => result.review?.schemaVersion !== 1 || result.sources?.regionPolicyVersion !== REGION_POLICY_VERSION });
   const savedMenu = createIndustryAnalysisSavedReader({ dataDir, calculationVersion, now,
     normalizeStoredRequest: request => normalizeRequest(request, now()),

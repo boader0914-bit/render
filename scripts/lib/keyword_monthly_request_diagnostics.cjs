@@ -99,6 +99,15 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
     try { return await operation(); }
     finally { if (trace) { const value = elapsed(start, clock()); if (value !== null) trace.phases[phase] = duration((trace.phases[phase] || 0) + value); } }
   }
+  function measureSync(phase, operation) {
+    if (phase !== "response_send" || typeof operation !== "function") throw new TypeError("Invalid synchronous monthly diagnostic phase");
+    const trace = storage.getStore(), start = clock();
+    if (trace) trace.phaseCounts[phase] = Math.min(1000000, (trace.phaseCounts[phase] || 0) + 1);
+    // Observe only the synchronous invocation. Preserve its exact return/throw,
+    // including a thenable; do not await socket completion or async callbacks.
+    try { return operation(); }
+    finally { if (trace) { const value = elapsed(start, clock()); if (value !== null) trace.phases[phase] = duration((trace.phases[phase] || 0) + value); } }
+  }
   async function admission(phase, enter, operation) {
     if (!PHASES.has(phase) || typeof enter !== "function" || typeof operation !== "function") throw new TypeError("Invalid admission observation");
     const trace = storage.getStore(), start = clock(); let entered = false;
@@ -182,7 +191,7 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
       if (values.length) res.setHeader?.("Server-Timing", values.join(", "));
     } catch { counters.observerErrors++; }
   }
-  return Object.freeze({ run, measure, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response,
+  return Object.freeze({ run, measure, measureSync, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response,
     status: () => ({ ...counters, maxRecords, maxEventsPerWindow, windowMs, recent: records.map(trace => view(trace)) }) });
 }
 

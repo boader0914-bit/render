@@ -4,6 +4,8 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { assertCooperativeWorkActive, runCooperativeCheckpointReads, runNonInterruptibleCooperativeWork } = require("./cooperative_work_checkpoint.cjs");
+const directWork = operation => operation();
 const SCHEMA_VERSION = 1;
 const CALCULATION_VERSION = "industry-analysis-v1";
 const clone = value => structuredClone(value);
@@ -28,8 +30,10 @@ async function atomicJson(file, value) {
 }
 function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(), calculationVersion = CALCULATION_VERSION, calculationFingerprint = "",
   autoStart = true, onInvalidate = () => {}, readSourceRevision = null, normalizeStoredRequest = request => request,
-  needsResultRefresh = () => false, writeJson = atomicJson, savedReferenceRevisionScope = null }) {
-  if (!dataDir || typeof calculate !== "function") throw new TypeError("dataDir and calculate are required");
+  needsResultRefresh = () => false, writeJson = atomicJson, savedReferenceRevisionScope = null, runWork = directWork, readSourceRevisionOwned = null }) {
+  if (!dataDir || typeof calculate !== "function" || typeof runWork !== "function") throw new TypeError("dataDir and calculate are required");
+  if (readSourceRevisionOwned !== null && typeof readSourceRevisionOwned !== "function") throw new TypeError("Owned source revision must be a function");
+  if (runWork !== directWork && typeof readSourceRevision === "function" && !readSourceRevisionOwned) throw new TypeError("Owned industry work requires an owner-aware source reader");
   if (calculationFingerprint !== "" && !/^[a-f0-9]{64}$/.test(calculationFingerprint)) throw new TypeError("Invalid industry calculation fingerprint");
   // Calculator changes are source changes, not a new result key. Keeping the
   // key stable preserves the last valid snapshot while the new code rebuilds.
@@ -71,7 +75,7 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
   const keyFor = request => crypto.createHash("sha256").update(JSON.stringify([calculationVersion, request.month, request.cutoffDate, request.industry, request.region])).digest("hex");
   const resultFile = key => path.join(directory, "results", `${key}.json`);
   const saveState = () => writeJson(stateFile, state);
-  function locked(fn) { const task = serial.then(fn); serial = task.catch(() => {}); return task; }
+  function locked(fn) { const task = serial.then(fn); serial = task.then(() => undefined, () => undefined); return task; }
   async function init() {
     if (!initialization) initialization = (async () => {
       const stored = await readJson(stateFile);
@@ -102,14 +106,10 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
     })();
     return bootstrapped;
   }
-  async function checkSource(force = false) {
-    await init();
-    if (!readSourceRevision || storeError) return;
-    if (tokenTask) return tokenTask;
-    if (!force && !state.sourceCheckPending && new Date(now()).getTime() - lastTokenCheck < 30000) return;
-    tokenTask = (async () => {
+  async function inspectAndApplySource(inspectRevision) {
+    return (async () => {
       const eventSequence = state.sourceEventSequence || 0;
-      const value = await inspectSourceRevision();
+      const value = await inspectRevision();
       const scoped = value && typeof value === "object" && !Array.isArray(value)
         && typeof value.globalToken === "string" && value.months && typeof value.months === "object" && !Array.isArray(value.months)
         && Object.entries(value.months).every(([month, token]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && typeof token === "string");
@@ -144,15 +144,35 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       lastTokenCheck = new Date(now()).getTime();
       if (autoStart) scheduleKick();
     })().catch(async error => {
+      assertCooperativeWorkActive();
       if (error.code === "INDUSTRY_SOURCE_CHANGED") {
         // A concurrent writer is not damaged evidence. Keep normal snapshots
         // and check after quiet time instead of permanently stopping updates.
         await locked(async () => { state.sourceCheckPending = true; await saveState(); });
         if (autoStart) scheduleKick();
       } else storeError = safeCode(error);
-    }).catch(error => { storeError = safeCode(error); }).finally(() => { tokenTask = null; });
+    }).catch(error => { assertCooperativeWorkActive(); storeError = safeCode(error); });
+  }
+  async function checkSource(force = false) {
+    await init();
+    if (!readSourceRevision || storeError) return;
+    if (tokenTask) return tokenTask;
+    if (!force && !state.sourceCheckPending && new Date(now()).getTime() - lastTokenCheck < 30000) return;
+    tokenTask = inspectAndApplySource(inspectSourceRevision).finally(() => { tokenTask = null; });
     return tokenTask;
   }
+  async function checkSourceForPublication() {
+    if (!readSourceRevisionOwned) return checkSource();
+    // Await initialization before choosing the owner path. An external task
+    // can appear during this await, so this path must NEVER join tokenTask.
+    await init();
+    if (!readSourceRevision || storeError) return;
+    if (!tokenTask && !state.sourceCheckPending && new Date(now()).getTime() - lastTokenCheck < 30000) return;
+    // Preserve the normal hint when idle, otherwise use only the branded
+    // reentrant reader. The external task is neither replaced nor cancelled.
+    return inspectAndApplySource(() => Promise.resolve(readSourceRevisionOwned()).then(withCalculationFingerprint));
+  }
+
   function enqueue(key, request, reason) {
     const prior = state.jobs[key];
     return state.jobs[key] = { ...prior, request: clone(request), calculationVersion,
@@ -377,14 +397,18 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
       });
       if (!job) return;
       try {
+        // The worker owns its complete DTO lifetime, including durable publication.
+        // Its private calculator is already inside this lease: never await a detached nested owner.
+        await runWork(async () => {
         const result = await calculate(clone(job.request));
         if (!result || !result.summary || keyFor(result.request || {}) !== job.key) throw fault("INDUSTRY_RESULT_INVALID");
         if (needsResultRefresh(result)) throw fault("INDUSTRY_RESULT_SCHEMA_INVALID");
         // A source write during calculation is checked before publication;
         // generation guards discard only the affected month's old result.
-        await checkSource();
+        await checkSourceForPublication();
         if (storeError) throw fault(storeError);
-        await locked(async () => {
+        await runCooperativeCheckpointReads();
+        await runNonInterruptibleCooperativeWork(() => locked(async () => {
           const current = state.jobs[job.key];
           if (current?.generation !== job.generation || revisionFor(job.request.month) !== job.sourceRevision) return;
           if (state.sourceCheckPending) { enqueue(job.key, job.request, "source_changed_during_calculation"); await saveState(); return; }
@@ -399,7 +423,10 @@ function createIndustryAnalysisStore({ dataDir, calculate, now = () => new Date(
           await writeJson(resultFile(job.key), { schemaVersion: SCHEMA_VERSION, calculationVersion, request: job.request,
             sourceRevision: job.sourceRevision, calculatedAt: timestamp(), recalculationReason: job.reason, result });
           Object.assign(current, { status: "ready", finishedAt: timestamp(), errorCode: null }); await saveState();
-        });
+        }));
+        await runCooperativeCheckpointReads();
+        // Completion only: do not return the DTO to the scheduler queue.
+        }, { priority: "background", kind: "industry-build", detached: true });
       } catch (error) {
         await locked(async () => {
           const current = state.jobs[job.key];
