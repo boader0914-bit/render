@@ -517,7 +517,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (owner.savedReadWindow === window) owner.savedReadWindow = null;
     }
   }
-  function canLendSavedReadCheckpoint(owner) {
+  function canReserveSavedReadCheckpoint(owner) {
     // Only these explicitly opted-in background calculations expose the safe
     // source checkpoints. Foreground repairs, bootstrap and atomic publication
     // never become readers' lenders merely because they have a checkpoint scope.
@@ -530,7 +530,11 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         // These scopes may lend only at that awaited boundary. They cannot
         // unwind/replay, lend an arbitrary await, or bypass atomic publication.
         || owner.sourceMetadataLoanOnly && owner.savedReadLoanOnly)
-      && owner.checkpointScope?.nonInterruptibleDepth === 0);
+      && Number.isSafeInteger(owner.checkpointScope?.nonInterruptibleDepth)
+      && owner.checkpointScope.nonInterruptibleDepth >= 0);
+  }
+  function canLendSavedReadCheckpoint(owner) {
+    return canReserveSavedReadCheckpoint(owner) && owner.checkpointScope.nonInterruptibleDepth === 0;
   }
   function savedReadBusy(reason, owner = null) {
     return withKeywordMonthlyGuardDiagnostic(fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"), {
@@ -579,13 +583,15 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
             // atomic section. A delayed timer is not admission authority.
             const borrower = context.getStore();
             if (!sameOwner() || !borrower?.checkpointRead || borrower.ownerId !== owner.id
-              || closed || externalChecking || maintenance.paused || controller.signal.aborted || admissionTime() === null) {
+              || closed || externalChecking || maintenance.paused || owner.controller.signal.aborted
+              || borrower?.controller?.signal?.aborted || controller.signal.aborted || admissionTime() === null) {
               const reason = active !== owner || !owner.active ? "owner_changed"
                 : owner.checkpointScope?.nonInterruptibleDepth > 0 ? "atomic_work"
                   : !canLendSavedReadCheckpoint(owner) ? "ineligible_owner"
                     : !borrower?.checkpointRead || borrower.ownerId !== owner.id ? "checkpoint_context_mismatch"
                       : closed ? "scheduler_closed" : externalChecking ? "external_checking" : maintenance.paused ? "maintenance"
-                        : controller.signal.aborted ? owner.controller.signal.aborted ? "owner_aborted" : "checkpoint_aborted"
+                        : owner.controller.signal.aborted ? "owner_aborted"
+                          : borrower?.controller?.signal?.aborted || controller.signal.aborted ? "checkpoint_aborted"
                           : admissionClosedReason;
               throw savedReadBusy(reason, owner);
             }
@@ -635,7 +641,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (savedReadPermit || savedReadReservation) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
     if (active?.savedReadTransitioning) throw savedReadBusy("child_window_closed");
     const window = active?.savedReadWindow;
-    if (!externalChecking && !maintenance.paused && !checkpointReader && canLendSavedReadCheckpoint(active))
+    // A reservation owns no graph and may wait for this exact eligible owner
+    // to leave atomic work and reach an existing checkpoint. The original
+    // absolute admission deadline and depth-zero loan check remain authoritative.
+    if (!externalChecking && !maintenance.paused && !checkpointReader && canReserveSavedReadCheckpoint(active))
       return acquireCheckpointSavedReadPermit(active);
     if (externalChecking || maintenance.paused || checkpointReader || active && !(active.kind === "keyword_monthly_refresh"
       && active.priority === "background" && window?.accepting)) {

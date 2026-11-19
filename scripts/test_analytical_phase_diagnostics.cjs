@@ -91,7 +91,7 @@ test("sampling, clock and observer exceptions never replace successful values or
   assert.equal(state.counters.completed, 1); assert.equal(state.counters.failed, 1);
   assert.equal(state.counters.observerErrors, 8);
   assert.ok(state.counters.samplingErrors > 0);
-  assert.ok(Object.values(state.records[0].before).every(value => value === null));
+  assert.ok(["heapUsed", "heapTotal", "rss", "external", "arrayBuffers", "heapSizeLimit"].every(key => state.records[0].before[key] === null));
   assert.equal(state.records[0].elapsedMs, null);
 });
 

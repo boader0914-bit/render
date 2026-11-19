@@ -1,3 +1,4 @@
+// Local artifact copy: fixed integrated repository modules; no shared source edits.
 "use strict";
 const rawTest=require("node:test"),assert=require("node:assert/strict"),{EventEmitter}=require("node:events");
 const {createAnalyticalWorkScheduler:createScheduler}=require("./lib/analytical_work_scheduler.cjs");
@@ -108,15 +109,42 @@ test("the admission deadline is exactly bounded and removes only a queued loan w
   permit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;assert.equal(bg.attempts(),1);await scheduler.close();
 });
 
-test("wrong owners, foreground work, noncooperative work and atomic publication refuse this capability",async()=>{
+test("wrong owners refuse; eligible atomic owners reserve graphlessly until a safe checkpoint or original deadline",async()=>{
   for(const [kind,priority,cooperativeYield,cooperativeCompanyMonthYield]of [["company-bootstrap","background",true,true],["company-job-prepare","background",true,true],
     ["company-month-repair","foreground",true,true],["company-month","foreground",true,true],["company-month","background",true,false],
     ["industry-build","foreground",true,true],["industry-build","background",false,true]]){
     const scheduler=createAnalyticalWorkScheduler({cooperativeYield,cooperativeCompanyMonthYield}),entered=gate(),finish=gate(),done=scheduler.run(async()=>{entered.resolve();await finish.promise;},{kind,priority});await entered.promise;
     assert.throws(()=>scheduler.acquireSavedReadPermit(),error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="ineligible_owner");finish.resolve();await done;await scheduler.close();
   }
-  const scheduler=createAnalyticalWorkScheduler({cooperativeYield:true}),bg=await industry(scheduler,{atomic:true});assert.throws(()=>scheduler.acquireSavedReadPermit(),error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="atomic_work"&&error.readGuard.flags.atomicWork===true);
-  bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;await assert.rejects(scheduler.runCheckpointRead(()=>{}, {kind:"keyword-monthly-saved-read"}),TypeError);await scheduler.close();
+  // Eligible atomic owners may reserve without allocating a graph. The actual
+  // callback still waits for the exact owner's depth-zero safe checkpoint.
+  const c=clock(),scheduler=createAnalyticalWorkScheduler({...c,cooperativeYield:true}),source=createSourceReadScheduler();
+  const entered=gate(),leaveAtomic=gate(),passed=gate(),finish=gate();let insideAtomic=false,resumed=false,reads=0,attempts=0;
+  const done=scheduler.run(async()=>{attempts++;await runNonInterruptibleCooperativeWork(async()=>{insideAtomic=true;entered.resolve();await leaveAtomic.promise;insideAtomic=false;});
+    await source.checkpoint(scope);resumed=true;passed.resolve();await finish.promise;return "atomic-owner-complete";},scope);
+  await entered.promise;const permit=scheduler.acquireSavedReadPermit();
+  assert.equal(scheduler.status().savedRead.active,false);assert.equal(scheduler.status().savedRead.checkpointPending,true);
+  const ready=permit.run(()=>{assert.equal(insideAtomic,false);assert.equal(resumed,false);reads++;return {value:null,actualZero:0};});
+  await c.advance(200);assert.equal(reads,0);assert.equal(insideAtomic,true);assert.equal(scheduler.status().savedRead.active,false);
+  leaveAtomic.resolve();assert.deepEqual(await ready,{value:null,actualZero:0});assert.equal(reads,1);assert.equal(resumed,false);
+  await turn();assert.equal(resumed,false);assert.equal(scheduler.status().savedRead.active,true);
+  permit.release();await permit.waitForRelease();await passed.promise;assert.equal(resumed,true);finish.resolve();assert.equal(await done,"atomic-owner-complete");
+  assert.equal(attempts,1);assert.equal(scheduler.status().timing.restarted,0);assert.equal(scheduler.status().savedRead.active,false);
+  assert.equal(scheduler.status().savedRead.checkpointPending,false);assert.equal(scheduler.status().queuedCheckpointReads,0);
+  await assert.rejects(scheduler.runCheckpointRead(()=>{}, {kind:"keyword-monthly-saved-read"}),TypeError);await scheduler.close();assert.equal(c.timers.size,0);
+
+  // The same reservation must expire at the original 1500ms deadline if its
+  // eligible owner stays atomic; no callback, replay or owner cancellation.
+  const expiryClock=clock(),expiryScheduler=createAnalyticalWorkScheduler({...expiryClock,cooperativeYield:true}),bg=await industry(expiryScheduler,{atomic:true});
+  const expiryPermit=expiryScheduler.acquireSavedReadPermit();let expiredReads=0;
+  const expiryReady=expiryPermit.run(()=>{expiredReads++;return {};});
+  const rejection=assert.rejects(expiryReady,error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard?.reason==="checkpoint_expired"&&error.readGuard.flags.atomicWork===true);
+  assert.ok([...expiryClock.timers.values()].some(timer=>timer.ms===1500));await expiryClock.advance(1499);
+  assert.equal(expiredReads,0);assert.equal(expiryScheduler.status().savedRead.checkpointPending,true);assert.equal(expiryScheduler.status().savedRead.active,false);
+  await expiryClock.advance(1);await rejection;assert.equal(expiredReads,0);assert.equal(expiryScheduler.status().savedRead.checkpointPending,false);
+  assert.equal(expiryScheduler.status().queuedCheckpointReads,0);expiryPermit.release();bg.proceed.resolve();await bg.resumed.promise;bg.finish.resolve();await bg.done;
+  assert.equal(bg.attempts(),1);assert.equal(expiryScheduler.status().timing.restarted,0);assert.equal(expiryScheduler.status().savedRead.active,false);
+  await expiryScheduler.close();assert.equal(expiryClock.timers.size,0);
 });
 
 test("an owner that finishes before reaching its checkpoint cannot transfer the loan to a later owner",async()=>{

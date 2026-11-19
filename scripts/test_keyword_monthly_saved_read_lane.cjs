@@ -1,3 +1,4 @@
+// Local artifact copy: fixed integrated repository modules; no shared source edits.
 "use strict";
 const test=require("node:test"),assert=require("node:assert/strict"),{EventEmitter}=require("node:events");
 const {createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
@@ -165,6 +166,13 @@ test("a pending host loan drains before entering the child window, whose direct 
   child.resolve();await until(()=>s.scheduler.status().savedRead.childWaitWindowDraining);assert.equal(atomicEntered,false);
   const draining=s.request("child","data",response(),{"x-keyword-monthly-prepared-only":"1"});await draining.done;assert.equal(body(draining.res).readGuard.reason,"response_window_closed");
   direct.res.finish();await direct.done;await atomic.promise;
-  const rejected=s.request("atomic");await rejected.done;assert.equal(body(rejected.res).readGuard.reason,"atomic_work");assert.equal(body(rejected.res).readGuard.flags.atomicWork,true);
-  finish.resolve();await work;assert.equal(attempts,1);assert.equal(s.scheduler.status().timing.restarted,0);assert.equal(s.scheduler.status().savedRead.active,false);await s.scheduler.close();
+  // This owner has no later safe checkpoint until its atomic tail finishes.
+  // It may reserve graphlessly but cannot run a callback in that atomic tail.
+  const preparedBefore=s.calls.prepared,pending=s.request("atomic");await until(()=>s.scheduler.status().savedRead.checkpointPending);
+  await tick();assert.equal(s.calls.prepared,preparedBefore);assert.equal(atomicEntered,true);assert.equal(s.scheduler.status().savedRead.active,false);
+  await pending.done;assert.equal(pending.res.status,503);assert.equal(body(pending.res).code,"KEYWORD_MONTHLY_ANALYTICAL_BUSY");
+  assert.equal(body(pending.res).readGuard.reason,"checkpoint_expired");assert.equal(body(pending.res).readGuard.flags.atomicWork,true);
+  assert.equal(s.calls.prepared,preparedBefore);assert.equal(s.scheduler.status().savedRead.checkpointPending,false);assert.equal(s.scheduler.status().queuedCheckpointReads,0);
+  finish.resolve();await work;assert.equal(attempts,1);assert.equal(s.scheduler.status().timing.restarted,0);assert.equal(s.scheduler.status().savedRead.active,false);
+  assert.equal(s.service.status().producers,0);assert.equal(s.service.status().responseOwners,0);assert.equal(s.service.status().cohorts,0);await s.scheduler.close();
 });

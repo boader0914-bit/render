@@ -1,11 +1,37 @@
 "use strict";
 const fs = require("node:fs"), os = require("node:os"), v8 = require("node:v8");
 
+// Separate endpoint observation after the original memory fields are captured.
+// It is not atomic with memoryUsage/heapStatistics and never enters admission.
+const HEAP_SPACE_FIELDS = Object.freeze(["heapOldUsedBytes", "heapOldSizeBytes", "heapNewUsedBytes", "heapNewSizeBytes",
+  "heapLargeUsedBytes", "heapLargeSizeBytes", "heapNewLargeUsedBytes", "heapNewLargeSizeBytes"]);
+function observeHeapSpaces(reader) {
+  const empty = status => ({ ...Object.fromEntries(HEAP_SPACE_FIELDS.map(key => [key, null])), heapSpaceStatisticsStatus: status });
+  if (typeof reader !== "function") return empty(reader == null ? "unavailable" : "invalid_reader");
+  try {
+    const rows = reader();
+    if (rows == null) return empty("unavailable");
+    if (!Array.isArray(rows) || rows.length > 32) return empty("invalid");
+    const names = { old_space: "heapOld", new_space: "heapNew", large_object_space: "heapLarge", new_large_object_space: "heapNewLarge" };
+    const result = empty("partial"), seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], name = row?.space_name;
+      if (typeof name !== "string" || !Object.hasOwn(names, name)) continue;
+      if (seen.has(name)) return empty("invalid");
+      const used = row.space_used_size, size = row.space_size;
+      if (![used, size].every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)) return empty("invalid");
+      seen.add(name); result[names[name] + "UsedBytes"] = used; result[names[name] + "SizeBytes"] = size;
+    }
+    result.heapSpaceStatisticsStatus = seen.size === 4 ? "available" : seen.size ? "partial" : "unavailable";
+    return result;
+  } catch { return empty("reader_threw"); }
+}
+
 // Admission estimate only. File cache and unused V8 heap are reported apart
 // from live allocations; neither working-set subtraction nor RSS is a promise
 // that a later allocation fits. Never reset cgroup peaks or request forced GC.
 function createAnalyticalMemorySampler({ fileSystem = fs, memoryUsage = () => process.memoryUsage(),
-  totalMemory = () => os.totalmem(), getHeapStatistics = () => v8.getHeapStatistics(), now = Date.now } = {}) {
+  totalMemory = () => os.totalmem(), getHeapStatistics = () => v8.getHeapStatistics(), getHeapSpaceStatistics = () => v8.getHeapSpaceStatistics(), now = Date.now } = {}) {
   function optional(file) {
     try { return fileSystem.readFileSync(file, "utf8").trim(); }
     catch (error) { if (["ENOENT", "ENOTDIR"].includes(error.code)) return null; throw error; }
@@ -41,7 +67,7 @@ function createAnalyticalMemorySampler({ fileSystem = fs, memoryUsage = () => pr
     const estimatedLiveBytes = Math.max(liveEstimate, anonKernelEstimate), current = count(optional("/sys/fs/cgroup/memory.current")),
       events = optional("/sys/fs/cgroup/memory.events");
     const liveAllocationRatio = estimatedLiveBytes / limit, heap = heapPressure(usage.heapUsed);
-    last = { sampledAt: Number(now()), ratio: heap.heapRatio === null ? liveAllocationRatio : Math.max(liveAllocationRatio, heap.heapRatio),
+    const base = { sampledAt: Number(now()), ratio: heap.heapRatio === null ? liveAllocationRatio : Math.max(liveAllocationRatio, heap.heapRatio),
       liveAllocationRatio, ...heap,
       scope: "live-allocation-and-v8-heap-admission-estimate", limitBytes: limit, rssBytes: usage.rss, heapUsedBytes: usage.heapUsed, heapTotalBytes: usage.heapTotal,
       externalBytes: usage.external, unusedHeapBytes: unusedHeap, estimatedLiveBytes: Math.max(liveEstimate, anonKernelEstimate),
@@ -50,8 +76,11 @@ function createAnalyticalMemorySampler({ fileSystem = fs, memoryUsage = () => pr
       cgroupCurrentBytes: current, cgroupCurrentRatio: current === null ? null : current / limit,
       anonBytes: stat.anon ?? null, fileBytes: stat.file ?? null, kernelBytes: stat.kernel ?? null,
       cgroupEvents: events, cgroupEventCounts: numericLines(events),
-      interpretation: "Admission ratio is the maximum of estimated live allocation pressure and measured V8 heap pressure. Heap pressure excludes external/native allocations, which remain in the live estimate. An unavailable heap limit is null, not zero or a retained earlier value. Cgroup current includes file cache and is reported separately. No estimate guarantees that the next allocation fits. Event counters are cumulative, not per-task failures." };
-    return { ratio: last.ratio, sampledAt: last.sampledAt };
+      interpretation: "Admission ratio is the maximum of estimated live allocation pressure and measured V8 heap pressure. Heap pressure excludes external/native allocations, which remain in the live estimate. An unavailable heap limit is null, not zero or a retained earlier value. Cgroup current includes file cache and is reported separately. No estimate guarantees that the next allocation fits. Event counters are cumulative, not per-task failures. Heap-space fields are a separate later endpoint observation in the same sample call, not an atomic snapshot or admission inputs." };
+    // Capture every authoritative scalar before optional observer code runs.
+    const ratio = base.ratio, sampledAt = base.sampledAt;
+    last = { ...base, ...observeHeapSpaces(getHeapSpaceStatistics) };
+    return { ratio, sampledAt };
   }
   return { sample, status: () => last ? { ...last, cgroupEventCounts: { ...last.cgroupEventCounts } } : null };
 }

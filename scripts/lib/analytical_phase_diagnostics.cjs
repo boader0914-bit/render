@@ -4,13 +4,40 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const { isPromise } = require("node:util").types;
 const v8 = require("node:v8");
 
+// Separate endpoint observation after the original memory fields are captured.
+// It is not atomic with memoryUsage/heapStatistics and never enters admission.
+const HEAP_SPACE_FIELDS = Object.freeze(["heapOldUsedBytes", "heapOldSizeBytes", "heapNewUsedBytes", "heapNewSizeBytes",
+  "heapLargeUsedBytes", "heapLargeSizeBytes", "heapNewLargeUsedBytes", "heapNewLargeSizeBytes"]);
+function observeHeapSpaces(reader) {
+  const empty = status => ({ ...Object.fromEntries(HEAP_SPACE_FIELDS.map(key => [key, null])), heapSpaceStatisticsStatus: status });
+  if (typeof reader !== "function") return empty(reader == null ? "unavailable" : "invalid_reader");
+  try {
+    const rows = reader();
+    if (rows == null) return empty("unavailable");
+    if (!Array.isArray(rows) || rows.length > 32) return empty("invalid");
+    const names = { old_space: "heapOld", new_space: "heapNew", large_object_space: "heapLarge", new_large_object_space: "heapNewLarge" };
+    const result = empty("partial"), seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i], name = row?.space_name;
+      if (typeof name !== "string" || !Object.hasOwn(names, name)) continue;
+      if (seen.has(name)) return empty("invalid");
+      const used = row.space_used_size, size = row.space_size;
+      if (![used, size].every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0)) return empty("invalid");
+      seen.add(name); result[names[name] + "UsedBytes"] = used; result[names[name] + "SizeBytes"] = size;
+    }
+    result.heapSpaceStatisticsStatus = seen.size === 4 ? "available" : seen.size ? "partial" : "unavailable";
+    return result;
+  } catch { return empty("reader_threw"); }
+}
+
 const VERSION = "analytical-phase-diagnostics-v1";
 const MAX_RECORDS = 64;
 const MAX_PHASES = 32;
 // Match the scheduler's bounded internal task codes. Callers must supply these
 // codes, never customer/keyword labels, paths or arbitrary error strings.
 const IDENTIFIER = /^[A-Za-z0-9_:-]{1,80}$/;
-const MEMORY_FIELDS = Object.freeze(["heapUsed", "heapTotal", "rss", "external", "arrayBuffers", "heapSizeLimit"]);
+const BASE_MEMORY_FIELDS = Object.freeze(["heapUsed", "heapTotal", "rss", "external", "arrayBuffers", "heapSizeLimit"]);
+const MEMORY_FIELDS = Object.freeze([...BASE_MEMORY_FIELDS, ...HEAP_SPACE_FIELDS]);
 const METADATA_FIELDS = Object.freeze(["inputBytes", "outputBytes", "uncompressedBytes", "rowCount", "partitionCount", "cacheHits", "readCount"]);
 
 const count = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -26,7 +53,7 @@ function limit(value, fallback, maximum, name) {
 }
 
 function createAnalyticalPhaseDiagnostics({ memoryUsage = () => process.memoryUsage(), heapStatistics = () => v8.getHeapStatistics(),
-  now = Date.now, onRecord = null, maxRecords, maxPhases } = {}) {
+  heapSpaceStatistics = () => v8.getHeapSpaceStatistics(), now = Date.now, onRecord = null, maxRecords, maxPhases } = {}) {
   maxRecords = limit(maxRecords, MAX_RECORDS, MAX_RECORDS, "maxRecords");
   maxPhases = limit(maxPhases, MAX_PHASES, MAX_PHASES, "maxPhases");
   const storage = new AsyncLocalStorage();
@@ -64,7 +91,7 @@ function createAnalyticalPhaseDiagnostics({ memoryUsage = () => process.memoryUs
     const safe = emptyMemory();
     try {
       const usage = typeof memoryUsage === "function" ? memoryUsage() : null;
-      for (const key of MEMORY_FIELDS) {
+      for (const key of BASE_MEMORY_FIELDS) {
         if (key === "heapSizeLimit") continue;
         try { safe[key] = count(usage?.[key]); }
         catch { counters.samplingErrors += 1; }
@@ -75,7 +102,8 @@ function createAnalyticalPhaseDiagnostics({ memoryUsage = () => process.memoryUs
       const value = count(statistics?.heap_size_limit);
       safe.heapSizeLimit = value > 0 ? value : null;
     } catch { counters.samplingErrors += 1; }
-    return safe;
+    // Original endpoint fields are already detached scalars before observation.
+    return { ...safe, ...observeHeapSpaces(heapSpaceStatistics) };
   }
 
   function mergePeak(peak, snapshot) {
@@ -257,7 +285,7 @@ function createAnalyticalPhaseDiagnostics({ memoryUsage = () => process.memoryUs
 
   function status() {
     return { version: VERSION, limits: { maxRecords, maxPhases, maxActive: maxRecords }, counters: { ...counters },
-      interpretation: "Peak means the highest endpoint/checkpoint observation, not a continuous allocation peak. Phase retention limits do not stop later boundary samples or observer checkpoints. arrayBuffers is a separate component already included in external; these fields must not be added together.",
+      interpretation: "Peak means the highest endpoint/checkpoint observation, not a continuous allocation peak. Phase retention limits do not stop later boundary samples or observer checkpoints. arrayBuffers is a separate component already included in external; these fields must not be added together. Heap-space used/size fields are a separate later observation in the same sample call, not atomic with the original endpoint or admission inputs. Space endpoint maxima are not simultaneous totals.",
       active: [...active.values()].map(record => copy(view(record))), records: copy(records) };
   }
 
