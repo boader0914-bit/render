@@ -9,6 +9,8 @@ const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_sourc
 const { metadataInventory, seedDependencies } = require("./lib/keyword_monthly_incremental_inputs.cjs");
 const { buildKeywordMonthlyProjection } = require("./lib/keyword_monthly_analysis.cjs");
 const failure = require("./lib/keyword_monthly_incremental_failure.cjs");
+const { createAnalyticalWorkScheduler } = require("./lib/analytical_work_scheduler.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./lib/analytical_phase_runtime.cjs");
 const NOW = "2026-11-15T00:00:00.000Z", A = "fixture-keyword-a", OTHER = "fixture-keyword-b";
 async function json(file, value) { await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, JSON.stringify(value)); }
 function source(keyword, sold = 1) {
@@ -107,6 +109,22 @@ async function value(f, keyword, month) {
   const service = B.createKeywordMonthlyBundleAnalysis({ projectionDir: f.liveDir, now: () => NOW }), options = await service.options();
   return service.analyze({ keyword, month, cutoffDate: options.keywords.find(item => item.keyword === keyword).defaultCutoffs[month] });
 }
+test("host parent records finite pre/child/post stages and fences actual publication without granting refresh replay",async t=>{
+  const f=await fixture(t),scheduler=createAnalyticalWorkScheduler(),publish=f.deps.publish;let publications=0,attempts=0,atomicCalls=0;
+  const result=await scheduler.run(async()=>{attempts++;return R.refreshKeywordMonthlyIncremental({...f.call,withSavedReadWindow:op=>scheduler.withSavedReadWindow(op)},
+    {...f.deps,publish:async input=>{
+      publications++;assert.equal(scheduler.status().cooperative.activeEligible,false);
+      return publish({...input,runAtomic:operation=>input.runAtomic(async()=>{
+        atomicCalls++;assert.throws(()=>scheduler.acquireSavedReadPermit(),error=>error.code==="KEYWORD_MONTHLY_ANALYTICAL_BUSY"&&error.readGuard.reason==="atomic_work"&&error.readGuard.flags.atomicWork===true);
+        return operation();
+      })});
+    }});},{kind:"keyword_monthly_refresh",priority:"background"});
+  assert.equal(result.status,"published");assert.equal(publications,1);assert.equal(atomicCalls,1);assert.equal(attempts,1);assert.equal(scheduler.status().timing.restarted,0);
+  const record=getAnalyticalPhaseDiagnostics().status().records.findLast(row=>row.kind==="keyword_monthly_refresh"),phases=new Set(record.phases.map(row=>row.phase));
+  for(const phase of ["keyword_refresh_pre_child_inventory","keyword_refresh_pre_child_tree","keyword_refresh_child_wait","keyword_refresh_post_child_verify","keyword_refresh_publication"])assert.ok(phases.has(phase),phase);
+  assert.ok(phases.has("keyword_refresh_cleanup")||record.droppedPhaseCount>0,"fixture child shares diagnostics; any capped late phases remain explicitly counted");
+  assert.ok(record.phases.every(row=>Number.isFinite(row.elapsedMs)&&row.elapsedMs>=0));await scheduler.close();
+});
 for (const childFailure of [false,"valid"]) test("host child-await window drains before success or failure evidence is parsed: "+(childFailure||"success"),async t=>{
   const f=await fixture(t,childFailure?{childFailure}:{}),originalExecute=f.deps.execute,originalOpen=fs.open;
   let childSettled=false,windowOpen=false,windowExited=false,hostProofReads=0,releaseDrain,enteredDrain;

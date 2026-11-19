@@ -38,7 +38,9 @@ async function readStateStorage(file) {
   } finally { await handle.close(); }
   need(H.same(before, await H.checked(file)), "KEYWORD_INCREMENTAL_STATE_STORAGE_CHANGED"); return { bytes, sha256: hash(bytes) };
 }
-function createStore({ dataDir, directory = path.join(dataDir, "keyword_monthly_incremental"), now = () => new Date(), admission = async () => {} }) {
+function createStore({ dataDir, directory = path.join(dataDir, "keyword_monthly_incremental"), now = () => new Date(), admission = async () => {},
+  checkpoint = null, runAtomic = operation => operation() }) {
+  need((checkpoint === null || typeof checkpoint === "function") && typeof runAtomic === "function");
   H.absolute(dataDir); H.absolute(directory); need(H.inside(dataDir, directory) && directory !== dataDir);
   const masterFile = path.join(dataDir, "company_master/companies.json"), historyFile = path.join(dataDir, "history/observations.jsonl");
   const blobDir = path.join(directory, "companies"), historyDir = path.join(directory, "history"), stateDir = path.join(directory, "states"), pointerFile = path.join(directory, "source-current.json");
@@ -62,6 +64,9 @@ function createStore({ dataDir, directory = path.join(dataDir, "keyword_monthly_
             const stat = await H.checked(file); need(Number.isSafeInteger(stat.size) && stat.size >= 0, "KEYWORD_INCREMENTAL_PERSISTENT_BOUND");
             total += stat.size; need(total <= PERSISTENT_LIMITS.bytes, "KEYWORD_INCREMENTAL_PERSISTENT_BOUND");
           }
+          // Host-only opt-in. Child/default callers retain the exact inventory
+          // checks without importing a scheduler or acquiring read authority.
+          if (checkpoint) await checkpoint();
         }
         need(H.same(before, await H.checked(dir, true)), "KEYWORD_INCREMENTAL_PERSISTENT_INVENTORY_CHANGED");
       }
@@ -139,11 +144,16 @@ function createStore({ dataDir, directory = path.join(dataDir, "keyword_monthly_
     const pointer = Buffer.from(JSON.stringify({ schemaVersion: 1, version: VERSION, stateSha256, compression: "gzip", storageSha256: hash(compressed),
       storageBytes: compressed.length, rawBytes: bytes.length, generation: state.generation, createdAt: new Date(now()).toISOString() }));
     const temporary = path.join(directory, "source-current-" + crypto.randomUUID() + ".tmp"); await saveBytes(temporary, pointer, 16384, { beforeNewBlob: reserveNew });
+    // Immutable blob/budget inventory and temp-file preparation are complete.
+    // Drain host readers only for the final source guard/pointer/readback.
+    return runAtomic(async () => {
+    await admission();
     await assertSources(state);
     need(((await load())?.pointerSha256 || null) === expectedPointerSha256, "KEYWORD_INCREMENTAL_STATE_POINTER_CHANGED");
     await fs.rename(temporary, pointerFile);
     if (process.platform !== "win32") { const handle = await fs.open(directory, native.constants.O_RDONLY); try { await handle.sync(); } finally { await handle.close(); } }
     const read = await load(); need(read.stateSha256 === stateSha256, "KEYWORD_INCREMENTAL_STATE_READBACK"); return read;
+    });
   }
   async function assertSources(state) {
     need(sameStamp(state.sourceStamps.company, await stamp(masterFile)) && sameStamp(state.sourceStamps.history, await stamp(historyFile)), "KEYWORD_INCREMENTAL_SOURCE_DRIFT_REQUIRES_BOOTSTRAP");

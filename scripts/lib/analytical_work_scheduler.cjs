@@ -130,7 +130,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   const memoryStatus = () => ({ ...memory, highWatermark, lowWatermark, resumeSamples });
   function settleIdle() { if (!active && !savedReadPermit) for (const resolve of idleWaiters.splice(0)) resolve(); }
   function clearPoll() { if (timer !== null) clearTimeoutImpl(timer); timer = null; }
-  const activeMaintenancePoll = () => externalAdmission !== null && Boolean(active?.cooperative);
+  const activeMaintenancePoll = () => externalAdmission !== null && Boolean(active?.cooperative || active?.savedReadLoanOnly);
   const maintenanceIntervalMs = Math.min(sampleIntervalMs, 1000);
   function poll() {
     if (closed || timer !== null || !(sampleMemory && background.length
@@ -188,7 +188,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     task.signal?.addEventListener("abort", onAbort, { once: true });
     task.startedAt = accountWaiting(); task.waits = taskWait(task);
     if (task.checkpointRead) timing.checkpointReadStarted++; else timing.started++;
-    const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind, checkpointRead: Boolean(task.checkpointRead) };
+    const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind, checkpointRead: Boolean(task.checkpointRead),
+      // Refresh transactions cannot be replayed. They expose only explicitly
+      // awaited host boundaries, never cooperative yield/restart authority.
+      savedReadLoanOnly: task.priority === "background" && task.kind === "keyword_monthly_refresh" };
     active = token;
     task.attempt = (task.attempt || 0) + 1;
     const eligible = task.priority === "background" && (cooperativeYield && task.kind === "industry-build"
@@ -256,7 +259,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     };
     const cooperative = eligible ? checkpointScope : null;
     token.checkpointScope = checkpointScope; token.cooperative = cooperative; task.cooperative = cooperative;
-    if (eligible && externalAdmission) poll();
+    if ((eligible || token.savedReadLoanOnly) && externalAdmission) poll();
     if (task.priority === "foreground") consecutiveForeground++;
     else { consecutiveForeground = 0; admittedSampleSequence = sampleSequence; }
     const info = { signal: controller.signal, priority: task.priority, kind: task.kind,
@@ -493,7 +496,13 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   async function withSavedReadWindow(operation) {
     const owner = context.getStore();
     if (typeof operation !== "function" || !owner?.active || active !== owner || owner.kind !== "keyword_monthly_refresh"
-      || owner.priority !== "background" || owner.savedReadWindow || closed) throw fault("KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID");
+      || owner.priority !== "background" || owner.savedReadWindow || owner.savedReadTransitioning || closed) throw fault("KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID");
+    // A pending host checkpoint reservation must drain before the child wait
+    // window opens. Fence new reservations during this awaited transition.
+    owner.savedReadTransitioning = true;
+    try { await drainCheckpointReads(owner); }
+    finally { owner.savedReadTransitioning = false; }
+    if (closed || active !== owner || !owner.active || owner.controller.signal.aborted) throw fault("KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID");
     // Only the explicit isolated-child await opens this capability. Closing
     // the window precedes draining: no new read can delay final parent work.
     const window = { accepting: true, permits: new Set(), waiters: [] }; owner.savedReadWindow = window;
@@ -508,8 +517,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     // Only these explicitly opted-in background calculations expose the safe
     // source checkpoints. Foreground repairs, bootstrap and atomic publication
     // never become readers' lenders merely because they have a checkpoint scope.
-    return Boolean(owner && ["industry-build", "company-month"].includes(owner.kind)
-      && owner.priority === "background" && owner.cooperative && owner.checkpointScope?.nonInterruptibleDepth === 0);
+    return Boolean(owner && owner.priority === "background"
+      && (["industry-build", "company-month"].includes(owner.kind) && owner.cooperative
+        || owner.kind === "keyword_monthly_refresh" && owner.savedReadLoanOnly && !owner.savedReadWindow)
+      && owner.checkpointScope?.nonInterruptibleDepth === 0);
   }
   function savedReadBusy(reason, owner = null) {
     return withKeywordMonthlyGuardDiagnostic(fault("KEYWORD_MONTHLY_ANALYTICAL_BUSY"), {
@@ -612,6 +623,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function acquireSavedReadPermit() {
     if (closed) throw fault("ANALYTICAL_WORK_CLOSED");
     if (savedReadPermit || savedReadReservation) throw fault("KEYWORD_MONTHLY_QUERY_BUSY");
+    if (active?.savedReadTransitioning) throw savedReadBusy("child_window_closed");
     const window = active?.savedReadWindow;
     if (!externalChecking && !maintenance.paused && !checkpointReader && canLendSavedReadCheckpoint(active))
       return acquireCheckpointSavedReadPermit(active);
@@ -648,7 +660,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   function status() {
     return { closed, active: Boolean(active || savedReadPermit), activePriority: active?.priority || savedReadPermit?.priority || null, activeKind: active?.kind || savedReadPermit?.kind || null,
       savedRead: { active: Boolean(savedReadPermit), checkpointPending: Boolean(savedReadReservation), childWaitWindowOpen: Boolean(active?.savedReadWindow?.accepting),
-        childWaitWindowDraining: Boolean(active?.savedReadWindow && !active.savedReadWindow.accepting) },
+        childWaitWindowDraining: Boolean(active?.savedReadWindow && !active.savedReadWindow.accepting),
+        loanOnlyOwner: Boolean(active?.savedReadLoanOnly) },
       queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
       queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,
       sampling: Boolean(sampling), memory: memoryStatus(), maintenance: { ...maintenance },

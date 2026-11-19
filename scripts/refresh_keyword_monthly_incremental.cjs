@@ -13,6 +13,8 @@ const { createKeywordMonthlySourceDelta } = require("./lib/keyword_monthly_sourc
 const { verifyInventory, verifyDependencies } = require("./lib/keyword_monthly_incremental_inputs.cjs");
 const failure = require("./lib/keyword_monthly_incremental_failure.cjs");
 const { relocateKeywordMonthlySources } = require("./lib/keyword_monthly_source_relocation.cjs");
+const { runCooperativeCheckpointReads, runNonInterruptibleCooperativeWork } = require("./lib/cooperative_work_checkpoint.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./lib/analytical_phase_runtime.cjs");
 const OWNER = "keyword_monthly_incremental_refresh", BASIS = "verified_incremental_source_checkpoint_and_dirty_partition_rebuild";
 const keyFor = e => H.hash(JSON.stringify([VERSION, e.runId, e.manifestSha256, e.keyword]));
 async function maybeRead(file, max) { try { return await H.read(file, max); } catch (e) { if (e.code === "ENOENT") return null; throw e; } }
@@ -39,10 +41,17 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
   const { dataDir, codeRoot } = options; H.absolute(dataDir); H.absolute(codeRoot); await H.checked(dataDir, true); await H.checked(codeRoot, true);
   H.need(options.mode === "live" && typeof options.canPublish === "function" && typeof options.readDeltaEvidence === "function", "KEYWORD_INCREMENTAL_ADAPTER_REQUIRED");
   const clock = () => new Date(typeof options.now === "function" ? options.now() : Date.now()).toISOString(), evidence = H.validateEvidence(options.evidence), sourceKey = keyFor(evidence), started = Date.now();
+  const measure = (phase, operation) => getAnalyticalPhaseDiagnostics().measure(phase, {}, operation);
+  // Only this host transaction opts shared helpers into checkpoint loans.
+  // Children receive no scheduler imports/callbacks or replay authority.
+  const checkpoint = () => runCooperativeCheckpointReads();
+  const runAtomic = async operation => { await checkpoint(); return runNonInterruptibleCooperativeWork(operation); };
   const admission = async () => {
     if (options.signal?.aborted) throw Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
     H.need(Date.now() - started < 60 * 60000, "KEYWORD_INCREMENTAL_JOB_TIME_BOUND");
     if (await options.canPublish(evidence) !== true) throw Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
+    await checkpoint();
+    if (options.signal?.aborted) throw Object.assign(H.fault("KEYWORD_INCREMENTAL_DEFERRED"), { deferred: true });
   };
   await admission(); const manifest = await manifestEvidence(dataDir, evidence), liveDir = path.join(dataDir, "keyword_monthly_analysis"), receiptDir = path.join(liveDir, "refresh-receipts"); await privateDir(receiptDir);
   const completeFile = path.join(receiptDir, "complete-" + sourceKey + ".json"), intentFile = path.join(receiptDir, "intent-" + sourceKey + ".json");
@@ -56,7 +65,8 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       && complete.value.incrementalValidated === true, "KEYWORD_INCREMENTAL_COMPLETE_INVALID");
     return { ...complete.value, repeatedSource: true, operatingPointerChanged: false };
   }
-  const store = createStore({ dataDir, now: clock, admission }); await store.initialize();
+  const store = createStore({ dataDir, now: clock, admission, checkpoint, runAtomic });
+  await measure("keyword_refresh_pre_child_inventory", () => store.initialize());
   // Keep the already-deployed writer/reviewed recovery format. Diagnostics do
   // not acquire a second lock or rewrite an incompatible owner record.
   let workerLease;
@@ -91,7 +101,10 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     const scratchParent = path.resolve(options.scratchParent || require("node:os").tmpdir()); await H.checked(scratchParent, true);
     const foreignPreparations = (await fs.readdir(scratchParent, { withFileTypes: true })).filter(e => e.name.startsWith("keyword-monthly-source-") || e.name.startsWith("refresh-copy-"));
     H.need(foreignPreparations.length === 0, "KEYWORD_INCREMENTAL_OTHER_PREPARATION_PRESENT");
-    await prep.treeBytes(store.directory, 960 * 1024 ** 2); await prep.treeBytes(liveDir, H.LIMITS.bundleNamespaceBytes - H.LIMITS.generationBytes - 128 * 1024 ** 2);
+    await measure("keyword_refresh_pre_child_tree", async () => {
+      await prep.treeBytes(store.directory, 960 * 1024 ** 2, { checkpoint });
+      await prep.treeBytes(liveDir, H.LIMITS.bundleNamespaceBytes - H.LIMITS.generationBytes - 128 * 1024 ** 2, { checkpoint });
+    });
     const outbox = createKeywordMonthlySourceDelta({ dataDir }), inventory = await events(outbox);
     let current = await store.load();
     const applied = new Set(current?.state.appliedEvents || []), admittedRunIds = new Set(), admittedEvidence = new Map();
@@ -117,8 +130,8 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
         return true;
       };
       const previous = { stateSha256: current.stateSha256, pointerSha256: current.pointerSha256 };
-      const relocated = await relocateKeywordMonthlySources({ dataDir, expectedStateSha256: previous.stateSha256, expectedPointerSha256: previous.pointerSha256,
-        operationId: token, outbox, admission, assertExclusive, now: clock });
+      const relocated = await measure("keyword_refresh_pre_child_relocation", () => relocateKeywordMonthlySources({ dataDir, expectedStateSha256: previous.stateSha256, expectedPointerSha256: previous.pointerSha256,
+        operationId: token, outbox, admission, assertExclusive, now: clock, runAtomic }));
       H.need(["unchanged", "relocated"].includes(relocated.status) && H.SHA.test(relocated.current?.stateSha256) && H.SHA.test(relocated.current?.pointerSha256), "KEYWORD_INCREMENTAL_SOURCE_RELOCATION_INVALID");
       if (relocated.status === "relocated") {
         H.need(relocated.receipt?.file === path.join(store.directory, "source-relocations", token, "relocation-complete.json") && H.SHA.test(relocated.receipt.sha256)
@@ -141,6 +154,9 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     const capturedAt = clock(), job = { schemaVersion: 1, version: VERSION, dataDir, evidence, range: manifest.range, catalog: initial.catalog, initialBundle, capturedAt,
       outboxInventorySha256: inventory.inventory, admittedRunIds: [...admittedRunIds], admittedEvidence: [...admittedEvidence.values()], expectedSourceStateSha256: current?.stateSha256 || null, sourceRelocation };
     const jobInput = path.join(jobRoot, "job-input.json"); await saveBytes(jobInput, Buffer.from(JSON.stringify(job)), 1024 * 1024);
+    // The child needs only the captured digest in job-input. Do not retain the
+    // decoded (up to24MiB) source state during its independent wait window.
+    current = null;
     const node = await fs.realpath(process.execPath), guard = path.join(codeRoot, "scripts/reconstruct_keyword_monthly_incremental.cjs"), launcher = path.join(codeRoot, "scripts/launch_keyword_monthly_isolated.py");
     const pins = await Promise.all([node, guard, launcher, ...["keyword_monthly_bundle.cjs", "keyword_monthly_analysis.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs", "keyword_monthly_incremental_failure.cjs"].map(file => path.join(codeRoot, "scripts/lib", file))].map(file => prep.fileHash(file))), proofFile = path.join(jobRoot, "control/isolation.json"), preparationFile = path.join(jobRoot, "preparation-complete.json");
     for (const file of [proofFile, preparationFile, failure.failureFile(jobRoot)]) {
@@ -150,10 +166,10 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     const execute = dependencies.fixture === true && dependencies.execute ? dependencies.execute : prep.runChild;
     await admission();
     let child;
-    try { child = await (options.withSavedReadWindow|| (operation=>operation()))(()=>execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
+    try { child = await measure("keyword_refresh_child_wait", () => (options.withSavedReadWindow|| (operation=>operation()))(()=>execute("/usr/bin/python3.11", [launcher, "--copy-root", jobRoot, "--proof", proofFile, "--code-root", codeRoot,
       "--guard-name", "reconstruct_keyword_monthly_incremental.cjs", "--guard-sha256", pins[1].sha256, "--node-sha256", pins[0].sha256,
       "--node-max-old-space-size", "1024", "--", node, guard, "--input", jobInput, "--input-sha", H.hash(Buffer.from(JSON.stringify(job))),
-      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true })); }
+      "--job-root", jobRoot, "--code-root", codeRoot, "--isolation-proof", proofFile], { cwd: codeRoot, signal: options.signal, timeout: 55 * 60000, receiptOnly: true }))); }
     catch (caught) {
       const error = caught && typeof caught === "object" ? caught : H.fault("KEYWORD_PREP_CHILD_FAILED"), ended = failure.termination(error);
       let childFailure = { status: "missing" };
@@ -193,7 +209,11 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
     const expectedScopes = prepared.inputs.flatMap(i => i.exposeScopes); H.need(new Set(expectedScopes.map(H.scopeId)).size === expectedScopes.length && expectedScopes.every(s => prepared.plan.scopes.some(p => H.scopeId(p) === H.scopeId(s))), "KEYWORD_INCREMENTAL_SCOPE_PLAN_INVALID");
     const inputs = H.mergeInputs(initial, prepared.inputs), planned = await planCatalog(inputs, capturedAt);
     const validate = async () => {
-      await admission(); await manifestEvidence(dataDir, evidence); await verifyInventory({ expected: prepared.sourceMetadata, dataDir }); await verifyDependencies({ seeded: prepared.staticDependencies, dataDir });
+      await admission(); await manifestEvidence(dataDir, evidence);
+      await measure("keyword_refresh_post_child_verify", async () => {
+        await verifyInventory({ expected: prepared.sourceMetadata, dataDir, checkpoint });
+        await verifyDependencies({ seeded: prepared.staticDependencies, dataDir, checkpoint });
+      });
       for (const pinned of admittedEvidence.values()) H.need(JSON.stringify(H.validateEvidence(await options.readDeltaEvidence(pinned.runId))) === JSON.stringify(pinned), "KEYWORD_INCREMENTAL_DELTA_DB_CHANGED");
       H.need((await store.load()).stateSha256 === prepared.stateSha256 && (await events(outbox)).inventory === prepared.outboxInventorySha256, "KEYWORD_INCREMENTAL_SOURCE_CHANGED");
       H.need((await bundle.loadBundle(liveDir)).pointerRead.sha256 === initial.pointerRead.sha256, "KEYWORD_INCREMENTAL_POINTER_CHANGED");
@@ -205,13 +225,13 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
       stateSha256: prepared.stateSha256, preparationSha256: preparation.sha256, preparationEvidenceFile, preparationEvidenceSha256: H.hash(preparationEvidence), inputsFingerprint: prepared.inputsFingerprint, dataThrough: capturedAt,
       preparedParts: prepared.parts, bootstrap: prepared.bootstrap, metrics: prepared.metrics, jobRoot, createdAt: clock(), providerCalls: 0, sourceWrites: 0, sourceRelocation };
     const publisher = dependencies.fixture === true && dependencies.publish ? dependencies.publish : bundle.publishPrevalidatedKeywordMonthlyBundle;
-    const publication = await publisher({ inputs, outputDir: liveDir, now: capturedAt, expectedCurrentSha256: initial.pointerRead.sha256, maxTotalBytes: H.LIMITS.generationBytes,
-      preparation: prepared.publicationPreparation,
+    const publication = await measure("keyword_refresh_publication", () => publisher({ inputs, outputDir: liveDir, now: capturedAt, expectedCurrentSha256: initial.pointerRead.sha256, maxTotalBytes: H.LIMITS.generationBytes,
+      preparation: prepared.publicationPreparation, checkpoint, runAtomic,
       beforePromote: async candidate => { await validate(); H.need((await planCatalog(inputs, capturedAt)).sha256 === planned.sha256, "KEYWORD_INCREMENTAL_PLAN_CHANGED");
-        Object.assign(intent, preparedPublicationCandidate(candidate, planned)); await H.writeNew(intentFile, intent); } });
+         Object.assign(intent, preparedPublicationCandidate(candidate, planned)); await H.writeNew(intentFile, intent); } }));
     promoted = true; H.need(publication.status === "published" && publication.catalogSha256 === intent.expectedCatalogSha256 && publication.providerCalls === 0, "KEYWORD_INCREMENTAL_PUBLICATION_NEEDS_READBACK");
-    const verified = await bundle.verifyPrevalidatedKeywordMonthlyBundle({ projectionDir: liveDir, expectedCatalogSha256: intent.expectedCatalogSha256,
-      preparation: prepared.publicationPreparation, wantedScopes: expectedScopes });
+    const verified = await measure("keyword_refresh_post_publication_verify", () => bundle.verifyPrevalidatedKeywordMonthlyBundle({ projectionDir: liveDir, expectedCatalogSha256: intent.expectedCatalogSha256,
+      preparation: prepared.publicationPreparation, wantedScopes: expectedScopes, checkpoint }));
     const result = { ...intent, ...verified, status: "published", finishedAt: clock(), scopeCount: verified.scopeCount, refreshedScopeCount: expectedScopes.length,
       unchangedScopeCount: initial.catalog.scopes.filter(s => !expectedScopes.some(r => H.scopeId(r) === H.scopeId(s))).length, unchangedScopePartitionBindingsPreserved: true,
       repeatedSource: false, operatingPointerChanged: true, networkAttempted: false, collectorStarted: false, kosisReadOrChanged: false,
@@ -225,7 +245,7 @@ async function refreshKeywordMonthlyIncremental(options, dependencies = {}) {
         lastPublished: { stateSha256: prepared.stateSha256, sourceKey, generation: verified.generation, pointerSha256: verified.pointerSha256 }, generation: latest.state.generation + 1 };
       try { await store.save(next, latest.pointerSha256); } catch { result.cacheAcknowledgementPending = true; }
     }
-    try { await removeOwnedTree(jobRoot, path.join(jobRoot, "refresh-owner.json"), token, sourceKey); } catch { result.cleanupNeedsVerification = true; }
+    try { await measure("keyword_refresh_cleanup", () => removeOwnedTree(jobRoot, path.join(jobRoot, "refresh-owner.json"), token, sourceKey)); } catch { result.cleanupNeedsVerification = true; }
     return result;
   } catch (e) {
     const childTermination = failure.termination({ pid: e.childPid ?? e.pid, exitCode: e.childExitCode ?? e.exitCode, exitSignal: e.childExitSignal ?? e.exitSignal });

@@ -58,9 +58,11 @@ async function fileHash(file, max = 256 * MIB) {
 }
 async function writeNew(file, value) { const parent = await checked(path.dirname(file), true), bytes = Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value)); await fs.writeFile(file, bytes, { flag: "wx", mode: 0o600 }); need(identity(parent, await checked(path.dirname(file), true)), "KEYWORD_PREP_PARENT_CHANGED"); const actual = await fileHash(file, Math.max(bytes.length, 1)); need(actual.sha256 === sha(bytes) && actual.bytes === bytes.length, "KEYWORD_PREP_WRITE_READBACK"); return actual; }
 async function mkdirNew(directory) { await absent(directory); const parent = await checked(path.dirname(directory), true); await fs.mkdir(directory, { mode: 0o700 }); need(identity(parent, await checked(path.dirname(directory), true)), "KEYWORD_PREP_PARENT_CHANGED"); return checked(directory, true); }
-async function treeBytes(root, maximum = GIB) {
+async function treeBytes(root, maximum = GIB, { checkpoint = null } = {}) {
+  need(checkpoint === null || typeof checkpoint === "function", "KEYWORD_PREP_CHECKPOINT_INVALID");
   let total = 0, files = 0; async function walk(dir, depth) { need(depth <= 32 && ++files <= 200000, "KEYWORD_PREP_TREE_BOUND"); const before = await checked(dir, true); total += Math.max(before.size, (before.blocks || 0) * 512); need(total <= maximum, "KEYWORD_PREP_STORAGE_BOUND");
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) { const f = path.join(dir, entry.name), s = await fs.lstat(f); need(!s.isSymbolicLink(), "KEYWORD_PREP_UNSAFE_PATH"); if (s.isDirectory()) await walk(f, depth + 1); else { need(s.isFile() && s.nlink === 1 && ++files <= 200000, "KEYWORD_PREP_UNSAFE_PATH"); total += Math.max(s.size, (s.blocks || 0) * 512); need(total <= maximum, "KEYWORD_PREP_STORAGE_BOUND"); } } need(identity(before, await checked(dir, true)), "KEYWORD_PREP_PARENT_CHANGED"); }
+    if (checkpoint) await checkpoint();
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) { const f = path.join(dir, entry.name), s = await fs.lstat(f); need(!s.isSymbolicLink(), "KEYWORD_PREP_UNSAFE_PATH"); if (s.isDirectory()) await walk(f, depth + 1); else { need(s.isFile() && s.nlink === 1 && ++files <= 200000, "KEYWORD_PREP_UNSAFE_PATH"); total += Math.max(s.size, (s.blocks || 0) * 512); need(total <= maximum, "KEYWORD_PREP_STORAGE_BOUND"); } if (checkpoint) await checkpoint(); } need(identity(before, await checked(dir, true)), "KEYWORD_PREP_PARENT_CHANGED"); }
   await walk(root, 0); return { allocatedOrLogicalBytes: total, paths: files, maximumBytes: maximum };
 }
 function privateOpsStat(stat, uid) { need(stat.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === uid, "KEYWORD_PREP_OPS_PERMISSIONS"); }

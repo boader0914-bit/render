@@ -123,10 +123,10 @@ async function assertPriorAudit(directory, state) {
   }
 }
 async function relocateKeywordMonthlySources(options, dependencies = {}) {
-  const { dataDir, expectedStateSha256, expectedPointerSha256, operationId, assertExclusive, admission = async () => {},
+  const { dataDir, expectedStateSha256, expectedPointerSha256, operationId, assertExclusive, admission = async () => {}, runAtomic = operation => operation(),
     outbox = createKeywordMonthlySourceDelta({ dataDir }), now = () => new Date() } = options || {};
   H.absolute(dataDir); need(H.SHA.test(expectedStateSha256 || "") && H.SHA.test(expectedPointerSha256 || "") && UUID.test(operationId || "")
-    && typeof assertExclusive === "function" && typeof admission === "function" && typeof now === "function"
+    && typeof assertExclusive === "function" && typeof admission === "function" && typeof runAtomic === "function" && typeof now === "function"
     && typeof outbox?.listEvents === "function" && typeof outbox?.readEvent === "function", "KEYWORD_SOURCE_RELOCATION_ARGUMENT_INVALID");
   const monotonic = dependencies.monotonicNow || (() => require("node:perf_hooks").performance.now()), started = monotonic();
   const checkTime = () => { const elapsed = monotonic() - started;
@@ -134,7 +134,7 @@ async function relocateKeywordMonthlySources(options, dependencies = {}) {
   const checkpoint = async (exclusive = true) => { checkTime();
     need(await admission() !== false, "KEYWORD_SOURCE_RELOCATION_ADMISSION_HOLD"); checkTime();
     if (exclusive) need(await assertExclusive() === true, "KEYWORD_SOURCE_RELOCATION_EXCLUSIVITY_UNVERIFIED"); checkTime(); };
-  await checkpoint(); const store = S.createStore({ dataDir, now, admission: checkpoint }), current = await store.load();
+  await checkpoint(); const store = S.createStore({ dataDir, now, admission: checkpoint, checkpoint, runAtomic }), current = await store.load();
   need(current && current.stateSha256 === expectedStateSha256 && current.pointerSha256 === expectedPointerSha256, "KEYWORD_SOURCE_RELOCATION_STATE_CHANGED");
   const directory = store.directory, pointerFile = path.join(directory, "source-current.json"), pointer = await readRaw(pointerFile, LIMITS.pointerBytes);
   need(pointer.sha256 === expectedPointerSha256, "KEYWORD_SOURCE_RELOCATION_STATE_CHANGED");

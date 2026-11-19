@@ -6,6 +6,7 @@ const {createKeywordMonthlyHttpHandler}=require("./lib/keyword_monthly_http.cjs"
 const {createKeywordMonthlyQueryLifecycle}=require("./lib/keyword_monthly_query_lifecycle.cjs");
 const {createKeywordMonthlyMemoryAdmission}=require("./lib/keyword_monthly_memory_admission.cjs");
 const {createKeywordMonthlyRequestDiagnostics}=require("./lib/keyword_monthly_request_diagnostics.cjs");
+const {runNonInterruptibleCooperativeWork}=require("./lib/cooperative_work_checkpoint.cjs");
 const gate=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let i=0;i<100;i++){if(fn())return;await tick();}assert.fail("synthetic progress did not settle");}
@@ -31,16 +32,16 @@ test("idle saved permit reports busy, blocks new global dispatch atomically and 
   permit.release();await queued;assert.equal(globalStarted,true);await scheduler.close();
 });
 
-test("only the exact owned background refresh child-await window grants a concurrent saved capability",async()=>{
+test("only the exact owned background refresh grants child-window or reserved host-checkpoint capabilities",async()=>{
   const scheduler=createAnalyticalWorkScheduler();
   await assert.rejects(scheduler.withSavedReadWindow(()=>{}),{code:"KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID"});
   for(const [kind,priority] of [["industry-build","background"],["keyword_monthly_refresh","foreground"]])await scheduler.run(async()=>{
     assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});await assert.rejects(scheduler.withSavedReadWindow(()=>{}),{code:"KEYWORD_MONTHLY_SAVED_READ_WINDOW_INVALID"});
   },{kind,priority});
   await scheduler.run(async()=>{
-    assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
+    const before=scheduler.acquireSavedReadPermit();assert.equal(scheduler.status().savedRead.checkpointPending,true);before.release();
     await scheduler.withSavedReadWindow(async()=>{const permit=scheduler.acquireSavedReadPermit();await permit.run(async()=>42);permit.release();});
-    assert.throws(()=>scheduler.acquireSavedReadPermit(),{code:"KEYWORD_MONTHLY_ANALYTICAL_BUSY"});
+    const after=scheduler.acquireSavedReadPermit();assert.equal(scheduler.status().savedRead.checkpointPending,true);after.release();
   },{kind:"keyword_monthly_refresh",priority:"background"});await scheduler.close();
 });
 
@@ -145,4 +146,25 @@ test("manual and automatic modes of the same query never share a legacy calculat
   assert.equal(s.queryLifecycle.status().counters.shared,0);assert.equal(s.queryLifecycle.status().inFlight,1);automatic.res.finish();await automatic.done;
   manualFinish.resolve();await until(()=>manual.res.body);assert.equal(body(manual.res).snapshot.manual,true);manual.res.finish();await manual.done;
   assert.equal(s.service.status().cohorts,0);await s.scheduler.close();
+});
+
+test("a pending host loan drains before entering the child window, whose direct permit and atomic exit stay exclusive",{timeout:5000},async()=>{
+  const s=system(),entered=gate(),open=gate(),child=gate(),atomic=gate(),finish=gate();let childEntered=false,atomicEntered=false,attempts=0;
+  const work=s.scheduler.run(async()=>{
+    attempts++;entered.resolve();await open.promise;
+    await s.scheduler.withSavedReadWindow(async()=>{childEntered=true;await child.promise;});
+    await runNonInterruptibleCooperativeWork(async()=>{atomicEntered=true;atomic.resolve();await finish.promise;});
+  },{kind:"keyword_monthly_refresh",priority:"background"});await entered.promise;
+  assert.equal(s.scheduler.status().cooperative.activeEligible,false,"refresh never gains replay/yield authority");
+  assert.equal(s.scheduler.status().savedRead.loanOnlyOwner,true);
+  const host=s.request("host","data",response(),{"x-keyword-monthly-prepared-only":"1"});await until(()=>s.scheduler.status().savedRead.checkpointPending);
+  open.resolve();await until(()=>host.res.body);assert.equal(host.res.status,200);assert.equal(childEntered,false);assert.equal(atomicEntered,false);
+  host.res.finish();await host.done;await until(()=>s.scheduler.status().savedRead.childWaitWindowOpen);
+  const checkpointCount=s.scheduler.status().timing.checkpointReadStarted,direct=s.request("child","data",response(),{"x-keyword-monthly-prepared-only":"1"});
+  await until(()=>direct.res.body);assert.equal(direct.res.status,200);assert.equal(s.scheduler.status().timing.checkpointReadStarted,checkpointCount,"child permits do not wait for a nonexistent host checkpoint");
+  child.resolve();await until(()=>s.scheduler.status().savedRead.childWaitWindowDraining);assert.equal(atomicEntered,false);
+  const draining=s.request("child","data",response(),{"x-keyword-monthly-prepared-only":"1"});await draining.done;assert.equal(body(draining.res).readGuard.reason,"response_window_closed");
+  direct.res.finish();await direct.done;await atomic.promise;
+  const rejected=s.request("atomic");await rejected.done;assert.equal(body(rejected.res).readGuard.reason,"atomic_work");assert.equal(body(rejected.res).readGuard.flags.atomicWork,true);
+  finish.resolve();await work;assert.equal(attempts,1);assert.equal(s.scheduler.status().timing.restarted,0);assert.equal(s.scheduler.status().savedRead.active,false);await s.scheduler.close();
 });

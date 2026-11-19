@@ -14,7 +14,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let n=0;n<100;n++){if(fn())return;await turn();}assert.fail("bounded synthetic progress did not settle");}
 // The saved DTO owns the same checkpoint-to-final-response lifetime under both
 // explicitly enabled owners. Keep all admission and cancellation cases shared.
-for(const ownerKind of ["industry-build","company-month"]){
+for(const ownerKind of ["industry-build","company-month","keyword_monthly_refresh"]){
 const test=(name,...args)=>rawTest(`${ownerKind}: ${name}`,...args);
 const createAnalyticalWorkScheduler=options=>createScheduler({cooperativeCompanyMonthYield:ownerKind==="company-month",...options});
 const scope={kind:ownerKind,priority:"background"};

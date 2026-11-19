@@ -40,7 +40,7 @@ async function fileMetadata(root, relative, bounds, optionalFile = false) {
   if (path.basename(filename).toLowerCase() === "manifest.json") need(value.size <= BigInt(bounds.manifestBytes), "KEYWORD_INCREMENTAL_MANIFEST_BOUND");
   return { relative, present: true, bytes: Number(value.size), stamp: stamp(value) };
 }
-async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bounds.bytes, maxFileBytes = bounds.fileBytes, directoryStamps = null } = {}) {
+async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bounds.bytes, maxFileBytes = bounds.fileBytes, directoryStamps = null, checkpoint = null } = {}) {
   const first = optionalRoot ? await optional(root, true) : await checkedPath(root, true);
   if (!first) return { present: false, files: [], directories: [], bytes: 0 };
   const files = [], directories = []; let bytes = 0;
@@ -57,6 +57,7 @@ async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bou
     need(same(stamp(before), stamp(await checkedPath(directory, true))), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
     need(entries.length <= bounds.files + bounds.directories, "KEYWORD_INCREMENTAL_INPUT_ENTRY_BOUND");
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (checkpoint) await checkpoint();
       need(depth + 1 <= bounds.depth, "KEYWORD_INCREMENTAL_INPUT_DEPTH_BOUND");
       need(!entry.name.endsWith(".tmp") && !entry.name.endsWith(".incomplete"), "KEYWORD_INCREMENTAL_INPUT_PUBLICATION_IN_PROGRESS");
       const filename = path.join(directory, entry.name);
@@ -73,16 +74,19 @@ async function treeMetadata(root, bounds, { optionalRoot = false, maxBytes = bou
   await visit(root, 0);
   // A file may have changed without touching its containing directory mtime.
   for (const row of files) {
+    if (checkpoint) await checkpoint();
     const current = await checkedPath(path.join(root, ...row.relative.split("/")));
     need(same(row.stamp, stamp(current)), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   }
   for (const row of directories) {
+    if (checkpoint) await checkpoint();
     const current = await checkedPath(path.join(root, ...row.relative.split("/")), true);
     need(same(row.stamp, stamp(current)), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   }
   return { present: true, files, directories, bytes };
 }
-async function metadataInventory({ dataDir, limits: input } = {}, expectedOutputDirectories = null) {
+async function metadataInventory({ dataDir, limits: input, checkpoint = null } = {}, expectedOutputDirectories = null) {
+  need(checkpoint === null || typeof checkpoint === "function", "KEYWORD_INCREMENTAL_INPUT_CHECKPOINT_INVALID");
   H.absolute(dataDir); await checkedPath(dataDir, true); const bounds = limits(input), sourceFiles = [];
   need(expectedOutputDirectories === null || Array.isArray(expectedOutputDirectories) && expectedOutputDirectories.length > 0
     && expectedOutputDirectories.length <= bounds.directories, "KEYWORD_INCREMENTAL_INPUT_EXPECTED_REQUIRED");
@@ -91,21 +95,21 @@ async function metadataInventory({ dataDir, limits: input } = {}, expectedOutput
   const sourceBounds = { ...bounds, fileBytes: bounds.sourceMetadataBytes };
   for (const relative of SOURCES) sourceFiles.push(await fileMetadata(dataDir, relative, sourceBounds, true));
   const outputRoot = path.join(dataDir, "outputs"), captured = await treeMetadata(outputRoot, bounds, {
-    directoryStamps: expectedOutputDirectories && new Map(expectedOutputDirectories.map(row => [row.relative, row.stamp])) });
+    directoryStamps: expectedOutputDirectories && new Map(expectedOutputDirectories.map(row => [row.relative, row.stamp])), checkpoint });
   for (const row of sourceFiles) need(same(row, await fileMetadata(dataDir, row.relative, sourceBounds, true)), "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   const body = { schemaVersion: 1, dataDir, sourceFiles, outputs: { root: outputRoot, files: captured.files, directories: captured.directories } };
   return { ...body, inventorySha256: digest(body), fileCount: captured.files.length, directoryCount: captured.directories.length,
     outputBytes: captured.bytes, masterBodyReads: 0, historyBodyReads: 0, outputBodyReads: 0 };
 }
-async function verifyInventory({ expected, dataDir, limits: input } = {}) {
+async function verifyInventory({ expected, dataDir, limits: input, checkpoint = null } = {}) {
   need(expected?.schemaVersion === 1 && H.SHA.test(expected.inventorySha256 || "") && expected.dataDir === dataDir
     && expected.outputs?.root === path.join(dataDir, "outputs") && Array.isArray(expected.outputs.directories), "KEYWORD_INCREMENTAL_INPUT_EXPECTED_REQUIRED");
-  const fresh = await metadataInventory({ dataDir, limits: input }, expected.outputs.directories);
+  const fresh = await metadataInventory({ dataDir, limits: input, checkpoint }, expected.outputs.directories);
   need(fresh.inventorySha256 === expected.inventorySha256, "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   return { preserved: true, inventorySha256: fresh.inventorySha256, fileCount: fresh.fileCount, outputBytes: fresh.outputBytes,
     masterBodyReads: 0, historyBodyReads: 0, outputBodyReads: 0 };
 }
-async function seedMetadata(dataDir, bounds) {
+async function seedMetadata(dataDir, bounds, checkpoint = null) {
   const roots = [], files = [], directories = []; let bytes = 0;
   for (const relative of SEEDS) {
     const filename = path.join(dataDir, ...relative.split("/")), directory = !relative.endsWith(".json");
@@ -114,7 +118,7 @@ async function seedMetadata(dataDir, bounds) {
       roots.push({ relative, present: row.present, directory: false });
       if (row.present) { const { present, ...captured } = row; files.push(captured); bytes += row.bytes; }
     } else {
-      const captured = await treeMetadata(filename, bounds, { optionalRoot: true, maxBytes: bounds.seedBytes, maxFileBytes: bounds.seedFileBytes });
+      const captured = await treeMetadata(filename, bounds, { optionalRoot: true, maxBytes: bounds.seedBytes, maxFileBytes: bounds.seedFileBytes, checkpoint });
       roots.push({ relative, present: captured.present, directory: true });
       for (const row of captured.files) files.push({ ...row, relative: `${relative}/${row.relative}` });
       for (const row of captured.directories) directories.push({ ...row, relative: row.relative ? `${relative}/${row.relative}` : relative });
@@ -164,11 +168,12 @@ async function seedDependencies({ dataDir, workDataDir, limits: input } = {}) {
     bytes: copied.reduce((sum, row) => sum + row.bytes, 0), sourceInventorySha256: digest(before), preserved: true,
     sourceWrites: 0, masterBodyReads: 0, historyBodyReads: 0, kosisCopied: false };
 }
-async function verifyDependencies({ seeded, dataDir, limits: input } = {}) {
+async function verifyDependencies({ seeded, dataDir, limits: input, checkpoint = null } = {}) {
+  need(checkpoint === null || typeof checkpoint === "function", "KEYWORD_INCREMENTAL_INPUT_CHECKPOINT_INVALID");
   H.absolute(dataDir);
   need(seeded?.schemaVersion === 1 && seeded.dataDir === dataDir && H.SHA.test(seeded.sourceInventorySha256 || "")
     && Array.isArray(seeded.roots) && Array.isArray(seeded.copied) && Array.isArray(seeded.sourceDirectories), "KEYWORD_INCREMENTAL_SEED_EXPECTED_REQUIRED");
-  const current = await seedMetadata(dataDir, limits(input));
+  const current = await seedMetadata(dataDir, limits(input), checkpoint);
   need(digest(current) === seeded.sourceInventorySha256, "KEYWORD_INCREMENTAL_INPUTS_CHANGED");
   return { preserved: true, sourceInventorySha256: seeded.sourceInventorySha256, fileCount: current.files.length,
     bytes: current.bytes, sourceBodyReads: 0 };
