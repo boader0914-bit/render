@@ -28,6 +28,18 @@ test("the diagnostic whitelist discards tokens, unknown kinds, raw memory and ar
   const frozen = Object.freeze(Object.assign(Error("original"), { code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY" }));
   assert.equal(withKeywordMonthlyGuardDiagnostic(frozen, value), frozen); assert.equal(frozen.code, "KEYWORD_MONTHLY_ANALYTICAL_BUSY");
 });
+test("memory components admit fixed numeric fields only; source owner kinds remain a closed vocabulary",()=>{
+  const fields={heapUsedBytes:710,heapLimitBytes:1000,heapRatio:.71,liveAllocationRatio:.4,estimatedLiveBytes:800,limitBytes:2000,rssBytes:1600};
+  const value={component:"memory",reason:"high_watermark",observedAt:1000,activeKind:null,memory:{sampledAt:1000,ratio:.71,paused:true,lowSamples:0,...fields,cgroupEvents:"private raw",commandLine:"private args"}};
+  const safe=sanitizeKeywordMonthlyGuardDiagnostic(value);for(const [key,number]of Object.entries(fields))assert.equal(safe.memory[key],number);
+  assert.equal(JSON.stringify(safe).includes("private"),false);assert.equal(Object.isFrozen(safe.memory),true);
+  const unknown={...value,memory:{...value.memory,heapRatio:"private",heapUsedBytes:Infinity,rssBytes:-1}};const filtered=sanitizeKeywordMonthlyGuardDiagnostic(unknown);
+  assert.equal(filtered.memory.heapRatio,null);assert.equal(filtered.memory.heapUsedBytes,null);assert.equal(filtered.memory.rssBytes,null);
+  const getter={...value,memory:{...value.memory}};Object.defineProperty(getter.memory,"estimatedLiveBytes",{get(){throw Error("private getter");}});
+  assert.equal(sanitizeKeywordMonthlyGuardDiagnostic(getter).memory.estimatedLiveBytes,null);
+  for(const activeKind of ["source-options","source-catalog","verified-company-catalog"])assert.equal(sanitizeKeywordMonthlyGuardDiagnostic({...value,activeKind}).activeKind,activeKind);
+  assert.equal(sanitizeKeywordMonthlyGuardDiagnostic({...value,activeKind:"source-private-name"}).activeKind,"other");
+});
 
 test("65/55 percent and two-low-sample hysteresis remain unchanged and failures retain their own snapshots", async () => {
   const ratios = [0.65, 0.55, 0.55]; let n = 0, allocations = 0;

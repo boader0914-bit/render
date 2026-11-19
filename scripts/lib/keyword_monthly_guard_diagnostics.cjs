@@ -12,7 +12,9 @@ const REASONS = Object.freeze({
   saved_read: new Set(["response_window_closed", "response_flight_settled"])
 });
 const ACTIVE_KINDS = new Set(["industry-build", "company-month", "company-month-repair",
-  "keyword_monthly_refresh", "keyword_monthly_saved_read", "keyword_monthly_analysis"]);
+  "keyword_monthly_refresh", "keyword_monthly_saved_read", "keyword_monthly_analysis",
+  "source-options", "source-catalog", "verified-company-catalog"]);
+const MEMORY_COMPONENT_FIELDS = Object.freeze(["heapUsedBytes", "heapLimitBytes", "heapRatio", "liveAllocationRatio", "estimatedLiveBytes", "limitBytes", "rssBytes"]);
 const finiteNonnegative = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 function observedAt(value) {
   try {
@@ -31,9 +33,12 @@ function sanitizeKeywordMonthlyGuardDiagnostic(value) {
       activeKind: value.activeKind == null ? null : ACTIVE_KINDS.has(value.activeKind) ? value.activeKind : "other" };
     if (value.component === "memory") {
       const memory = value.memory;
+      const components = {};
+      for (const key of MEMORY_COMPONENT_FIELDS) try { if (Object.hasOwn(memory || {}, key)) components[key] = finiteNonnegative(memory[key]); }
+      catch { components[key] = null; }
       result.memory = Object.freeze({ sampledAt: finiteNonnegative(memory?.sampledAt), ratio: finiteNonnegative(memory?.ratio),
         paused: typeof memory?.paused === "boolean" ? memory.paused : null,
-        lowSamples: Number.isSafeInteger(memory?.lowSamples) && memory.lowSamples >= 0 && memory.lowSamples <= 10 ? memory.lowSamples : null });
+        lowSamples: Number.isSafeInteger(memory?.lowSamples) && memory.lowSamples >= 0 && memory.lowSamples <= 10 ? memory.lowSamples : null, ...components });
     }
     if (value.component === "scheduler") {
       const flags = value.flags;
@@ -56,4 +61,4 @@ function keywordMonthlyGuardDiagnosticFromError(error) {
   try { return sanitizeKeywordMonthlyGuardDiagnostic(error?.readGuard); }
   catch { return null; }
 }
-module.exports = { sanitizeKeywordMonthlyGuardDiagnostic, withKeywordMonthlyGuardDiagnostic, keywordMonthlyGuardDiagnosticFromError };
+module.exports = { sanitizeKeywordMonthlyGuardDiagnostic, withKeywordMonthlyGuardDiagnostic, keywordMonthlyGuardDiagnosticFromError, MEMORY_COMPONENT_FIELDS };

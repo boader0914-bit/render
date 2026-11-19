@@ -14,9 +14,10 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let n=0;n<100;n++){if(fn())return;await turn();}assert.fail("bounded synthetic progress did not settle");}
 // The saved DTO owns the same checkpoint-to-final-response lifetime under both
 // explicitly enabled owners. Keep all admission and cancellation cases shared.
-for(const ownerKind of ["industry-build","company-month","keyword_monthly_refresh"]){
+for(const ownerKind of ["industry-build","company-month","keyword_monthly_refresh","source-options","source-catalog","verified-company-catalog"]){
 const test=(name,...args)=>rawTest(`${ownerKind}: ${name}`,...args);
-const createAnalyticalWorkScheduler=options=>createScheduler({cooperativeCompanyMonthYield:ownerKind==="company-month",...options});
+const createAnalyticalWorkScheduler=options=>createScheduler({cooperativeCompanyMonthYield:ownerKind==="company-month",
+  sourceMetadataSavedReads:["source-options","source-catalog","verified-company-catalog"].includes(ownerKind),...options});
 const scope={kind:ownerKind,priority:"background"};
 function clock(){let at=0;const timers=new Map();return {now:()=>at,set(ms){at=ms;},jump(ms){at+=ms;},setTimeoutImpl(fn,ms){const h={unref(){}};timers.set(h,{fn,due:at+ms,ms});return h;},clearTimeoutImpl:h=>timers.delete(h),
   async advance(ms){at+=ms;for(const [h,t]of [...timers])if(t.due<=at){timers.delete(h);t.fn();}for(let n=0;n<8;n++)await turn();},timers};}

@@ -16,6 +16,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   sampleIntervalMs = 1000, maxSampleAgeMs = 10000, now = Date.now,
   setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout,
   onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false, cooperativeCompanyMonthYield = false,
+  sourceMetadataSavedReads = cooperativeYield,
   cooperativeMinRunMs = 250, cooperativeMinProgress = 1, externalAdmission = null,
   externalAdmissionTimeoutMs = 1500, savedReadCheckpointWaitMs = 1500 } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
@@ -28,7 +29,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || typeof now !== "function" || typeof setTimeoutImpl !== "function" || typeof clearTimeoutImpl !== "function"
     || onTaskTiming !== null && typeof onTaskTiming !== "function"
     || !Number.isSafeInteger(timingHistoryLimit) || timingHistoryLimit < 0 || timingHistoryLimit > 128
-    || typeof cooperativeYield !== "boolean" || typeof cooperativeCompanyMonthYield !== "boolean"
+    || typeof cooperativeYield !== "boolean" || typeof cooperativeCompanyMonthYield !== "boolean" || typeof sourceMetadataSavedReads !== "boolean"
     || !Number.isSafeInteger(cooperativeMinRunMs) || cooperativeMinRunMs < 0
     || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1
     || externalAdmission !== null && typeof externalAdmission !== "function"
@@ -189,9 +190,12 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     task.startedAt = accountWaiting(); task.waits = taskWait(task);
     if (task.checkpointRead) timing.checkpointReadStarted++; else timing.started++;
     const token = { id: task.id, controller, active: true, priority: task.priority, kind: task.kind, checkpointRead: Boolean(task.checkpointRead),
-      // Refresh transactions cannot be replayed. They expose only explicitly
-      // awaited host boundaries, never cooperative yield/restart authority.
-      savedReadLoanOnly: task.priority === "background" && task.kind === "keyword_monthly_refresh" };
+      // Refresh transactions and opted-in metadata preparations expose only
+      // explicitly awaited boundaries, never cooperative yield/restart authority.
+      savedReadLoanOnly: task.priority === "background" && (task.kind === "keyword_monthly_refresh"
+        || sourceMetadataSavedReads && ["source-options", "source-catalog", "verified-company-catalog"].includes(task.kind)),
+      sourceMetadataLoanOnly: task.priority === "background" && sourceMetadataSavedReads
+        && ["source-options", "source-catalog", "verified-company-catalog"].includes(task.kind) };
     active = token;
     task.attempt = (task.attempt || 0) + 1;
     const eligible = task.priority === "background" && (cooperativeYield && task.kind === "industry-build"
@@ -519,7 +523,13 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     // never become readers' lenders merely because they have a checkpoint scope.
     return Boolean(owner && owner.priority === "background"
       && (["industry-build", "company-month"].includes(owner.kind) && owner.cooperative
-        || owner.kind === "keyword_monthly_refresh" && owner.savedReadLoanOnly && !owner.savedReadWindow)
+        || owner.kind === "keyword_monthly_refresh" && owner.savedReadLoanOnly && !owner.savedReadWindow
+        // The source readers already await sourceReadScheduler.checkpoint().
+        // The verified catalog wrapper owns the outer lease in production;
+        // its nested source-catalog must not be mistaken for the active owner.
+        // These scopes may lend only at that awaited boundary. They cannot
+        // unwind/replay, lend an arbitrary await, or bypass atomic publication.
+        || owner.sourceMetadataLoanOnly && owner.savedReadLoanOnly)
       && owner.checkpointScope?.nonInterruptibleDepth === 0);
   }
   function savedReadBusy(reason, owner = null) {
