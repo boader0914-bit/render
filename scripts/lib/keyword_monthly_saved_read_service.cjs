@@ -78,7 +78,8 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
   // saved graph permit and never falls back to a projection/source calculation.
   async function version(){
     if(typeof saved.version!=="function")throw fault("KEYWORD_MONTHLY_VERSION_UNAVAILABLE");
-    return saved.version();
+    const operation=()=>saved.version();
+    return typeof diagnostics?.metadata==="function"?diagnostics.metadata(operation)():operation();
   }
   async function catalogue(){
     if(typeof saved.catalogue!=="function")throw fault("KEYWORD_MONTHLY_CATALOGUE_UNAVAILABLE");

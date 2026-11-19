@@ -204,9 +204,11 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
     try {
       // This is a publication notification only. Never open the catalog,
       // indexes, results, original sources or a legacy analysis from this path.
-      const file = path.join(directory, "current.json"), first = await readFile(file, LIMITS.pointerBytes), pointer = validatePointer(json(first));
-      const final = await readFile(file, LIMITS.pointerBytes); validatePointer(json(final));
-      ensure(final.sha256 === first.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      const file = path.join(directory, "current.json"), first = await measureKeywordMonthlyMetadata("version_open",()=>readFile(file, LIMITS.pointerBytes)), pointer = validatePointer(json(first));
+      await measureKeywordMonthlyMetadata("version_revalidate",async()=>{
+        const final = await readFile(file, LIMITS.pointerBytes); validatePointer(json(final));
+        ensure(final.sha256 === first.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+      });
       return { ...common, status: "available", revision: first.sha256, generation: pointer.generation, publishedAt: pointer.publishedAt };
     } catch (error) {
       return { ...common, status: "needs_verification", revision: null, generation: null, publishedAt: null,

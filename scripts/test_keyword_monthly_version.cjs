@@ -5,6 +5,7 @@ const { createKeywordMonthlyBundleAnalysis, KEYWORD_MONTHLY_BUNDLE_LIMITS } = re
 const { createKeywordMonthlyHttpHandler } = require("./lib/keyword_monthly_http.cjs");
 const { createKeywordMonthlyQueryLifecycle } = require("./lib/keyword_monthly_query_lifecycle.cjs");
 const { createKeywordMonthlySavedReadService } = require("./lib/keyword_monthly_saved_read_service.cjs");
+const { createKeywordMonthlyRequestDiagnostics } = require("./lib/keyword_monthly_request_diagnostics.cjs");
 const NOW = "2026-11-15T15:01:00.000Z", digest = value => crypto.createHash("sha256").update(value).digest("hex");
 const pointer = (extra = {}) => ({ schemaVersion: 1, generation: "a".repeat(32), catalogSha256: "b".repeat(64), catalogBytes: 321,
   publishedAt: "2026-11-15T15:00:00.000Z", ...extra });
@@ -26,6 +27,18 @@ test("version reads only the bounded pointer twice and never certifies catalog, 
     networkAttempted: false, originalFreshnessVerified: false, status: "available", revision: digest(f.bytes), generation: pointer().generation, publishedAt: pointer().publishedAt });
   assert.deepEqual(await fs.readFile(f.file), f.bytes); assert.deepEqual(await fs.readdir(f.root), ["current.json"]);
   assert.equal(Object.hasOwn(result, "snapshot"), false); assert.equal(Object.hasOwn(result, "sourceRevalidated"), false);
+});
+
+test("actual pointer version observations add only fixed phases and retain the exact two-read contract",async t=>{
+  const f=await fixture(t),reads=[],open=fs.open,logs=[],diagnostics=createKeywordMonthlyRequestDiagnostics({onLog:value=>logs.push(value)}),forbidden=()=>assert.fail("version cannot acquire financial/source authority");
+  const service=createKeywordMonthlySavedReadService({saved:{...f.service},runWork:forbidden,acquirePermit:forbidden,assertReadAdmission:forbidden,runMemoryAdmission:forbidden,diagnostics});
+  fs.open=async(file,...args)=>{reads.push(path.resolve(file));return open.call(fs,file,...args);};
+  try{
+    const result=await diagnostics.run("version",()=>service.version());assert.equal(result.revision,digest(f.bytes));assert.equal(result.originalFreshnessVerified,false);assert.deepEqual(reads,[f.file,f.file]);
+    const record=diagnostics.status().recent[0];assert.equal(record.metadataOutcome,"completed");assert.equal(record.metadataResultStatus,"available");assert.equal(record.metadataFinished,true);assert.equal(record.workStarted,false);
+    assert.equal(record.phaseCounts.version_open,1);assert.equal(record.phaseCounts.version_revalidate,1);assert.ok(record.phases.version_open>=0);assert.ok(record.phases.version_revalidate>=0);
+    assert.equal(logs.filter(row=>row.event==="metadata_start").length,1);assert.equal(logs.filter(row=>row.event==="metadata_end").length,1);assert.ok(!JSON.stringify({record,logs}).includes(f.root));
+  }finally{fs.open=open;}
 });
 
 test("restart preserves the version and an atomic publication changes it without caching or source reads", async t => {

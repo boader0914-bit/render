@@ -1492,6 +1492,21 @@ function cacheOptions(revision) {
   }
   return value;
 }
+function declaredCacheOptions(revision) {
+  const value = cacheOptions(revision); value.metadataOnly = true; value.financialResultValidated = false;
+  value.provenance.basis = "immutable_prepared_result_catalogue"; value.provenance.bundleSha256 = "d".repeat(64);
+  value.diagnostics = ["KEYWORD_MONTHLY_CATALOGUE_METADATA_ONLY"];
+  for (const row of value.keywords) { row.collectionMonths = []; row.inventoryStayMonths = []; row.rankMonths = [];
+    row.provenanceByMonth = {}; row.availabilityByMonth = Object.fromEntries(row.stayMonths.map(month => [month, "declared"])); }
+  return value;
+}
+test("normalizing a declared catalogue repeatedly retains prepared-only intent without changing legacy normalization", () => {
+  const initial = uiModule.normalizeOptions(declaredCacheOptions(AUTO_A));
+  assert.equal(initial.metadataOnly, true); assert.equal(initial.financialResultValidated, false);
+  assert.deepEqual(uiModule.normalizeOptions(initial), initial);
+  const legacy = uiModule.normalizeOptions(cacheOptions(AUTO_A)); assert.equal(legacy.metadataOnly, false);
+  assert.equal(Object.hasOwn(legacy, "financialResultValidated"), false); assert.deepEqual(uiModule.normalizeOptions(legacy), legacy);
+});
 function cacheUi(t, { storage, session, handle, revision = AUTO_A, clock = null, interval, viewport, frames, performance, companies = 3 } = {}) {
   const source = { revision }, counts = { options: 0, data: 0, version: 0, status: 0 }; let ui;
   ui = mockUi({ storage, session, now: clock?.now || Date.now, setTimeout: clock?.setTimeout || setTimeout,
@@ -1517,6 +1532,88 @@ async function warmedCatalogue(t) {
   storage.removeItem(uiModule.RESULT_KEY);
   return { storage, session };
 }
+async function warmedDeclaredCatalogue(t) {
+  const storage = memorySelectionStorage(), session = liveSession(), warm = cacheUi(t, { storage, session,
+    handle: ({ kind, source }) => kind === "options" ? jsonResponse(declaredCacheOptions(source.revision)) : undefined });
+  await warm.ready; await warm.controller.open(cacheContext()); await settle();
+  assert.equal(JSON.parse(storage.getItem(CATALOGUE_KEY)).metadata.source, "immutable_prepared_result_catalogue");
+  warm.controller.destroy(); storage.removeItem(uiModule.RESULT_KEY);
+  return { storage, session };
+}
+
+test("declared catalogue F5 uses the existing parallel prepared-only path and still waits for the real post-DOM version", async t => {
+  const warm = await warmedDeclaredCatalogue(t), data = deferred(), postDomVersion = deferred();
+  const storedMetadata = warm.storage.getItem(CATALOGUE_KEY);
+  const ui = cacheUi(t, { ...warm, handle: ({ kind, counts }) => kind === "data" && counts.data === 1 ? data.promise
+    : kind === "version" && counts.version === 2 ? postDomVersion.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+  assert.equal(ui.find("kma-dashboard-metrics").length, 0);
+  data.resolve(jsonResponse(cachePayload(AUTO_A))); await settle();
+  const panel = ui.find("keyword-monthly-analysis")[0];
+  assert.equal(panel.dataset.displayedPointerSha256, AUTO_A); assert.equal(panel.dataset.catalogueSource, "session_metadata_verified_by_version");
+  assert.equal(panel.dataset.firstVersionOutcome, "running"); assert.notEqual(ui.controller.state().automatic.initial.outcome, "complete");
+  assert.equal(warm.storage.getItem(CATALOGUE_KEY), storedMetadata, "data and first version reads do not renew the metadata TTL");
+  postDomVersion.resolve(jsonResponse(automaticVersion(AUTO_A, cacheOptions(AUTO_A).currentDay))); await opening;
+  assert.equal(panel.dataset.firstVersionOutcome, "complete");
+  await ui.controller.refresh();
+  assert.equal(ui.counts.options, 0); assert.equal(warm.storage.getItem(CATALOGUE_KEY), storedMetadata);
+  const reads = ui.calls.filter(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly");
+  assert.equal(reads.length, 2); assert.ok(reads.every(c => c.settings.headers["X-Keyword-Monthly-Prepared-Only"] === "1"));
+  assert.ok(ui.calls.every(c => c.settings.method === "GET" && !c.url.endsWith("/options")));
+});
+
+test("a changed declared pointer settles speculative data before one fresh catalogue and keeps every financial read prepared-only", async t => {
+  const warm = await warmedDeclaredCatalogue(t), data = deferred();
+  const ui = cacheUi(t, { ...warm, revision: AUTO_B, handle: ({ kind, counts, source }) => kind === "data" && counts.data === 1 ? data.promise
+    : kind === "options" ? jsonResponse(declaredCacheOptions(source.revision)) : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+  assert.equal(ui.find("kma-dashboard-metrics").length, 0);
+  data.resolve(jsonResponse(cachePayload(AUTO_A))); await opening;
+  assert.deepEqual(ui.counts, { options: 1, data: 2, version: 2, status: 0 });
+  assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.displayedPointerSha256, AUTO_B);
+  assert.ok(ui.calls.filter(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly")
+    .every(c => c.settings.headers["X-Keyword-Monthly-Prepared-Only"] === "1"));
+  assert.ok(ui.calls.every(c => c.settings.method === "GET" && !c.url.endsWith("/options")));
+});
+
+test("expired declared metadata waits for a fresh catalogue and cannot auto-renew from a version or financial read", async t => {
+  const warm = await warmedDeclaredCatalogue(t), entry = JSON.parse(warm.storage.getItem(CATALOGUE_KEY)), catalogue = deferred();
+  entry.storedAt = Date.now() - 6 * 60000; entry.expiresAt = entry.storedAt + 5 * 60000;
+  warm.storage.setItem(CATALOGUE_KEY, JSON.stringify(entry));
+  const ui = cacheUi(t, { ...warm, handle: ({ kind }) => kind === "options" ? catalogue.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 1, data: 0, version: 0, status: 0 });
+  assert.equal(warm.storage.getItem(CATALOGUE_KEY), null);
+  catalogue.resolve(jsonResponse(declaredCacheOptions(AUTO_A))); await opening;
+  assert.equal(ui.counts.data, 1); assert.equal(ui.counts.version, 1);
+  assert.equal(ui.calls.find(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly").settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+  assert.ok(JSON.parse(warm.storage.getItem(CATALOGUE_KEY)).storedAt > entry.storedAt);
+});
+
+test("declared cache protection failures never retry through options or a heavy non-prepared financial path", async t => {
+  for (const blocked of ["data", "version"]) {
+    const warm = await warmedDeclaredCatalogue(t), ui = cacheUi(t, { ...warm,
+      handle: ({ kind }) => kind === blocked ? jsonResponse({ code: "KEYWORD_MONTHLY_ANALYTICAL_BUSY" }, 503) : undefined });
+    await ui.ready; await ui.controller.open();
+    assert.deepEqual(ui.counts, { options: 0, data: 1, version: 1, status: 0 });
+    assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_503"); assert.equal(ui.find("kma-dashboard-metrics").length, 0);
+    assert.equal(warm.storage.getItem(CATALOGUE_KEY), null);
+    assert.equal(ui.calls.find(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly").settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+    assert.ok(ui.calls.every(c => c.settings.method === "GET" && !c.url.endsWith("/options")));
+  }
+});
+
+test("a new authenticated login cannot use a previous login's declared catalogue to speculate before fresh selection", async t => {
+  const warm = await warmedDeclaredCatalogue(t), session = { ...warm.session, sessionCreatedAt: new Date(Date.parse(warm.session.sessionCreatedAt) + 1).toISOString() }, catalogue = deferred();
+  const ui = cacheUi(t, { storage: warm.storage, session, handle: ({ kind }) => kind === "options" ? catalogue.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await settle();
+  assert.deepEqual(ui.counts, { options: 1, data: 0, version: 0, status: 0 });
+  catalogue.resolve(jsonResponse(declaredCacheOptions(AUTO_A))); await opening;
+  assert.equal(ui.counts.data, 1); assert.equal(ui.calls[0].url, "/api/keyword-monthly/catalogue");
+  assert.equal(ui.calls.find(c => new URL(c.url, "https://local.test").pathname === "/api/keyword-monthly").settings.headers["X-Keyword-Monthly-Prepared-Only"], "1");
+});
 
 async function savedReloadPosition(t, { cache = true } = {}) {
   const storage = memorySelectionStorage(), session = liveSession(), ui = cacheUi(t, { storage, session, viewport: { width: 1280, x: 0, y: 0 } });

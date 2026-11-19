@@ -12,6 +12,13 @@ function options() {
       provenanceByMonth: { "2026-10": { dataThrough: "2026-11-16T04:05:55.229Z", inputSha256: B }, "2026-11": { dataThrough: "2026-11-16T04:05:55.229Z", originalFreshnessVerified: false } } }] };
 }
 function version() { return { schemaVersion: 1, status: "available", revision: A, generation: GEN, currentDay: "2026-11-17", publishedAt: "2026-11-16T04:05:55.229Z", readOnly: true, networkAttempted: false, originalFreshnessVerified: false }; }
+function declaredCatalogue() {
+  const value = options(); value.metadataOnly = true; value.financialResultValidated = false;
+  value.provenance = { basis: "immutable_prepared_result_catalogue", bundleSha256: B, currentPointerSha256: A, originalFreshnessVerified: false };
+  value.diagnostics = ["KEYWORD_MONTHLY_CATALOGUE_METADATA_ONLY"];
+  for (const row of value.keywords) { row.collectionMonths = []; row.provenanceByMonth = {}; row.availabilityByMonth = Object.fromEntries(row.stayMonths.map(month => [month, "declared"])); }
+  return value;
+}
 function memoryStorage() {
   const data = new Map(), calls = [];
   return { data, calls, getItem(key) { calls.push(["get", key]); return data.get(key) ?? null; },
@@ -158,4 +165,66 @@ test("a live revision, generation and Korean date must all match before metadata
   const adapted = C.catalogueForVersion(m, version()); assert.ok(adapted); assert.equal(adapted.provenance.originalFreshnessVerified, false);
   assert.deepEqual(adapted.keywords[0].defaultCutoffs, options().keywords[0].supportedCutoffs); assert.equal(adapted.refreshStatus, null); assert.equal(Object.hasOwn(adapted, "snapshot"), false);
   adapted.keywords[0].supportedCutoffs["2026-11"] = "2026-11-17"; assert.equal(m.keywords[0].supportedCutoffs["2026-11"], "2026-11-16");
+});
+
+test("the exact prepared catalogue roundtrips as declaration metadata and never as financial validation", () => {
+  const f = fixture(), value = declaredCatalogue(), before = clone(value); f.auth();
+  assert.equal(f.cache.write(value), true); const metadata = f.cache.read(), adapted = C.catalogueForVersion(metadata, version());
+  assert.equal(metadata.source, "immutable_prepared_result_catalogue");
+  assert.equal(adapted.metadataOnly, true); assert.equal(adapted.financialResultValidated, false);
+  assert.equal(adapted.provenance.basis, value.provenance.basis); assert.equal(adapted.provenance.originalFreshnessVerified, false);
+  assert.deepEqual(adapted.keywords[0].availabilityByMonth, value.keywords[0].availabilityByMonth);
+  assert.deepEqual(adapted.diagnostics, ["KEYWORD_MONTHLY_CATALOGUE_METADATA_ONLY"]); assert.equal(adapted.refreshStatus, null);
+  assert.equal(Object.hasOwn(adapted, "snapshot"), false); assert.deepEqual(value, before);
+});
+
+test("forged declaration flags, basis, catalogue proof and warning combinations cannot enter metadata storage", () => {
+  const changes = [v => { delete v.metadataOnly; }, v => { v.metadataOnly = false; }, v => { v.metadataOnly = "true"; },
+    v => { delete v.financialResultValidated; }, v => { v.financialResultValidated = true; }, v => { v.financialResultValidated = "false"; },
+    v => { v.provenance.basis = "unverified_saved_options"; }, v => { delete v.provenance.basis; }, v => { v.provenance.bundleSha256 = "invalid"; },
+    v => { v.metadataOnly = false; v.diagnostics = []; v.keywords[0].availabilityByMonth = { "2026-10": "available", "2026-11": "available" }; },
+    v => { v.diagnostics = []; }, v => { v.diagnostics.push("KEYWORD_MONTHLY_PARTITION_UNAVAILABLE"); },
+    v => { v.bundle.unavailablePartitions = ["synthetic-unavailable"]; }];
+  for (const change of changes) {
+    const value = declaredCatalogue(), f = fixture(); change(value); f.auth();
+    assert.equal(C.projectCatalogue(value), null); assert.equal(f.cache.write(value), false); assert.equal(f.storage.data.size, 0);
+  }
+});
+
+test("a declaration must contain exactly its declared months without mixed financial availability", () => {
+  for (const change of [v => { v.keywords[0].availabilityByMonth["2026-11"] = "available"; },
+    v => { v.keywords[0].availabilityByMonth["2026-11"] = "needs_verification"; },
+    v => { delete v.keywords[0].availabilityByMonth["2026-11"]; },
+    v => { v.keywords[0].availabilityByMonth["2026-12"] = "declared"; },
+    v => { v.keywords[0].availabilityByMonth = null; }]) {
+    const value = declaredCatalogue(); change(value); assert.equal(C.projectCatalogue(value), null);
+  }
+  const legacy = options(); legacy.keywords[0].availabilityByMonth = { "2026-10": "declared", "2026-11": "available" };
+  assert.equal(C.projectCatalogue(legacy), null);
+});
+
+test("declared metadata still omits financial payloads, execution holds, refresh state and customer identity", () => {
+  const f = fixture(), value = declaredCatalogue(); f.auth();
+  value.snapshot = { price: 100000, customers: ["SYNTHETIC_PRIVATE"] }; value.refreshStatus = { held: true, owner: "SYNTHETIC_PRIVATE" };
+  value.token = "SYNTHETIC_PRIVATE"; value.keywords[0].phone = "SYNTHETIC_PRIVATE";
+  assert.equal(f.cache.write(value), true); const raw = f.storage.data.get(C.KEY);
+  assert.doesNotMatch(raw, /snapshot|price|customers|SYNTHETIC_PRIVATE|refreshStatus|held|owner|token|phone/);
+  assert.equal(f.entry().expiresAt, AT + C.TTL_MS); assert.ok(Buffer.byteLength(raw) < C.MAX_BYTES);
+});
+
+test("declared metadata rejects forged source kinds and keeps the existing session and Korean date boundaries", () => {
+  for (const source of [null, false, "available", ["immutable_prepared_result_catalogue"]]) {
+    const metadata = C.projectCatalogue(declaredCatalogue()); metadata.source = source; assert.equal(C.validMetadata(metadata), false);
+  }
+  const f = fixture(); f.auth(); f.cache.write(declaredCatalogue());
+  const other = fixture({ storage: f.storage }); other.auth(B); assert.equal(other.cache.read(), null);
+  f.auth(); f.cache.write(declaredCatalogue()); f.setNow(Date.parse("2026-11-18T01:00:00Z")); assert.equal(f.cache.read(), null);
+});
+
+test("metadata reads and successful version matching never renew the five-minute declaration cache", () => {
+  const f = fixture(); f.auth(); f.cache.write(declaredCatalogue()); const before = f.storage.data.get(C.KEY);
+  f.setNow(AT + C.TTL_MS - 1); const metadata = f.cache.read(); assert.ok(C.catalogueForVersion(metadata, version()));
+  assert.equal(C.catalogueForVersion(metadata, { ...version(), revision: B }), null);
+  assert.equal(f.storage.data.get(C.KEY), before); assert.equal(f.storage.calls.filter(c => c[0] === "set").length, 1);
+  f.setNow(AT + C.TTL_MS); assert.equal(f.cache.read(), null); assert.equal(f.storage.data.size, 0);
 });

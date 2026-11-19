@@ -1,6 +1,7 @@
 (function (root) {
   "use strict";
   const KEY = "staydatalab:keyword-monthly-catalogue:v1", MAX_BYTES = 64 * 1024, TTL_MS = 5 * 60000;
+  const DECLARED_SOURCE = "immutable_prepared_result_catalogue", DECLARED_NOTE = "KEYWORD_MONTHLY_CATALOGUE_METADATA_ONLY";
   const SHA = /^[a-f0-9]{64}$/, MONTH = /^20\d{2}-(0[1-9]|1[0-2])$/;
   const sha = v => typeof v === "string" && SHA.test(v);
   const plain = v => v && typeof v === "object" && !Array.isArray(v);
@@ -11,7 +12,9 @@
     && day(v.slice(0, 10)) && Number.isFinite(Date.parse(v));
   const kstDay = at => new Date(at + 9 * 3600000).toISOString().slice(0, 10);
   function validMetadata(v) {
-    if (!exact(v, ["currentDay", "revision", "generation", "keywords"]) || !day(v.currentDay) || !sha(v.revision)
+    const declared = plain(v) && Object.hasOwn(v, "source");
+    if (!exact(v, ["currentDay", "revision", "generation", "keywords", ...(declared ? ["source"] : [])])
+      || declared && v.source !== DECLARED_SOURCE || !day(v.currentDay) || !sha(v.revision)
       || typeof v.generation !== "string" || !/^[a-f0-9]{32}$/.test(v.generation) || !Array.isArray(v.keywords) || !v.keywords.length || v.keywords.length > 128) return false;
     const words = new Set(); let scopes = 0;
     for (const row of v.keywords) {
@@ -25,12 +28,24 @@
     return true;
   }
   function projectCatalogue(value) {
+    // A prepared catalogue declares selectable scopes; it does not attest to
+    // any financial result. Keep this exact contract separate from legacy
+    // fully-available options, and retain the distinction when restoring it.
+    const declared = value?.metadataOnly === true || value?.provenance?.basis === DECLARED_SOURCE;
+    const declaredContract = value?.metadataOnly === true && value.financialResultValidated === false && value.provenance?.basis === DECLARED_SOURCE
+      && sha(value.provenance?.bundleSha256) && Array.isArray(value.diagnostics)
+      && value.diagnostics.length === 1 && value.diagnostics[0] === DECLARED_NOTE;
     if (!plain(value) || value.schemaVersion !== 1 || value.status !== "available" || value.readOnly !== true || value.networkAttempted !== false
       || value.provenance?.originalFreshnessVerified !== false || !Array.isArray(value.keywords) || !value.keywords.length || value.keywords.length > 128
-      || (value.diagnostics != null && (!Array.isArray(value.diagnostics) || value.diagnostics.length !== 0))
+      || (declared ? !declaredContract : value.diagnostics != null && (!Array.isArray(value.diagnostics) || value.diagnostics.length !== 0))
       || (value.bundle?.unavailablePartitions != null && (!Array.isArray(value.bundle.unavailablePartitions) || value.bundle.unavailablePartitions.length !== 0))
-      || value.keywords.some(row => row?.availabilityByMonth != null && (!plain(row.availabilityByMonth) || Object.values(row.availabilityByMonth).some(status => status !== "available")))) return null;
+      || value.keywords.some(row => declared
+        ? !Array.isArray(row?.stayMonths) || !plain(row.availabilityByMonth)
+          || Object.keys(row.availabilityByMonth).length !== row.stayMonths.length
+          || row.stayMonths.some(month => row.availabilityByMonth[month] !== "declared")
+        : row?.availabilityByMonth != null && (!plain(row.availabilityByMonth) || Object.values(row.availabilityByMonth).some(status => status !== "available")))) return null;
     const metadata = { currentDay: value.currentDay, revision: value.provenance?.currentPointerSha256, generation: value.bundle?.generation,
+      ...(declared ? { source: DECLARED_SOURCE } : {}),
       keywords: value.keywords.map(row => ({ keyword: row?.keyword, stayMonths: row?.stayMonths,
         supportedCutoffs: row?.supportedCutoffs == null ? {} : row.supportedCutoffs,
         dataThroughByMonth: Object.fromEntries(Object.entries(plain(row?.provenanceByMonth) ? row.provenanceByMonth : {})
@@ -84,10 +99,14 @@
     if (!validMetadata(metadata) || !plain(version) || version.schemaVersion !== 1 || version.status !== "available"
       || version.readOnly !== true || version.networkAttempted !== false || version.originalFreshnessVerified !== false
       || version.revision !== metadata.revision || version.generation !== metadata.generation || version.currentDay !== metadata.currentDay) return null;
-    return { schemaVersion: 1, status: "available", readOnly: true, networkAttempted: false, currentDay: version.currentDay, currentMonth: version.currentDay.slice(0, 7),
+    const declared = metadata.source === DECLARED_SOURCE;
+    return { schemaVersion: 1, status: "available", readOnly: true, networkAttempted: false,
+      ...(declared ? { metadataOnly: true, financialResultValidated: false } : {}), currentDay: version.currentDay, currentMonth: version.currentDay.slice(0, 7),
       keywords: metadata.keywords.map(row => ({ keyword: row.keyword, stayMonths: [...row.stayMonths], collectionMonths: [], supportedCutoffs: { ...row.supportedCutoffs },
+        ...(declared ? { availabilityByMonth: Object.fromEntries(row.stayMonths.map(month => [month, "declared"])) } : {}),
         defaultCutoffs: { ...row.supportedCutoffs }, provenanceByMonth: Object.fromEntries(Object.entries(row.dataThroughByMonth).map(([month, dataThrough]) => [month, { dataThrough }])) })),
-      provenance: { currentPointerSha256: version.revision, originalFreshnessVerified: false }, bundle: { generation: version.generation }, diagnostics: [], refreshStatus: null };
+      provenance: { ...(declared ? { basis: DECLARED_SOURCE } : {}), currentPointerSha256: version.revision, originalFreshnessVerified: false },
+      bundle: { generation: version.generation }, diagnostics: declared ? [DECLARED_NOTE] : [], refreshStatus: null };
   }
   const api = { createCatalogueCache, projectCatalogue, validMetadata, catalogueForVersion, KEY, MAX_BYTES, TTL_MS };
   root.KeywordMonthlyCatalogueCache = api;

@@ -376,7 +376,8 @@
       hasRuntimeError: fresh.errorCode !== null,
       cleanupNeedsVerification: fresh.cleanup != null && fresh.cleanup.status !== "complete" } : null;
     return { status: value.status || "needs_verification", currentDay, currentMonth: MONTH.test(value.currentMonth || "") ? value.currentMonth : currentDay.slice(0, 7), keywords, provenance: value.provenance || null, diagnostics: Array.isArray(value.diagnostics) ? value.diagnostics : [], refreshStatus,
-      metadataOnly: value.metadataOnly === true && value.financialResultValidated === false };
+      metadataOnly: value.metadataOnly === true && value.financialResultValidated === false,
+      ...(value.metadataOnly === true && value.financialResultValidated === false ? { financialResultValidated: false } : {}) };
   }
   function metricView(value = {}) {
     value = value && typeof value === "object" ? value : {};

@@ -11,10 +11,10 @@ function gate(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;r
 function fakeClock(){let at=0;const timers=new Map();return {now:()=>at,setTimeoutImpl:(callback,ms)=>{const timer={unref(){}};timers.set(timer,{callback,at:at+ms});return timer;},clearTimeoutImpl:timer=>timers.delete(timer),
   advance(ms){at+=ms;for(const [timer,item]of[...timers])if(item.at<=at){timers.delete(timer);item.callback();}}};}
 function pair(){const req=new EventEmitter(),res=new EventEmitter();req.method="GET";req.headers={};res.headers={};res.setHeader=(key,value)=>{res.headers[key]=value;};return {req,res};}
-function fixture({catalogue,guard=async()=>{},memory=operation=>operation(),onLog=null,maxEventsPerWindow=60}={}){
+function fixture({catalogue,version=async()=>({status:"available"}),guard=async()=>{},memory=operation=>operation(),onLog=null,maxEventsPerWindow=60}={}){
   const clock=fakeClock(),logs=[],diagnostics=createKeywordMonthlyRequestDiagnostics({now:clock.now,onLog:onLog||((value)=>logs.push(value)),maxEventsPerWindow});
   const statusLifecycle=createKeywordMonthlyQueryLifecycle({...clock,maxInFlight:1,timeoutMs:5000});let calls=0;
-  const service=createKeywordMonthlySavedReadService({saved:{options:async()=>({}),readPrepared:async()=>({}),analyze:async()=>({}),version:async()=>({status:"available"}),catalogue:async()=>{calls++;return catalogue(clock);}},
+  const service=createKeywordMonthlySavedReadService({saved:{options:async()=>({}),readPrepared:async()=>({}),analyze:async()=>({}),version:()=>version(clock),catalogue:async()=>{calls++;return catalogue(clock);}},
     runWork:()=>assert.fail("metadata must not enter financial scheduler"),acquirePermit:()=>assert.fail("metadata must not borrow a financial allocation"),assertReadAdmission:()=>guard(clock),
     runMemoryAdmission:operation=>memory(operation,clock),diagnostics});
   const handler=createKeywordMonthlyHttpHandler({service,statusLifecycle,requestDiagnostics:diagnostics,requireAdmin:()=>true,
@@ -73,6 +73,43 @@ test("late returned verification refusal retains its safe code and guard on the 
   const late=f.logs.filter(row=>row.event==="metadata_end"||row.event==="metadata_operation_settled");assert.equal(late.length,2);
   assert.ok(late.every(row=>row.traceId===actual.traceId&&row.metadataResultCode==="KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"));
   assert.ok(!JSON.stringify({records,logs:f.logs}).includes("private"));
+});
+
+test("shared version reads retain actual late completion or verification refusal on the original owner trace",async()=>{
+  for(const refused of [false,true]){
+    let reads=0;const blocked=gate(),value=refused?{status:"needs_verification",revision:null,diagnostics:["KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"]}
+      :{status:"available",revision:"a".repeat(64),originalFreshnessVerified:false};
+    const f=fixture({guard:()=>assert.fail("version cannot enter conversion guard"),memory:()=>assert.fail("version cannot claim graph memory"),version:async clock=>{
+      reads++;await measureKeywordMonthlyMetadata("version_open",async()=>{clock.advance(2);await blocked.promise;});
+      await measureKeywordMonthlyMetadata("version_revalidate",()=>clock.advance(3));return value;
+    }}),first=f.request(pair(),"version"),second=f.request(pair(),"version");await tick();assert.equal(reads,1);
+    f.clock.advance(5000);await Promise.all([first.promise,second.promise]);assert.equal(first.pair.res.body.code,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(second.pair.res.body.code,"KEYWORD_MONTHLY_QUERY_TIMEOUT");
+    assert.equal(f.statusLifecycle.status().abandonedInFlight,1);blocked.resolve();await tick();await tick();
+    const records=f.diagnostics.status().recent,owner=records.find(row=>row.lifecycleRole==="owner"),waiter=records.find(row=>row.lifecycleRole==="waiter");
+    assert.equal(owner.route,"version");assert.equal(owner.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(owner.metadataOutcome,"completed");assert.equal(owner.metadataFinishedAfterHandler,true);
+    assert.equal(owner.lifecycleOperationFinished,true);assert.equal(owner.metadataResultStatus,value.status);assert.equal(owner.metadataResultCode,refused?"KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ":null);
+    assert.equal(owner.phaseCounts.version_open,1);assert.equal(owner.phaseCounts.version_revalidate,1);assert.ok(owner.phases.version_open>=5000);assert.equal(owner.phases.version_revalidate,3);
+    assert.equal(owner.workStarted,false);assert.equal(owner.task,null);assert.equal(waiter.metadataStarted,false);assert.equal(waiter.metadataResultStatus,null);assert.equal(f.statusLifecycle.status().inFlight,0);
+    const late=f.logs.filter(row=>row.event==="metadata_end"||row.event==="metadata_operation_settled");assert.equal(late.length,2);assert.ok(late.every(row=>row.traceId===owner.traceId));
+  }
+});
+
+test("a late version rejection retains its safe cause while observer failures cannot change returned version values",async()=>{
+  const blocked=gate(),failure=withKeywordMonthlyGuardDiagnostic(Object.assign(Error("private path"),{code:"KEYWORD_MONTHLY_MEMORY_DEFERRED"}),
+    {component:"memory",reason:"high_watermark",observedAt:1,memory:{ratio:.7,paused:true}}),f=fixture({version:()=>blocked.promise}),request=f.request(pair(),"version");
+  await tick();f.clock.advance(5000);await request.promise;blocked.reject(failure);await tick();await tick();
+  const record=f.diagnostics.status().recent[0];assert.equal(record.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(record.metadataOutcome,"failed");assert.equal(record.metadataErrorCode,failure.code);
+  assert.equal(record.metadataReadGuard.reason,"high_watermark");assert.equal(record.metadataResultStatus,null);assert.equal(record.metadataResultCode,null);assert.equal(record.lifecycleOperationFinished,true);
+  assert.ok(!JSON.stringify({logs:f.logs,status:f.diagnostics.status()}).includes("private"));
+  const diagnostics=createKeywordMonthlyRequestDiagnostics({now:()=>{throw Error("private clock");},onLog:()=>Promise.reject(Error("private logger"))}),returned={status:"available",revision:"b".repeat(64)};
+  const service=createKeywordMonthlySavedReadService({saved:{options:async()=>{},readPrepared:async()=>{},analyze:async()=>{},version:async()=>returned},diagnostics,
+    runWork:()=>assert.fail("version work"),acquirePermit:()=>assert.fail("version permit"),assertReadAdmission:()=>assert.fail("version admission")});
+  assert.equal(await diagnostics.run("version",()=>service.version()),returned);await tick();assert.equal(diagnostics.status().recent[0].metadataResultStatus,"available");
+  for(const reason of [false,0,null,undefined]){
+    const failureService=createKeywordMonthlySavedReadService({saved:{options:async()=>{},readPrepared:async()=>{},analyze:async()=>{},version:()=>Promise.reject(reason)},diagnostics,
+      runWork:()=>assert.fail("version work"),acquirePermit:()=>assert.fail("version permit"),assertReadAdmission:()=>assert.fail("version admission")});
+    await diagnostics.run("version",()=>failureService.version()).then(()=>assert.fail("rejection became success"),error=>assert.equal(error,reason));
+  }
 });
 
 test("result observation is bounded and getter failures never alter the original returned value",async()=>{
