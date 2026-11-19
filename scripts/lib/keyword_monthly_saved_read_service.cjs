@@ -85,13 +85,13 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
     // Explicit bounded metadata only: no graph cohort, execution-loan claim,
     // legacy fallback or source reconstruction. Memory and conversion holds
     // remain authoritative before and after the immutable catalogue read.
-    await assertReadAdmission();
-    return runMemoryAdmission(async()=>{
-      await assertReadAdmission();
-      const result=await saved.catalogue();
-      await assertReadAdmission();
-      return result;
-    });
+    const guard=()=>typeof diagnostics?.measure==="function"?diagnostics.measure("conversion_guard",assertReadAdmission):assertReadAdmission();
+    const operation=async()=>{
+      await guard();
+      const read=async()=>{await guard();const result=await saved.catalogue();await guard();return result;};
+      return typeof diagnostics?.admission==="function"?diagnostics.admission("memory_admission",runMemoryAdmission,read):runMemoryAdmission(read);
+    };
+    return typeof diagnostics?.metadata==="function"?diagnostics.metadata(operation)():operation();
   }
   async function options(){return savedRead(()=>saved.options());}
   // Automatic refresh is an explicit capability: even the not_prepared

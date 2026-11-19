@@ -14,7 +14,13 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000
     || [now, setTimeoutImpl, clearTimeoutImpl].some(fn => typeof fn !== "function")) throw new TypeError("Invalid keyword query bounds");
   const flights = new Map(); let closed = false;
-  const counters = { started: 0, shared: 0, completed: 0, failed: 0, aborted: 0, timedOut: 0, rejectedBusy: 0, cleanupErrors: 0 };
+  const counters = { started: 0, shared: 0, completed: 0, failed: 0, aborted: 0, timedOut: 0, rejectedBusy: 0, cleanupErrors: 0, observerErrors: 0 };
+  function observe(callback, event, role) {
+    if (!callback) return;
+    try { const value = callback(Object.freeze({ event, role }));
+      if (value && typeof value.then === "function") Promise.resolve(value).catch(() => { counters.observerErrors++; }); }
+    catch { counters.observerErrors++; }
+  }
   function finishWaiter(entry, waiter, error, value, failed = Boolean(error)) {
     if (!entry.waiters.delete(waiter)) return;
     try { if (waiter.timer !== null) clearTimeoutImpl(waiter.timer); } catch { counters.cleanupErrors++; }
@@ -24,16 +30,18 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
   function complete(entry, error, value, failed = Boolean(error)) {
     if (flights.get(entry.key) === entry) flights.delete(entry.key);
     counters[failed ? "failed" : "completed"]++;
+    observe(entry.onLifecycleObservation, "operation_settled", "owner");
     for (const waiter of [...entry.waiters]) finishWaiter(entry, waiter, error, value, failed);
     // A bounded resource owner may release only after this flight can no
     // longer accept a late shared waiter. Never pass results/errors to it.
     try { entry.onOperationSettled?.(); } catch { counters.cleanupErrors++; }
     // No result, exception, request, or response is retained by the registry.
   }
-  function run(identity, operation, { signal, onOperationSettled } = {}) {
+  function run(identity, operation, { signal, onOperationSettled, onLifecycleObservation } = {}) {
     if (typeof identity !== "string" || !identity || Buffer.byteLength(identity) > 8192 || typeof operation !== "function"
       || signal !== undefined && (!signal || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")
-      || onOperationSettled !== undefined && typeof onOperationSettled !== "function") {
+      || onOperationSettled !== undefined && typeof onOperationSettled !== "function"
+      || onLifecycleObservation !== undefined && typeof onLifecycleObservation !== "function") {
       return Promise.reject(new TypeError("Invalid keyword read"));
     }
     if (closed) return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_CLOSED"));
@@ -44,16 +52,18 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
       if (flights.size >= maxInFlight) { counters.rejectedBusy++; return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_BUSY")); }
       const startedAt = Number(now());
       if (!Number.isFinite(startedAt)) return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_CLOCK_INVALID"));
-      entry = { key, startedAt, waiters: new Set(), onOperationSettled }; flights.set(key, entry); fresh = true;
+      entry = { key, startedAt, waiters: new Set(), onOperationSettled, onLifecycleObservation }; flights.set(key, entry); fresh = true;
     } else if (entry.waiters.size >= maxWaiters) {
       counters.rejectedBusy++; return Promise.reject(fault("KEYWORD_MONTHLY_QUERY_BUSY"));
     }
+    const role = fresh ? "owner" : "waiter";
+    observe(onLifecycleObservation, fresh ? "owner" : "shared", role);
     const promise = new Promise((resolve, reject) => {
       const waiter = { resolve, reject, signal, timer: null, onAbort: null };
-      waiter.onAbort = () => { if (!entry.waiters.has(waiter)) return; counters.aborted++; finishWaiter(entry, waiter, fault("KEYWORD_MONTHLY_QUERY_ABORTED")); };
+      waiter.onAbort = () => { if (!entry.waiters.has(waiter)) return; counters.aborted++; observe(onLifecycleObservation, "waiter_aborted", role); finishWaiter(entry, waiter, fault("KEYWORD_MONTHLY_QUERY_ABORTED")); };
       entry.waiters.add(waiter);
       try {
-        waiter.timer = setTimeoutImpl(() => { if (!entry.waiters.has(waiter)) return; counters.timedOut++; finishWaiter(entry, waiter, fault("KEYWORD_MONTHLY_QUERY_TIMEOUT")); }, timeoutMs);
+        waiter.timer = setTimeoutImpl(() => { if (!entry.waiters.has(waiter)) return; counters.timedOut++; observe(onLifecycleObservation, "waiter_timed_out", role); finishWaiter(entry, waiter, fault("KEYWORD_MONTHLY_QUERY_TIMEOUT")); }, timeoutMs);
         waiter.timer?.unref?.();
         signal?.addEventListener("abort", waiter.onAbort, { once: true });
         if (signal?.aborted) waiter.onAbort();
@@ -63,7 +73,8 @@ function createKeywordMonthlyQueryLifecycle({ maxInFlight = 4, maxWaiters = 8,
       if (!entry.waiters.size) flights.delete(key);
       else {
         counters.started++;
-        Promise.resolve().then(operation).then(value => complete(entry, null, value, false), error => complete(entry, error, undefined, true));
+        Promise.resolve().then(() => { observe(entry.onLifecycleObservation, "operation_started", "owner"); return operation(); })
+          .then(value => complete(entry, null, value, false), error => complete(entry, error, undefined, true));
       }
     } else counters.shared++;
     return promise;

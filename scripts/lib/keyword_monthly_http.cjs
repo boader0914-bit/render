@@ -19,7 +19,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
   statusResponseBudget = createKeywordMonthlyResponseBudget({maxResponseBytes:2*1024*1024,maxReservedBytes:4*1024*1024}) } = {}) {
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   const assertReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission});
-  const reply = (res,status,body) => { requestDiagnostics.response(res,status,body?.code); return send(res,status,body); };
+  const reply = (res,status,body) => { requestDiagnostics.guard?.(body); requestDiagnostics.response(res,status,body?.code); return send(res,status,body); };
   async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal,trackSavedFlight=false}={}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
@@ -29,6 +29,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     req.once?.("aborted", onAbort); res.once?.("close", onClose);signal?.addEventListener("abort",onAbort,{once:true});
     if (req.aborted || res.destroyed && !res.writableEnded || signal?.aborted) controller.abort();
     try { return await lifecycle.run(identity, operation, { signal: controller.signal,
+      ...(typeof requestDiagnostics.lifecycleOptions==="function"?requestDiagnostics.lifecycleOptions():{}),
       ...(trackSavedFlight&&typeof service.lifecycleOptions==="function"?service.lifecycleOptions():{}) }); }
     finally { req.removeListener?.("aborted", onAbort); res.removeListener?.("close", onClose);signal?.removeEventListener("abort",onAbort); }
   }
@@ -46,11 +47,11 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
         catch(error){if(error?.code==="COMPANY_RESPONSE_TOO_LARGE")error.code="KEYWORD_MONTHLY_RESPONSE_TOO_LARGE";throw error;}
       }
       if(!statusRead&&typeof service.beforeResponse==="function")await service.beforeResponse();
-      if(metadataRead)await assertReadAdmission();
+      if(metadataRead)await requestDiagnostics.measure("conversion_guard",assertReadAdmission);
       if(req.aborted||res.destroyed||signal?.aborted)return;
       // Native serialization deliberately keeps the already safe result code
       // separate from its bounded encoded buffer for numeric diagnostics.
-      requestDiagnostics.response(res,result.http,result.body?.code);
+      requestDiagnostics.guard?.(result.body);requestDiagnostics.response(res,result.http,result.body?.code);
       send(res,result.http,body);
     };
     const production=()=> (statusRead?statusResponseBudget:responseBudget).run(res,context=>
@@ -82,7 +83,7 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       if (url.pathname === `${base}/refresh-status` && typeof readRefreshStatus === "function") {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         await deliver(req,res,"refresh-status",async()=>({http:200,body:{...(await readRefreshStatus()),phaseDiagnostics:getAnalyticalPhaseDiagnostics().status(),
-          queryDiagnostics:queryLifecycle.status(),responseDiagnostics:responseBudget.status(),requestDiagnostics:requestDiagnostics.status(),
+          queryDiagnostics:queryLifecycle.status(),statusQueryDiagnostics:statusLifecycle.status(),responseDiagnostics:responseBudget.status(),statusResponseDiagnostics:statusResponseBudget.status(),requestDiagnostics:requestDiagnostics.status(),
           ...(typeof service.status==="function"?{savedReadDiagnostics:service.status()}:{}),readOnly:true,networkAttempted:false}}),{statusRead:true});return true;
       }
       if (url.pathname === `${base}/options`) {
@@ -115,7 +116,8 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
       const readGuard = keywordMonthlyGuardDiagnosticFromError(error);
       reply(res, status, { status: "needs_verification", code: /^KEYWORD_MONTHLY_[A-Z0-9_]{1,100}$/.test(error.code || "") ? error.code : "KEYWORD_MONTHLY_UNAVAILABLE",
         error: status === 400 ? "정확한 키워드·숙박월·관측 마감일을 확인해 주세요." : "저장 파생자료의 근거를 확인하지 못했습니다. 미확인 값을 0으로 바꾸지 않습니다.",
-        snapshot: null, readOnly: true, networkAttempted: false, ...(readGuard ? { readGuard } : {}) });
+        snapshot: null, readOnly: true, networkAttempted: false, ...(readGuard ? { readGuard } : {}),
+        ...(["catalogue","version","refresh_status"].includes(route)?{statusQueryDiagnostics:statusLifecycle.status()}: {}) });
     }
     return true;
     });

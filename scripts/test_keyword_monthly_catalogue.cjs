@@ -6,6 +6,7 @@ const {publishKeywordMonthlyBundle,createKeywordMonthlyBundleAnalysis,loadBundle
 const {createKeywordMonthlySavedReadService}=require("./lib/keyword_monthly_saved_read_service.cjs");
 const {createKeywordMonthlyHttpHandler}=require("./lib/keyword_monthly_http.cjs");
 const {createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
+const {createKeywordMonthlyRequestDiagnostics}=require("./lib/keyword_monthly_request_diagnostics.cjs");
 const NOW="2026-11-18T00:00:00.000Z",KEYWORD="가상 목록 검수",QUERY={keyword:KEYWORD,month:"2026-10",cutoffDate:"2026-10-20"};
 const sha=value=>crypto.createHash("sha256").update(value).digest("hex");
 async function fixture(t,{prepareResults=true}={}){
@@ -109,4 +110,32 @@ test("catalogue coalesces one bounded metadata flight and does not admit a secon
   const api=http(svc),first=api(),second=api();await started;
   const other=await api("/api/keyword-monthly/version");assert.equal(other.status,503);assert.equal(other.body.code,"KEYWORD_MONTHLY_QUERY_BUSY");
   release();const results=await Promise.all([first,second]);assert.equal(calls,1);assert.deepEqual(results.map(row=>row.status),[200,200]);
+});
+
+test("actual strict catalogue reads expose bounded metadata phases without financial work or extra file opens",async t=>{
+  const f=await fixture(t),logs=[],diagnostics=createKeywordMonthlyRequestDiagnostics({onLog:value=>logs.push(value)}),scheduler=createAnalyticalWorkScheduler();
+  const svc=createKeywordMonthlySavedReadService({saved:f.saved,runWork:()=>assert.fail("metadata analytical work"),acquirePermit:()=>assert.fail("metadata graph permit"),
+    assertReadAdmission:async()=>{},runMemoryAdmission:operation=>operation(),diagnostics});
+  try{
+    const value=await diagnostics.run("catalogue",()=>svc.catalogue());assert.equal(value.status,"available");
+    const record=diagnostics.status().recent[0];assert.equal(record.metadataStarted,true);assert.equal(record.metadataFinished,true);assert.equal(record.metadataOutcome,"completed");
+    assert.equal(record.workStarted,false);assert.equal(record.task,null);assert.equal(record.phaseCounts.conversion_guard,3);assert.equal(record.phaseCounts.memory_admission,1);
+    for(const phase of ["catalogue_open","catalogue_project","catalogue_revalidate"]){assert.equal(record.phaseCounts[phase],1);assert.ok(record.phases[phase]>=0);}
+    assert.equal(logs.filter(row=>row.event==="metadata_start").length,1);assert.equal(logs.filter(row=>row.event==="metadata_end").length,1);
+    assert.ok(!JSON.stringify({record,logs}).includes(KEYWORD));assert.ok(!JSON.stringify({record,logs}).includes(f.root));
+  }finally{await scheduler.close();}
+});
+
+test("actual unknown file errors returned as verification refusals retain a safe metadata result code",async t=>{
+  const f=await fixture(t),logs=[],diagnostics=createKeywordMonthlyRequestDiagnostics({onLog:value=>logs.push(value)}),original=fs.open;
+  const svc=createKeywordMonthlySavedReadService({saved:f.saved,runWork:()=>assert.fail("metadata analytical work"),acquirePermit:()=>assert.fail("metadata graph permit"),
+    assertReadAdmission:async()=>{},runMemoryAdmission:operation=>operation(),diagnostics});
+  fs.open=async function(file,...args){if(String(file)===path.join(f.output,"current.json"))throw Object.assign(Error("private path and keyword"),{code:"EIO"});return original.call(this,file,...args);};
+  try{
+    const result=await diagnostics.run("catalogue",()=>svc.catalogue());assert.equal(result.status,"needs_verification");assert.deepEqual(result.diagnostics,["KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE"]);
+    const record=diagnostics.status().recent[0];assert.equal(record.metadataOutcome,"completed");assert.equal(record.metadataErrorCode,null);
+    assert.equal(record.metadataResultStatus,"needs_verification");assert.equal(record.metadataResultCode,"KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE");assert.equal(record.metadataReadGuard,null);
+    assert.equal(logs.find(row=>row.event==="metadata_end").metadataResultCode,"KEYWORD_MONTHLY_BUNDLE_UNAVAILABLE");
+    assert.ok(!JSON.stringify({record,logs}).includes("private"));assert.ok(!JSON.stringify({record,logs}).includes(f.root));
+  }finally{fs.open=original;}
 });

@@ -44,6 +44,10 @@ function createHistoryObservationIndex({ file, indexFile, checkpoint = async () 
   if (monthsQuery !== null && typeof monthsQuery !== "function" || fileSystem !== fs && monthsQuery === null) throw new TypeError("Custom index filesystems require an explicit month query capability");
   file = path.resolve(file); indexFile = path.resolve(indexFile);
   let db = null, closed = false, serial = Promise.resolve(), last = null;
+  // Private source-copy readers keep their injected synchronous capability;
+  // only the real host writes this small rebuildable selector beside its index.
+  const monthsCache = monthsQuery === null && fileSystem === fs
+    ? require("./history_index_months_cache.cjs").createHistoryIndexMonthsCache() : null;
   const counters = { sourceReads: 0, bytesReadOriginal: 0, rebuilt: 0, incremental: 0, unchanged: 0, rowsRead: 0, headersRead: 0, idLookups: 0,
     partitionsRehashed: 0, partitionRowsRead: 0 };
   const schedule = work => {
@@ -280,7 +284,10 @@ function createHistoryObservationIndex({ file, indexFile, checkpoint = async () 
     // event loop. Private isolated-copy readers inject this exact original SQL
     // inside their already-owned child; no worker escapes that guarded scope.
     const query = monthsQuery || (options => require("./history_index_months.cjs").readHistoryIndexMonths(options));
-    const result = await getAnalyticalPhaseDiagnostics().measure("history_index_months_query", { inputBytes: Number(before.size), readCount: 1 }, () => query(input));
+    const execute = () => getAnalyticalPhaseDiagnostics().measure("history_index_months_query", { inputBytes: Number(before.size), readCount: 1 }, () => query(input));
+    const result = monthsCache ? await getAnalyticalPhaseDiagnostics().measure("history_index_months_cache", { inputBytes: Number(before.size) },
+      () => monthsCache.getOrRead({ indexFile, sourceFile: file, expectedSignature: signature(before), sourceFingerprint: hash(JSON.stringify(descriptor.source)),
+        queryFingerprint: hash(require("./history_index_months.cjs").HISTORY_INDEX_MONTHS_SQL), query: execute })) : await execute();
     const after = await indexStat();
     if (!after.isFile() || after.isSymbolicLink() || signature(after) !== signature(before)) throw fault("HISTORY_OBSERVATION_INDEX_MONTHS_CHANGED");
     await assertSource(descriptor.source);

@@ -4,6 +4,7 @@
 // stay owned by the monthly-report pipeline; search rank is a separate cohort.
 const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
 const { createIndustryAnalysisStore } = require("./industry_analysis_store.cjs");
+const { createIndustryAnalysisSavedReader } = require("./industry_analysis_saved_reader.cjs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -577,7 +578,12 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
       return result;
     }, { priority: "background", kind: "industry-build", detached: true });
   }
+  const emptyCatalogue = storage => ({ industries: INDUSTRIES.map(publicIndustry), regions: [], months: [], defaultMonth: "",
+    defaultIndustry: "glamping", cohort: COHORT, features: FEATURES, scalePolicy: DEFERRED_SCALE, metadataOnly: true, catalogue: storage });
   if (!dataDir) return { options: calculateOptions, analyze: calculate, rebuild: calculate,
+    catalogue: async () => emptyCatalogue({ status: "unavailable", hasSnapshot: false, sourceVerification: "not_checked", checkedAt: new Date(now()).toISOString(), errorCode: "INDUSTRY_PERSISTENT_STORE_DISABLED" }),
+    saved: async input => ({ request: normalizeRequest(input, now()), storage: { status: "unavailable", hasSnapshot: false,
+      stale: false, sourceVerification: "not_checked", sourceRevisionMatches: null, errorCode: "INDUSTRY_PERSISTENT_STORE_DISABLED" } }),
     classifyCompanyIndustryIds: company => industryIds(company || {}),
     readSaved: async input => ({ request: normalizeRequest(input, now()), storage: {
       status: "pending", hasSnapshot: false, stale: false, resultVersion: null, sourceRevisionMatches: false,
@@ -596,6 +602,28 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     readSourceRevision: typeof readSourceRevision?.periodRevisions === "function" ? options => readSourceRevision.periodRevisions(options)
       : async () => JSON.stringify([await defaultSourceRevision(), readSourceRevision ? await readSourceRevision() : null]), onInvalidate: clearSources,
     needsResultRefresh: result => result.review?.schemaVersion !== 1 || result.sources?.regionPolicyVersion !== REGION_POLICY_VERSION });
+  const savedMenu = createIndustryAnalysisSavedReader({ dataDir, calculationVersion, now,
+    normalizeStoredRequest: request => normalizeRequest(request, now()),
+    needsResultRefresh: result => result.review?.schemaVersion !== 1 || result.sources?.regionPolicyVersion !== REGION_POLICY_VERSION });
+  async function catalogue() {
+    const saved = await savedMenu.readSavedOptions();
+    if (!saved.value) return emptyCatalogue(saved.storage);
+    const value = saved.value;
+    if (!value.industries.every(row => row && INDUSTRIES.some(industry => industry.id === row.id) && typeof row.label === "string")
+      || !value.regions.every(row => row && typeof row.id === "string" && typeof row.label === "string")
+      || !value.months.every(month => /^(?:19|20|21)\d{2}-(0[1-9]|1[0-2])$/.test(month))) {
+      return emptyCatalogue({ ...saved.storage, status: "unavailable", hasSnapshot: false, errorCode: "INDUSTRY_SAVED_OPTIONS_INVALID" });
+    }
+    // The date is a response field only. Do not invent a current month or
+    // validate against raw evidence merely because a menu became visible.
+    const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
+    return { ...value, today, metadataOnly: true, catalogue: saved.storage };
+  }
+  async function saved(input) {
+    // A finite stored key can be read even if its old selector list no longer
+    // contains that region. No options/source reconstruction is needed here.
+    return savedMenu.readSaved(normalizeRequest(input, now()), { allowEarlierCutoff: true });
+  }
   async function options() {
     const saved = await store.readOptions(), revision = await store.optionsRevision();
     const today = new Date(new Date(now()).getTime() + 9 * 3600000).toISOString().slice(0, 10);
@@ -669,7 +697,7 @@ function createIndustryAnalysisService({ sources, readContext = async () => ({ s
     optionsRefreshTimer = setTimeout(refreshOptionsNow, 1500);
     optionsRefreshTimer.unref();
   }
-  return { options, analyze, bootstrap, invalidate, notifySourceChanged, deferProcessing: store.deferProcessing,
+  return { options, analyze, catalogue, saved, bootstrap, invalidate, notifySourceChanged, deferProcessing: store.deferProcessing,
     // Unlike analyze, attachment reads never validate through options() or
     // prepare a missing result. The stored request itself must match exactly.
     readSaved: (input, options) => store.readSaved(normalizeRequest(input, now()), options),

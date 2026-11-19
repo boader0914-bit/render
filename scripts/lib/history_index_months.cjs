@@ -110,4 +110,4 @@ function createHistoryIndexMonthsReader({ WorkerClass = Worker, setTimeoutImpl =
 
 if (!isMainThread && workerData?.kind === KIND) workerMain();
 const readHistoryIndexMonths = createHistoryIndexMonthsReader();
-module.exports = { readHistoryIndexMonths, createHistoryIndexMonthsReader };
+module.exports = { readHistoryIndexMonths, createHistoryIndexMonthsReader, HISTORY_INDEX_MONTHS_SQL: SQL };

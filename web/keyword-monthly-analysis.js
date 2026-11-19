@@ -153,44 +153,54 @@
     };
     const codes = values => (Array.isArray(values) ? values : []).slice(0, 128).map(value => typeof value === "string" ? value : value?.code)
       .filter(code => typeof code === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(code));
-    async function checksum(content) {
+    async function checksum(content, rejected = () => {}) {
       let timer;
       try {
-        const value = await Promise.race([Promise.resolve().then(() => digest(content)), new Promise(resolve => { timer = root.setTimeout(() => resolve(null), 250); })]);
-        return /^[a-f0-9]{64}$/.test(value || "") ? value : null;
-      } catch { return null; }
+        const result = await Promise.race([Promise.resolve().then(() => digest(content)).then(value => ({ value }), () => ({ failure: "KEYWORD_MONTHLY_CACHE_DIGEST_UNAVAILABLE" })),
+          new Promise(resolve => { timer = root.setTimeout(() => resolve({ failure: "KEYWORD_MONTHLY_CACHE_DIGEST_TIMEOUT" }), 250); })]);
+        if (result.failure) { rejected(result.failure); return null; }
+        if (!/^[a-f0-9]{64}$/.test(result.value || "")) { rejected("KEYWORD_MONTHLY_CACHE_DIGEST_INVALID"); return null; }
+        return result.value;
+      } catch { rejected("KEYWORD_MONTHLY_CACHE_DIGEST_UNAVAILABLE"); return null; }
       finally { if (timer != null) root.clearTimeout(timer); }
     }
-    const safeTree = (value, depth = 0, budget = { count: 0 }) => {
-      if (++budget.count > 150000 || depth > 24) return false;
-      if (value === null || typeof value === "boolean") return true;
-      if (typeof value === "number") return Number.isFinite(value);
-      if (typeof value === "string") return value.length <= 32768;
-      if (!value || typeof value !== "object") return false;
-      return Object.keys(value).every(key => !/(password|cookie|authorization|secret|token|private|rawPayload|guest|customer|contact|address|account|kosis)/i.test(key)
-        && !["__proto__", "prototype", "constructor", "apikey", "credentials", "headers", "sessionid", "session", "username", "memberid", "email", "phonenumber"].includes(key.toLowerCase())
-        && safeTree(value[key], depth + 1, budget));
+    const treeFailure = (value, depth = 0, budget = { count: 0 }) => {
+      if (++budget.count > 150000) return "KEYWORD_MONTHLY_CACHE_NODE_LIMIT";
+      if (depth > 24) return "KEYWORD_MONTHLY_CACHE_DEPTH_LIMIT";
+      if (value === null || typeof value === "boolean") return null;
+      if (typeof value === "number") return Number.isFinite(value) ? null : "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
+      if (typeof value === "string") return value.length <= 32768 ? null : "KEYWORD_MONTHLY_CACHE_STRING_LIMIT";
+      if (!value || typeof value !== "object") return "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
+      for (const key of Object.keys(value)) {
+        if (/(password|cookie|authorization|secret|token|private|rawPayload|guest|customer|contact|address|account|kosis)/i.test(key)
+          || ["__proto__", "prototype", "constructor", "apikey", "credentials", "headers", "sessionid", "session", "username", "memberid", "email", "phonenumber"].includes(key.toLowerCase())) return "KEYWORD_MONTHLY_CACHE_UNSAFE_FIELD";
+        const failure = treeFailure(value[key], depth + 1, budget); if (failure) return failure;
+      }
+      return null;
     };
-    function project(value, catalogue) {
+    function project(value, catalogue, rejected = () => {}) {
+      const reject = code => { rejected(code); return null; };
       if (value?.schemaVersion !== 1 || value.snapshot?.schemaVersion !== 1 || value.status !== "available" || value.readOnly !== true || value.networkAttempted !== false
-        || value.preparedResult?.status !== "ready" || value.provenance?.originalFreshnessVerified !== false
+        || value.preparedResult?.status !== "ready") return reject("KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID");
+      if (value.provenance?.originalFreshnessVerified !== false
         || !/^[a-f0-9]{64}$/.test(value.provenance?.currentPointerSha256 || "") || !/^[a-f0-9]{64}$/.test(value.provenance?.inputSha256 || "")
-        || !/^[a-f0-9]{32}$/.test(value.bundle?.generation || "") || !safeText(value.request?.keyword, 300, false)
-        || !MONTH.test(value.request?.month || "") || !dateValid(value.request?.cutoffDate)
-        || catalogue?.provenance?.currentPointerSha256 !== value.provenance.currentPointerSha256) return null;
+        || !/^[a-f0-9]{32}$/.test(value.bundle?.generation || "")) return reject("KEYWORD_MONTHLY_CACHE_PROVENANCE_INVALID");
+      if (!safeText(value.request?.keyword, 300, false) || !MONTH.test(value.request?.month || "") || !dateValid(value.request?.cutoffDate)) return reject("KEYWORD_MONTHLY_CACHE_SCOPE_INVALID");
+      if (catalogue?.provenance?.currentPointerSha256 !== value.provenance.currentPointerSha256) return reject("KEYWORD_MONTHLY_CACHE_CATALOGUE_POINTER_MISMATCH");
       const selected = { keyword: value.request.keyword, month: value.request.month, cutoffDate: value.request.cutoffDate };
       const normalized = normalizeOptions(catalogue, kstDay(now()));
-      if (!["available", "stale"].includes(normalized.status) || normalized.currentDay !== kstDay(now())
-        || !normalized.keywords.some(row => row.keyword === selected.keyword && row.stayMonths.includes(selected.month))
-        || !buildViewModel(value, selected, normalized.currentMonth).usable) return null;
+      if (!["available", "stale"].includes(normalized.status)) return reject("KEYWORD_MONTHLY_CACHE_CATALOGUE_UNAVAILABLE");
+      if (normalized.currentDay !== kstDay(now())) return reject("KEYWORD_MONTHLY_CACHE_CATALOGUE_DAY_MISMATCH");
+      if (!normalized.keywords.some(row => row.keyword === selected.keyword && row.stayMonths.includes(selected.month))) return reject("KEYWORD_MONTHLY_CACHE_SCOPE_NOT_IN_CATALOGUE");
+      if (!buildViewModel(value, selected, normalized.currentMonth).usable) return reject("KEYWORD_MONTHLY_CACHE_RESULT_UNUSABLE");
       const metadata = { status: normalized.status, currentDay: normalized.currentDay, currentMonth: normalized.currentMonth,
         keywords: normalized.keywords, provenance: { currentPointerSha256: value.provenance.currentPointerSha256, originalFreshnessVerified: false },
         diagnostics: codes(normalized.diagnostics), metadataOnly: normalized.metadataOnly,
         financialResultValidated: false, refreshStatus: null };
-      if (metadata.status === "stale" && !metadata.diagnostics.some(code => ["PROJECTION_EXPIRED", "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT"].includes(code))) return null;
+      if (metadata.status === "stale" && !metadata.diagnostics.some(code => ["PROJECTION_EXPIRED", "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT"].includes(code))) return reject("KEYWORD_MONTHLY_CACHE_CATALOGUE_UNAVAILABLE");
       const payload = Object.fromEntries(["schemaVersion", "status", "readOnly", "networkAttempted", "request", "snapshot", "activity", "latestAttempt", "lastSuccessfulAttempt", "provenance", "diagnostics", "preparedResult", "supportedCutoffDate", "bundle"]
         .filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
-      if (!safeTree({ payload, catalogue: metadata })) return null;
+      const unsafe = treeFailure({ payload, catalogue: metadata }); if (unsafe) return reject(unsafe);
       return { payload, catalogue: metadata };
     }
     async function read(context) {
@@ -214,23 +224,47 @@
         return checked;
       } catch { clear(); return null; }
     }
-    async function write(value, catalogue) {
-      const allowed = auth(); if (!allowed) { clear(); return false; }
+    async function writeResult(value, catalogue) {
+      // A per-operation fixed code cannot expose source values or be replaced
+      // by another concurrent write's diagnostic.
+      const finish = (stored, reasonCode = null) => ({ stored, reasonCode });
+      const allowed = auth(); if (!allowed) { clear(); return finish(false, "KEYWORD_MONTHLY_CACHE_AUTH_REQUIRED"); }
       const ticket = ++revision; pendingWrite = null;
+      let stage = "validation";
       try {
-        const checked = project(value, catalogue); if (!checked) return false;
+        let projectionFailure = null;
+        const checked = project(value, catalogue, code => { projectionFailure = code; });
+        if (!checked) return finish(false, projectionFailure || "KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID");
         pendingWrite = { ticket, request: requestKey(checked.payload.request), scope: allowed.scope };
+        stage = "serialization";
         const content = JSON.stringify(checked);
+        stage = "storage_read";
         if (content === lastWritten?.content && allowed.scope === lastWritten.scope && Number(now()) < lastWritten.expiresAt
-          && storage?.getItem(RESULT_KEY) === lastWritten.raw) return true;
-        if (content.length > RESULT_LIMIT || new root.TextEncoder().encode(content).byteLength > RESULT_LIMIT) return false;
-        const contentSha256 = await checksum(content); if (!contentSha256 || ticket !== revision || auth()?.scope !== allowed.scope || checked.catalogue.currentDay !== kstDay(now())) return false;
+          && storage?.getItem(RESULT_KEY) === lastWritten.raw) return finish(true);
+        stage = "encoding";
+        if (content.length > RESULT_LIMIT || new root.TextEncoder().encode(content).byteLength > RESULT_LIMIT) return finish(false, "KEYWORD_MONTHLY_CACHE_SIZE_LIMIT");
+        let digestFailure = null;
+        const contentSha256 = await checksum(content, code => { digestFailure = code; });
+        if (!contentSha256) return finish(false, digestFailure || "KEYWORD_MONTHLY_CACHE_DIGEST_UNAVAILABLE");
+        if (ticket !== revision) return finish(false, "KEYWORD_MONTHLY_CACHE_WRITE_SUPERSEDED");
+        if (auth()?.scope !== allowed.scope) return finish(false, "KEYWORD_MONTHLY_CACHE_SESSION_CHANGED");
+        if (checked.catalogue.currentDay !== kstDay(now())) return finish(false, "KEYWORD_MONTHLY_CACHE_DAY_CHANGED");
+        stage = "serialization";
         const at = Number(now()), expiresAt = Math.min(allowed.expiresAt, at + RESULT_TTL), raw = JSON.stringify({ schema: 1, scope: allowed.scope, storedAt: at, contentSha256, expiresAt, ...checked });
-        if (raw.length > RESULT_LIMIT || new root.TextEncoder().encode(raw).byteLength > RESULT_LIMIT || typeof storage?.setItem !== "function") return false;
-        storage.setItem(RESULT_KEY, raw); lastWritten = { content, scope: allowed.scope, raw, expiresAt }; return true;
-      } catch { return false; }
+        stage = "encoding";
+        if (raw.length > RESULT_LIMIT || new root.TextEncoder().encode(raw).byteLength > RESULT_LIMIT) return finish(false, "KEYWORD_MONTHLY_CACHE_SIZE_LIMIT");
+        if (typeof storage?.setItem !== "function") return finish(false, "KEYWORD_MONTHLY_CACHE_STORAGE_UNAVAILABLE");
+        stage = "storage_write";
+        storage.setItem(RESULT_KEY, raw); lastWritten = { content, scope: allowed.scope, raw, expiresAt }; return finish(true);
+      } catch (error) {
+        const reason = stage === "storage_write" || stage === "storage_read"
+          ? error?.name === "QuotaExceededError" ? "KEYWORD_MONTHLY_CACHE_STORAGE_QUOTA" : "KEYWORD_MONTHLY_CACHE_STORAGE_DENIED"
+          : stage === "encoding" ? "KEYWORD_MONTHLY_CACHE_ENCODING_UNAVAILABLE" : stage === "serialization" ? "KEYWORD_MONTHLY_CACHE_SERIALIZATION_FAILED" : "KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID";
+        return finish(false, reason);
+      }
       finally { if (pendingWrite?.ticket === ticket) pendingWrite = null; }
     }
+    async function write(value, catalogue) { return (await writeResult(value, catalogue)).stored; }
     function invalidateScope(selection) {
       const allowed = auth(), key = requestKey(selection); if (!allowed || !key) return false;
       let changed = false;
@@ -242,7 +276,7 @@
       } catch {}
       return changed;
     }
-    return { read, write, clear, invalidateScope };
+    return { read, write, writeResult, clear, invalidateScope };
   }
   const lastGoodStorage = createLastGoodStorage({ storage: sessionStorage, authorization: selectionStorage.catalogueScope });
   const defaultCutoff = (month, today) => MONTH.test(month || "") && monthEnd(month) < today ? monthEnd(month) : today;
@@ -419,7 +453,7 @@
     const autoTimeoutMs = Number.isSafeInteger(options.autoRefreshTimeoutMs) && options.autoRefreshTimeoutMs > 0 ? options.autoRefreshTimeoutMs : 5000;
     let autoTimer = null, autoTask = null, autoEpoch = 0, autoDueAt = 0, autoFailures = 0, autoText = "", autoErrorCode = "", composingSearch = null;
     let initialAutomaticNeeded = true, initialAutomaticWait = null, initialFrameObservation = null;
-    let cachedStatusState = "", cachedStatusTask = null, restoredLastGood = false, reloadCacheState = "none";
+    let cachedStatusState = "", cachedStatusTask = null, restoredLastGood = false, reloadCacheState = "none", reloadCacheReasonCode = "", reloadCacheWriteTicket = 0;
     let pendingScrollRestore = null, scrollRestoreCancelled = false, priorViewportWidth = win.innerWidth;
     const emptyInitialTiming = () => ({ renderedAt: null, framesCompletedAt: null, startedAt: null, completedAt: null, outcome: "pending" });
     let initialAutomaticTiming = emptyInitialTiming();
@@ -461,14 +495,15 @@
     const selected = () => ({ keyword, month, cutoffDate });
     function renderCacheNotice() {
       panel.dataset.reloadCacheState = reloadCacheState;
+      panel.dataset.reloadCacheReasonCode = reloadCacheReasonCode;
       cacheNotice.hidden = !allowed() || paused || reloadCacheState !== "unavailable";
-      cacheNotice.textContent = cacheNotice.hidden ? "" : "이 결과는 브라우저 임시 저장을 사용할 수 없습니다. 현재 자료는 유지하며 새로고침하면 서버에서 다시 확인합니다.";
+      cacheNotice.textContent = cacheNotice.hidden ? "" : `이 결과는 브라우저 임시 저장을 사용할 수 없습니다. 현재 자료는 유지하며 새로고침하면 서버에서 다시 확인합니다.${reloadCacheReasonCode ? ` (${reloadCacheReasonCode})` : ""}`;
     }
     function persistLastGood(value) {
-      const token = sequence; reloadCacheState = "pending"; renderCacheNotice();
-      void lastGoodStorage.write(value, catalog).then(saved => {
-        if (token !== sequence || destroyed || !allowed() || value !== lastGoodPayload) return;
-        reloadCacheState = saved ? "ready" : "unavailable"; renderCacheNotice();
+      const token = sequence, writeTicket = ++reloadCacheWriteTicket; reloadCacheState = "pending"; reloadCacheReasonCode = ""; renderCacheNotice();
+      void lastGoodStorage.writeResult(value, catalog).then(result => {
+        if (writeTicket !== reloadCacheWriteTicket || token !== sequence || destroyed || !allowed() || value !== lastGoodPayload) return;
+        reloadCacheState = result.stored ? "ready" : "unavailable"; reloadCacheReasonCode = result.reasonCode || ""; renderCacheNotice();
       });
     }
     const scopeKey = (word = keyword, stayMonth = month) => JSON.stringify([word, stayMonth]);
@@ -1101,7 +1136,7 @@
       if (erasePersistence) { selectionStorage.revoke(); catalogueCache?.revoke(); lastGoodStorage.clear(); }
       cancel(); requestOrdinal = 0; paused = true; resumeNeeded = false; resumeRequest = null; catalog = null; payload = lastGoodPayload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null; pendingRestore = false;
       initialAutomaticNeeded = true; initialAutomaticTiming = emptyInitialTiming();
-      cachedStatusState = ""; restoredLastGood = false; reloadCacheState = "none";
+      cachedStatusState = ""; restoredLastGood = false; reloadCacheState = "none"; reloadCacheReasonCode = "";
       autoText = autoErrorCode = ""; autoFailures = 0; autoDueAt = 0;
       product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; restoreAttempted = false; restoreNotice = ""; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
     }
@@ -1310,7 +1345,7 @@
       const cached = await lastGoodStorage.read(context); if (!cached || !current(token)) return false;
       if (!applyCatalog(cached.catalogue, task.context || context, editRevision, overwriteDraft, task.restored)) return false;
       pendingContext = null; pendingRestore = false; appliedSelection = selected(); task.key = loadKey();
-      payload = lastGoodPayload = cached.payload; restoredLastGood = true; cachedStatusState = "pending"; reloadCacheState = "ready";
+      payload = lastGoodPayload = cached.payload; restoredLastGood = true; cachedStatusState = "pending"; reloadCacheState = "ready"; reloadCacheReasonCode = "";
       panel.dataset.catalogueSource = "session_last_good_pending_version";
       rememberScope(); return true;
     }
@@ -1348,7 +1383,7 @@
           if (value && current(token)) {
             payload = value;
             if (buildViewModel(value, selected(), catalog.currentMonth).usable) { lastGoodPayload = value; restoredLastGood = false; persistLastGood(value); }
-            else { if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null; lastGoodStorage.invalidateScope(selected()); reloadCacheState = "none"; }
+            else { if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null; lastGoodStorage.invalidateScope(selected()); reloadCacheState = "none"; reloadCacheReasonCode = ""; }
           }
         } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); } }
         finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; autoDueAt = now() + autoIntervalMs; if (canCheckAutomatically()) autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; render(); await armAutomatic(); } }

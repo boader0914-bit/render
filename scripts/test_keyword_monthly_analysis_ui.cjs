@@ -2243,6 +2243,8 @@ test("oversize or denied result storage keeps normal metrics and explains that F
     const ui = cacheUi(t, { storage, session: liveSession(), companies: mode === "oversize" ? 43 : 3 });
     await ui.ready; await ui.controller.open(cacheContext());
     await untilUi(() => ui.find("keyword-monthly-analysis")[0].dataset.reloadCacheState === "unavailable");
+    assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.reloadCacheReasonCode, mode === "oversize"
+      ? "KEYWORD_MONTHLY_CACHE_SIZE_LIMIT" : "KEYWORD_MONTHLY_CACHE_STORAGE_DENIED");
     assert.ok(ui.find("kma-dashboard-metrics").length); assert.equal(ui.controller.state().errorCode, "");
     assert.equal(ui.controller.state().automatic.initial.outcome, "complete"); assert.equal(storage.getItem(uiModule.RESULT_KEY), null);
     assert.match(ui.text(), /현재 자료는 유지하며 새로고침하면 서버에서 다시 확인/);
@@ -2279,4 +2281,25 @@ test("a missing selected scope invalidates its older disk cache even when memory
   const again = cacheUi(t, { ...saved, handle: ({ kind, selection }) => kind === "data"
     ? jsonResponse({ schemaVersion: 1, status: "missing", request: selection, snapshot: null }) : undefined });
   await again.ready; await again.controller.open(); assert.equal(again.find("kma-dashboard-metrics").length, 0);
+});
+test("cache failure UI contains only its fixed code and a successful write clears the old reason", async t => {
+  let denied = true;
+  const storage = memorySelectionStorage(), save = storage.setItem.bind(storage);
+  storage.setItem = (key, value) => { if (key === uiModule.RESULT_KEY && denied) throw Object.assign(Error("SENSITIVE_EXCEPTION_TEXT"), { name: "QuotaExceededError" }); save(key, value); };
+  const ui = cacheUi(t, { storage, session: liveSession() }); await ui.ready; await ui.controller.open(cacheContext());
+  const panel = ui.find("keyword-monthly-analysis")[0], note = ui.find("kma-reload-cache-status")[0];
+  await untilUi(() => panel.dataset.reloadCacheState === "unavailable");
+  assert.equal(panel.dataset.reloadCacheReasonCode, "KEYWORD_MONTHLY_CACHE_STORAGE_QUOTA"); assert.match(note.textContent, /KEYWORD_MONTHLY_CACHE_STORAGE_QUOTA/);
+  assert.doesNotMatch(note.textContent, /SENSITIVE_EXCEPTION_TEXT|private-admin-name|member-private|[a-f0-9]{64}/);
+  const metrics = ui.find("kma-dashboard-metrics").map(text); denied = false; await ui.controller.refresh();
+  await untilUi(() => panel.dataset.reloadCacheState === "ready"); assert.equal(panel.dataset.reloadCacheReasonCode, ""); assert.equal(note.hidden, true);
+  assert.deepEqual(ui.find("kma-dashboard-metrics").map(text), metrics); ui.api.clear(); assert.equal(panel.dataset.reloadCacheReasonCode, "");
+});
+test("unsafe future snapshot expansion is not cached and its diagnostic never exposes a field path or value", async t => {
+  const ui = cacheUi(t, { storage: memorySelectionStorage(), session: liveSession(), handle: ({ kind, selection }) => {
+    if (kind === "data") { const value = cachePayload(AUTO_A, selection); value.snapshot.extra = { guestPhoneNumber: "SENSITIVE_FUTURE_VALUE" }; return jsonResponse(value); }
+  } });
+  await ui.ready; await ui.controller.open(cacheContext()); const panel = ui.find("keyword-monthly-analysis")[0], note = ui.find("kma-reload-cache-status")[0];
+  await untilUi(() => panel.dataset.reloadCacheState === "unavailable"); assert.equal(panel.dataset.reloadCacheReasonCode, "KEYWORD_MONTHLY_CACHE_UNSAFE_FIELD");
+  assert.doesNotMatch(note.textContent, /SENSITIVE_FUTURE_VALUE|guestPhoneNumber|snapshot\.extra|[a-f0-9]{64}/); assert.ok(ui.find("kma-dashboard-metrics").length);
 });

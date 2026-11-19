@@ -117,3 +117,48 @@ test("a fresh identical result renews an expired or removed cache instead of cla
   const renewed = JSON.parse(f.entries.get(RESULT_KEY)); assert.ok(renewed.storedAt > original.storedAt); assert.ok(await f.store.read(selection));
   f.entries.delete(RESULT_KEY); assert.equal(await f.store.write(f.payload, f.catalogue), true); assert.ok(await f.store.read(selection));
 });
+test("cache projection rejection reports only a fixed reason code without source values or paths", async () => {
+  const cases = [
+    ["RESPONSE_INVALID", f => { f.payload.status = "stale"; }],
+    ["PROVENANCE_INVALID", f => { f.payload.provenance.inputSha256 = "not a hash"; }],
+    ["SCOPE_INVALID", f => { f.payload.request.keyword = "private\nraw"; }],
+    ["CATALOGUE_POINTER_MISMATCH", f => { f.catalogue.provenance.currentPointerSha256 = B; }],
+    ["CATALOGUE_UNAVAILABLE", f => { f.catalogue.status = "missing"; }],
+    ["CATALOGUE_DAY_MISMATCH", f => { f.catalogue.currentDay = "2026-11-17"; }],
+    ["SCOPE_NOT_IN_CATALOGUE", f => { f.catalogue.keywords = []; }],
+    ["RESULT_UNUSABLE", f => { f.payload.snapshot.request.targetId = "another scope"; }],
+    ["UNSAFE_FIELD", f => { f.payload.snapshot.extra = { guestPhoneNumber: "MUST_NOT_LEAK" }; }],
+    ["VALUE_INVALID", f => { f.payload.snapshot.extra = NaN; }],
+    ["STRING_LIMIT", f => { f.payload.snapshot.extra = "x".repeat(32769); }],
+    ["DEPTH_LIMIT", f => { let value = {}; f.payload.snapshot.extra = value; for (let i = 0; i < 25; i++) value = value.child = {}; }],
+    ["NODE_LIMIT", f => { f.payload.snapshot.extra = Array(150001).fill(null); }],
+    ["SIZE_LIMIT", f => { f.payload.snapshot.extra = Array(80).fill("x".repeat(30000)); }]
+  ];
+  for (const [reason, change] of cases) {
+    const f = fixture(); change(f); const result = await f.store.writeResult(f.payload, f.catalogue);
+    assert.deepEqual(result, { stored: false, reasonCode: `KEYWORD_MONTHLY_CACHE_${reason}` }, reason);
+    assert.deepEqual(Object.keys(result).sort(), ["reasonCode", "stored"]); assert.equal(f.entries.has(RESULT_KEY), false);
+    assert.ok(!JSON.stringify(result).includes("MUST_NOT_LEAK"));
+  }
+});
+test("authentication, quota, denial, missing storage and crypto failures have distinct fixed codes", async () => {
+  const denied = fixture({ blockedStorage: true });
+  assert.deepEqual(await denied.store.writeResult(denied.payload, denied.catalogue), { stored: false, reasonCode: "KEYWORD_MONTHLY_CACHE_STORAGE_DENIED" });
+  const quota = fixture(); quota.storage.setItem = () => { throw Object.assign(new Error("MUST_NOT_LEAK"), { name: "QuotaExceededError" }); };
+  assert.deepEqual(await quota.store.writeResult(quota.payload, quota.catalogue), { stored: false, reasonCode: "KEYWORD_MONTHLY_CACHE_STORAGE_QUOTA" });
+  const absent = fixture(); absent.storage.setItem = undefined;
+  assert.deepEqual(await absent.store.writeResult(absent.payload, absent.catalogue), { stored: false, reasonCode: "KEYWORD_MONTHLY_CACHE_STORAGE_UNAVAILABLE" });
+  const unauthenticated = fixture(); unauthenticated.setAuthorization(null);
+  assert.deepEqual(await unauthenticated.store.writeResult(unauthenticated.payload, unauthenticated.catalogue), { stored: false, reasonCode: "KEYWORD_MONTHLY_CACHE_AUTH_REQUIRED" });
+  for (const [reason, digest] of [["DIGEST_UNAVAILABLE", async () => { throw Error("MUST_NOT_LEAK"); }], ["DIGEST_INVALID", async () => "bad"]]) {
+    const f = fixture({ digest }); assert.deepEqual(await f.store.writeResult(f.payload, f.catalogue), { stored: false, reasonCode: `KEYWORD_MONTHLY_CACHE_${reason}` });
+  }
+});
+test("a stalled digest is a truthful cache timeout with the original250ms bound and no late write", async () => {
+  let release; const gate = new Promise(resolve => { release = resolve; }), f = fixture({ digest: () => gate });
+  assert.deepEqual(await f.store.writeResult(f.payload, f.catalogue), { stored: false, reasonCode: "KEYWORD_MONTHLY_CACHE_DIGEST_TIMEOUT" });
+  release(A); await new Promise(resolve => setImmediate(resolve)); assert.equal(f.entries.has(RESULT_KEY), false);
+});
+test("a successful cache write returns no failure reason or sensitive diagnostic fields", async () => {
+  const f = fixture(); assert.deepEqual(await f.store.writeResult(f.payload, f.catalogue), { stored: true, reasonCode: null });
+});

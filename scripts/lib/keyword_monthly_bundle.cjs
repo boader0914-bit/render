@@ -10,6 +10,7 @@ const { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, KE
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 const { runKeywordMonthlyMemoryAdmission, keywordMonthlyAllocationCheckpoint } = require("./keyword_monthly_memory_admission.cjs");
 const { keywordMonthlyGuardDiagnosticFromError } = require("./keyword_monthly_guard_diagnostics.cjs");
+const { measureKeywordMonthlyMetadata } = require("./keyword_monthly_metadata_diagnostics.cjs");
 const { calculationFingerprint, queryId, validatePreparedDescriptor, encodePreparedResult, decodePreparedResult,
   KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS: RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
 const measureDefault = async (phase, metadata, operation) => {
@@ -22,7 +23,24 @@ const hash = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 const plain = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const exact = (value, keys) => plain(value) && Object.keys(value).every(key => keys.includes(key)) && keys.every(key => Object.hasOwn(value, key));
 const samePath = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
-const sameStat = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(key => a[key] === b[key]);
+const pathProofs = new WeakMap();
+const sameStat = (a, b) => {
+  if (!["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink"].every(key => a[key] === b[key])) return false;
+  const left = pathProofs.get(a), right = pathProofs.get(b);
+  // Directory siblings may be published while a stable file is read. Bind
+  // ancestor identities and modes, not their unrelated mtime/link counts.
+  return !left || !right || left.length === right.length && left.every((row, index) => row.file === right[index].file
+    && ["dev", "ino", "mode"].every(key => row[key] === right[index][key]));
+};
+function boundedPathChecks(limit) {
+  let active = 0; const pending = [];
+  const drain = () => { while (active < limit && pending.length) {
+    const { operation, resolve, reject } = pending.shift(); active++;
+    Promise.resolve().then(operation).then(value => { active--; resolve(value); drain(); }, error => { active--; reject(error); drain(); });
+  } };
+  return operation => new Promise((resolve, reject) => { pending.push({ operation, resolve, reject }); drain(); });
+}
+const pathCheck = boundedPathChecks(8);
 const keywordValid = value => typeof value === "string" && value.length > 0 && value.length <= 300 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
 const iso = value => typeof value === "string" && /^20\d{2}-\d\d-\d\dT.*(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value))
   && new Date(`${value.slice(0, 10)}T00:00:00Z`).toISOString().slice(0, 10) === value.slice(0, 10);
@@ -32,12 +50,23 @@ const inputIdentity = inputs => hash(JSON.stringify(inputs.map(input => ({ direc
 function fault(code, statusCode = 503) { return Object.assign(new Error(code), { code, statusCode }); }
 function ensure(value, code, statusCode = 503) { if (!value) throw fault(code, statusCode); }
 async function checkPath(file, directory = false) {
-  const absolute = path.resolve(file), root = path.parse(absolute).root; let current = root;
+  const absolute = path.resolve(file), root = path.parse(absolute).root, ancestors = []; let current = root;
   for (const part of absolute.slice(root.length).split(path.sep).filter(Boolean)) {
-    current = path.join(current, part); const stat = await fs.lstat(current);
-    ensure(!stat.isSymbolicLink() && samePath(await fs.realpath(current), current) && (current === absolute || stat.isDirectory()), "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+    current = path.join(current, part); ancestors.push(current);
   }
-  const stat = await fs.lstat(absolute); ensure(directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1, "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH"); return stat;
+  // Recheck every ancestor on every call. Only independent path pairs overlap;
+  // each pair still performs lstat then realpath. All queued checks settle on
+  // failure too, before the caller may open/parse a file or release its owner.
+  const completed = await Promise.allSettled(ancestors.map(file => pathCheck(async () => {
+    const stat = await fs.lstat(file);
+    ensure(!stat.isSymbolicLink() && samePath(await fs.realpath(file), file) && (file === absolute || stat.isDirectory()), "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+    return { file, stat };
+  })));
+  const failure = completed.find(result => result.status === "rejected"); if (failure) throw failure.reason;
+  const stat = await pathCheck(()=>fs.lstat(absolute)); ensure(directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1, "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+  if (completed.length) ensure(sameStat(completed.at(-1).value.stat, stat), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  pathProofs.set(stat, completed.slice(0, -1).map(({ value }) => ({ file: value.file, dev: value.stat.dev, ino: value.stat.ino, mode: value.stat.mode })));
+  return stat;
 }
 async function readFile(file, maximum) {
   const before = await checkPath(file); ensure(before.size > 0 && before.size <= maximum, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
@@ -189,8 +218,9 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
     // not verification of the financial result or its partition indexes. This
     // bounded metadata capability must never enter a legacy/source calculator.
     try {
-      const bundle = await loadBundle(directory), current = basic();
+      const bundle = await measureKeywordMonthlyMetadata("catalogue_open",()=>loadBundle(directory)), current = basic();
       ensure(bundle.catalog.schemaVersion === 2, "KEYWORD_MONTHLY_CATALOGUE_NOT_PREPARED");
+      const result=await measureKeywordMonthlyMetadata("catalogue_project",()=>{
       const rows = new Map(), cutoffSets = new Map();
       for (const descriptor of bundle.catalog.preparedResults) {
         ensure(descriptor.calculationFingerprint === calculationFingerprint(), "KEYWORD_MONTHLY_RESULT_CALCULATION_CHANGED");
@@ -223,9 +253,11 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
         bundle: { generation: bundle.pointer.generation, partitionCount: bundle.catalog.partitions.length,
           scopeCount: bundle.catalog.scopes.length, preparedResultCount: bundle.catalog.preparedResults.length } };
       ensure(Buffer.byteLength(JSON.stringify(result)) <= LIMITS.optionsBytes, "KEYWORD_MONTHLY_BUNDLE_OPTIONS_RESPONSE_LIMIT");
+      return result;
+      });
       // Revalidate the complete bounded catalog and pointer, not a cached stat.
       // The ordinary financial read still validates each selected index/result.
-      await unchanged(bundle);
+      await measureKeywordMonthlyMetadata("catalogue_revalidate",()=>unchanged(bundle));
       return result;
     } catch (error) { return { ...absent(error), metadataOnly: true, financialResultValidated: false }; }
   }

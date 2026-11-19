@@ -112,7 +112,7 @@ test("source labels, company names and evidence are escaped", () => {
 test("a later filter response wins even if an earlier request finishes last", async () => {
   const pending = [];
   const element = host();
-  const controller = createController({ request: async url => url.endsWith("/options") ? catalog : url.includes("region=all") ? data : new Promise(resolve => pending.push({ url, resolve })) });
+  const controller = createController({ request: async url => url.endsWith("/catalogue") ? catalog : url.includes("region=all") ? data : new Promise(resolve => pending.push({ url, resolve })) });
   await controller.mount(element);
   const first = controller.input("region", "sacheon");
   const second = controller.input("month", "2026-09");
@@ -128,14 +128,14 @@ test("a later filter response wins even if an earlier request finishes last", as
 test("loading refresh and identical analysis requests do not create duplicate work", async () => {
   let optionsCount = 0, analysisCount = 0, resolveOptions, resolveAnalysis;
   const controller = createController({ request: url => {
-    if (url.endsWith("/options")) { optionsCount++; return new Promise(resolve => { resolveOptions = resolve; }); }
+    if (url.endsWith("/catalogue")) { optionsCount++; return new Promise(resolve => { resolveOptions = resolve; }); }
     analysisCount++; return new Promise(resolve => { resolveAnalysis = resolve; });
   } });
   const element = host(), mounting = controller.mount(element);
   await Promise.all([controller.loadCatalog(), controller.loadCatalog()]);
   assert.equal(optionsCount, 1);
   assert.match(element.innerHTML, /aria-label="저장 자료 다시 조회" disabled/);
-  assert.match(element.innerHTML, /첫 조회는 저장 자료를 정리하므로 몇 분 걸릴 수 있습니다/);
+  assert.match(element.innerHTML, /저장된 결과만 조회하며 새 계산을 시작하지 않습니다/);
   resolveOptions(catalog);
   await new Promise(done => setImmediate(done));
   const duplicateOne = controller.loadData(), duplicateTwo = controller.loadData();
@@ -150,7 +150,7 @@ test("loading refresh and identical analysis requests do not create duplicate wo
 
 test("switching back to an in-flight condition reuses its request and ignores stale responses", async () => {
   const pending = [];
-  const controller = createController({ request: async url => url.endsWith("/options") ? catalog : new Promise(resolve => pending.push({ url, resolve })) });
+  const controller = createController({ request: async url => url.endsWith("/catalogue") ? catalog : new Promise(resolve => pending.push({ url, resolve })) });
   const mounting = controller.mount(host());
   await new Promise(done => setImmediate(done));
   const previousMonth = controller.input("month", "2026-09");
@@ -175,7 +175,7 @@ test("network failures, non-JSON 503 and provider errors remain clear errors ins
   ];
   try {
     for (const item of cases) {
-      globalThis.fetch = async url => url.endsWith("/options") ? { ok: true, status: 200, json: async () => catalog } : item.response();
+      globalThis.fetch = async url => url.endsWith("/catalogue") ? { ok: true, status: 200, json: async () => catalog } : item.response();
       const element = host(), controller = createController();
       await controller.mount(element);
       assert.match(controller.state.error, item.message, item.label);
@@ -193,7 +193,7 @@ test("network failures, non-JSON 503 and provider errors remain clear errors ins
 
 test("failure, empty and loading are explicit; refreshing preserves choices", async () => {
   const element = host(); let fail = false;
-  const controller = createController({ request: async url => { if (fail) throw new Error("API 연결 실패"); return url.endsWith("/options") ? catalog : data; } });
+  const controller = createController({ request: async url => { if (fail) throw new Error("API 연결 실패"); return url.endsWith("/catalogue") ? catalog : data; } });
   await controller.mount(element);
   await controller.input("month", "2026-09");
   await controller.loadCatalog();
@@ -210,10 +210,10 @@ test("no month does not fetch observations, and revoked authorization suppresses
   const calls = [], element = host();
   const empty = createController({ request: async url => { calls.push(url); return { ...catalog, months: [], defaultMonth: "" }; } });
   await empty.mount(element);
-  assert.deepEqual(calls, ["/api/industry-analysis/options"]);
+  assert.deepEqual(calls, ["/api/industry-analysis/catalogue"]);
   let authorized = true, resolve;
   const guardedHost = host();
-  const controller = createController({ isAuthorized: () => authorized, request: async url => url.endsWith("/options") ? catalog : new Promise(done => { resolve = done; }) });
+  const controller = createController({ isAuthorized: () => authorized, request: async url => url.endsWith("/catalogue") ? catalog : new Promise(done => { resolve = done; }) });
   const mounting = controller.mount(guardedHost);
   await new Promise(done => setImmediate(done));
   authorized = false; guardedHost.innerHTML = "logged out";
@@ -225,7 +225,7 @@ test("no month does not fetch observations, and revoked authorization suppresses
 
 test("queued and processing snapshots poll lightly until ready, without manufacturing zero metrics", async () => {
   const clock = scheduled(), calls = [], results = [stored("queued", { hasSnapshot: false }), stored("processing", { hasSnapshot: false }), stored("ready")];
-  const element = host(), controller = createController({ ...clock, request: async (url, options) => { calls.push({ url, options }); return url.endsWith("/options") ? catalog : results.shift(); } });
+  const element = host(), controller = createController({ ...clock, request: async (url, options) => { calls.push({ url, options }); return url.endsWith("/catalogue") ? catalog : results.shift(); } });
   await controller.mount(element);
   assert.equal(controller.state.data, null);
   assert.match(element.innerHTML, /집계 대기/);
@@ -241,7 +241,7 @@ test("queued and processing snapshots poll lightly until ready, without manufact
   assert.match(element.innerHTML, /마지막 정상 집계/);
   assert.ok(element.innerHTML.includes(new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date("2026-10-10T00:00:00Z"))));
   assert.match(element.innerHTML, /관측 기준일 <b>2026.10.11/);
-  assert.equal(calls.filter(call => call.url.endsWith("/options")).length, 1, "Polling does not reload the catalog");
+  assert.equal(calls.filter(call => call.url.endsWith("/catalogue")).length, 1, "Polling does not reload the catalog");
   assert.ok(calls.every(call => call.options?.method !== "POST"), "Status polling cannot request a rebuild");
   controller.destroy();
 });
@@ -321,7 +321,7 @@ test("expanded review companies show the shared verified or observed capacity ba
 });
 
 test("review filters, date selection and Korean text input only narrow saved results", async () => {
-  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/options") ? catalog : reviewData(); } });
+  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/catalogue") ? catalog : reviewData(); } });
   await controller.mount(element); controller.selectTab("review");
   controller.reviewInput("issue", "latest");
   assert.match(element.innerHTML, /data-ia-review-company="central-review"/); assert.doesNotMatch(element.innerHTML, /data-ia-review-company="central-good"/);
@@ -353,7 +353,7 @@ test("pending snapshot polling preserves review search focus and defers screen r
       focus() { document.activeElement = this; }, setSelectionRange(start, end, direction) { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; } };
   } });
   const responses = ["queued", "processing", "ready"].map(status => { const result = reviewData(); result.storage.status = status; return result; });
-  const controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : responses.shift() });
+  const controller = createController({ ...clock, request: async url => url.endsWith("/catalogue") ? catalog : responses.shift() });
   await controller.mount(element); controller.selectTab("review");
   search.focus(); search.value = "검토"; search.setSelectionRange(1, 2, "backward");
   element.listeners.get("input")({ target: search, isComposing: false });
@@ -378,7 +378,7 @@ test("pending snapshot polling preserves review search focus and defers screen r
 
 test("review pagination and folding avoid rendering every company date at once", async () => {
   const result = reviewData(); result.review.companies = Array.from({ length: 45 }, (_, index) => ({ ...result.review.companies[0], companyId: `company-${index}`, primaryName: `업체 ${String(index).padStart(2, "0")}` }));
-  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/options") ? catalog : result; } });
+  const calls = [], element = host(), controller = createController({ request: async url => { calls.push(url); return url.endsWith("/catalogue") ? catalog : result; } });
   await controller.mount(element); controller.selectTab("review");
   assert.equal((element.innerHTML.match(/class="ia-review-company"/g) || []).length, 20);
   assert.equal((element.innerHTML.match(/class="ia-review-date"/g) || []).length, 0);
@@ -430,7 +430,7 @@ test("closed-month pending and failed states retain their status instead of appe
 
 test("same-condition refresh preserves the last successful snapshot and a failed rebuild remains terminal", async () => {
   const clock = scheduled(); let response = () => stored("ready"), resolveRefresh;
-  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : response() });
+  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/catalogue") ? catalog : response() });
   await controller.mount(element);
   response = () => new Promise(resolve => { resolveRefresh = resolve; });
   const refresh = controller.loadData();
@@ -452,7 +452,7 @@ test("same-condition refresh preserves the last successful snapshot and a failed
 
 test("changing conditions clears old metrics and pending or failed without a snapshot never looks like zero", async () => {
   const clock = scheduled(); let resolveChanged;
-  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/options") ? catalog : url.includes("month=2026-10") ? stored("processing") : new Promise(resolve => { resolveChanged = resolve; }) });
+  const element = host(), controller = createController({ ...clock, request: async url => url.endsWith("/catalogue") ? catalog : url.includes("month=2026-10") ? stored("processing") : new Promise(resolve => { resolveChanged = resolve; }) });
   await controller.mount(element);
   assert.equal(clock.waiting.size, 1);
   const change = controller.input("month", "2026-09");
@@ -460,7 +460,7 @@ test("changing conditions clears old metrics and pending or failed without a sna
   assert.equal(controller.state.data, null);
   assert.doesNotMatch(element.innerHTML, /추정예약률<\/span><strong>0%/);
   resolveChanged(stored("pending", { hasSnapshot: false, month: "2026-09" })); await change;
-  assert.match(element.innerHTML, /저장 집계 준비 대기/);
+  assert.match(element.innerHTML, /저장 자료 준비 필요/);
   assert.equal(clock.waiting.size, 0);
   const failed = renderDashboard(state({ data: null, storage: stored("failed", { hasSnapshot: false }).storage }));
   assert.match(failed, /저장 집계를 준비하지 못했습니다/);
@@ -470,7 +470,7 @@ test("changing conditions clears old metrics and pending or failed without a sna
 
 test("pause, hidden views and revoked roles stop polling and suppress late replies; resuming reads status", async () => {
   const clock = scheduled(); let visible = true, authorized = true, calls = 0, reply = () => stored("processing", { hasSnapshot: false }), resolveLate;
-  const element = host(), controller = createController({ ...clock, isVisible: () => visible, isAuthorized: () => authorized, request: async url => { if (url.endsWith("/options")) return catalog; calls++; return reply(); } });
+  const element = host(), controller = createController({ ...clock, isVisible: () => visible, isAuthorized: () => authorized, request: async url => { if (url.endsWith("/catalogue")) return catalog; calls++; return reply(); } });
   await controller.mount(element); assert.equal(clock.waiting.size, 1);
   controller.pause(); assert.equal(clock.waiting.size, 0);
   await controller.loadData(); assert.equal(calls, 1);
@@ -490,7 +490,7 @@ test("rebuild requires an explicit failed-state action, guards duplicates and ch
   const clock = scheduled(), calls = []; let rejectPost, resolvePost;
   const element = host(), controller = createController({ ...clock, request: async (url, options) => {
     calls.push({ url, options });
-    if (url.endsWith("/options")) return catalog;
+    if (url.endsWith("/catalogue")) return catalog;
     if (options?.method === "POST") return new Promise((resolve, reject) => { resolvePost = resolve; rejectPost = reject; });
     return stored("failed", { hasSnapshot: false });
   } });
@@ -515,7 +515,7 @@ test("rebuild requires an explicit failed-state action, guards duplicates and ch
 
 test("mismatched stored snapshot conditions cannot replace a valid selected snapshot", async () => {
   let wrong = false;
-  const element = host(), controller = createController({ request: async url => url.endsWith("/options") ? catalog : stored("ready", wrong ? { month: "2026-09" } : {}) });
+  const element = host(), controller = createController({ request: async url => url.endsWith("/catalogue") ? catalog : stored("ready", wrong ? { month: "2026-09" } : {}) });
   await controller.mount(element); wrong = true; await controller.loadData();
   assert.match(controller.state.error, /조건이 일치하지 않습니다/);
   assert.equal(controller.state.data.request.month, "2026-10");
@@ -539,7 +539,7 @@ test("industry report handoff requires a matching ready saved regional snapshot"
 test("industry report click preserves all conditions and cannot send after pause or role revocation", async () => {
   let authorized = true;
   const sent = [], element = host();
-  const c = createController({ isAuthorized: () => authorized, request: async url => url.endsWith("/options") ? catalog : stored("ready", { region: new URL(url, "http://local").searchParams.get("region"), stale: false }) });
+  const c = createController({ isAuthorized: () => authorized, request: async url => url.endsWith("/catalogue") ? catalog : stored("ready", { region: new URL(url, "http://local").searchParams.get("region"), stale: false }) });
   await c.mount(element, { onSend: context => sent.push(context) });
   await c.input("region", "sacheon");
   const click = () => element.listeners.get("click")({ target: { closest: () => ({ dataset: { iaAction: "monthly-report" }, disabled: false }) } });

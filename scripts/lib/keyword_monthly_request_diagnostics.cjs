@@ -2,8 +2,12 @@
 
 const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
+const { keywordMonthlyGuardDiagnosticFromError } = require("./keyword_monthly_guard_diagnostics.cjs");
+const { METADATA_PHASES, withKeywordMonthlyMetadataMeasure } = require("./keyword_monthly_metadata_diagnostics.cjs");
 const ROUTES = new Set(["options", "catalogue", "data", "refresh_status", "version", "unknown"]);
-const PHASES = new Set(["admission", "read", "serialize", "refresh_status"]);
+const PHASES = new Set(["admission", "read", "serialize", "refresh_status", ...METADATA_PHASES]);
+const LIFECYCLE_EVENTS = new Set(["owner", "shared", "waiter_timed_out", "waiter_aborted", "operation_started", "operation_settled"]);
+const METADATA_RESULT_STATUSES = new Set(["available", "stale", "needs_verification", "missing", "not_prepared"]);
 const METRICS = ["queueWaitMs", "leaseMs", "busyWaitMs", "memoryWaitMs", "samplingWaitMs", "otherWaitMs"];
 const code = value => typeof value === "string" && /^(?:KEYWORD_MONTHLY|KEYWORD_INCREMENTAL|ANALYTICAL)_[A-Z0-9_]{1,78}$/.test(value) && value.length <= 100 ? value : null;
 const duration = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(86400000, Math.round(value * 1000) / 1000) : null;
@@ -20,7 +24,7 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
     || onLog !== null && typeof onLog !== "function" || !Number.isSafeInteger(maxEventsPerWindow)
     || maxEventsPerWindow < 1 || maxEventsPerWindow > 120 || !Number.isSafeInteger(windowMs) || windowMs < 1000) throw new TypeError("Invalid monthly request diagnostics");
   const storage = new AsyncLocalStorage(), records = [];
-  const counters = { started: 0, finished: 0, observerErrors: 0, droppedLogs: 0 };
+  const counters = { started: 0, finished: 0, observerErrors: 0, droppedLogs: 0, metadataStarted: 0, metadataFinished: 0, metadataFinishedAfterHandler: 0 };
   let windowAt = null, emitted = 0;
   const clock = () => { try { const value = Number(now()); return Number.isFinite(value) ? value : null; } catch { return null; } };
   const elapsed = (start, end) => start === null || end === null ? null : duration(Math.max(0, end - start));
@@ -37,7 +41,16 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
   function view(trace) {
     return { traceId: trace.traceId, route: trace.route, handlerFinished: trace.handlerFinished,
       elapsedMs: trace.elapsedMs, responseStatus: trace.responseStatus, responseCode: trace.responseCode,
-      sendInvoked: trace.sendInvoked, phases: { ...trace.phases },
+      sendInvoked: trace.sendInvoked, phases: { ...trace.phases }, phaseCounts: { ...trace.phaseCounts },
+      readGuard: trace.readGuard ? copy(trace.readGuard) : null,
+      lifecycleRole: trace.lifecycleRole, lifecycleWaiterOutcome: trace.lifecycleWaiterOutcome,
+      lifecycleOperationStarted: trace.lifecycleOperationStarted, lifecycleOperationFinished: trace.lifecycleOperationFinished,
+      metadataStarted: trace.metadataStarted, metadataFinished: trace.metadataFinished,
+      metadataStartedAfterHandler: trace.metadataStartedAfterHandler, metadataFinishedAfterHandler: trace.metadataFinishedAfterHandler,
+      metadataElapsedMs: trace.metadataStarted ? elapsed(trace.metadataStartedAt, trace.metadataFinishedAt ?? clock()) : null,
+      metadataOutcome: trace.metadataOutcome, metadataErrorCode: trace.metadataErrorCode,
+      metadataResultStatus: trace.metadataResultStatus, metadataResultCode: trace.metadataResultCode,
+      metadataReadGuard: trace.metadataReadGuard ? copy(trace.metadataReadGuard) : null,
       workStarted: trace.workStarted, workFinished: trace.workFinished,
       workStartedAfterHandler: trace.workStartedAfterHandler,
       workStateAtHandlerEnd: trace.workStateAtHandlerEnd, workElapsedAtHandlerEndMs: trace.workElapsedAtHandlerEndMs,
@@ -49,7 +62,11 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
   async function run(route, operation) {
     if (!ROUTES.has(route) || typeof operation !== "function") throw new TypeError("Invalid monthly diagnostic route");
     const trace = { traceId: crypto.randomBytes(12).toString("hex"), route, startedAt: clock(), handlerFinished: false,
-      elapsedMs: null, responseStatus: null, responseCode: null, sendInvoked: false, phases: {},
+      elapsedMs: null, responseStatus: null, responseCode: null, sendInvoked: false, phases: {}, phaseCounts: {}, readGuard: null,
+      lifecycleRole: null, lifecycleWaiterOutcome: null, lifecycleOperationStarted: false, lifecycleOperationFinished: false,
+      metadataStarted: false, metadataFinished: false, metadataStartedAt: null, metadataFinishedAt: null,
+      metadataStartedAfterHandler: false, metadataFinishedAfterHandler: false, metadataOutcome: "not_observed", metadataErrorCode: null, metadataReadGuard: null,
+      metadataResultStatus: null, metadataResultCode: null,
       workStarted: false, workFinished: false, workStartedAt: null, workFinishedAt: null, handlerFinishedAt: null, queueWaitAtStartMs: null,
       workStartedAfterHandler: false, workStateAtHandlerEnd: null, workElapsedAtHandlerEndMs: null,
       taskTimingObserved: false, taskTimingObservedAfterHandler: false, task: null };
@@ -78,9 +95,71 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
   async function measure(phase, operation) {
     if (!PHASES.has(phase) || typeof operation !== "function") throw new TypeError("Invalid monthly diagnostic phase");
     const trace = storage.getStore(), start = clock();
+    if (trace) trace.phaseCounts[phase] = Math.min(1000000, (trace.phaseCounts[phase] || 0) + 1);
     try { return await operation(); }
     finally { if (trace) { const value = elapsed(start, clock()); if (value !== null) trace.phases[phase] = duration((trace.phases[phase] || 0) + value); } }
   }
+  async function admission(phase, enter, operation) {
+    if (!PHASES.has(phase) || typeof enter !== "function" || typeof operation !== "function") throw new TypeError("Invalid admission observation");
+    const trace = storage.getStore(), start = clock(); let entered = false;
+    if (trace) trace.phaseCounts[phase] = Math.min(1000000, (trace.phaseCounts[phase] || 0) + 1);
+    const finish = () => { if (entered) return; entered = true;
+      if (trace) { const value = elapsed(start, clock()); if (value !== null) trace.phases[phase] = duration((trace.phases[phase] || 0) + value); } };
+    // Measure only the gate, not the operation it admits. A denied gate is
+    // observed too; the original rejection, including a falsy reason, survives.
+    try { return await enter(() => { finish(); return operation(); }); }
+    finally { finish(); }
+  }
+  function metadata(operation) {
+    if (typeof operation !== "function") throw new TypeError("A metadata operation is required");
+    const trace = storage.getStore();
+    return () => withKeywordMonthlyMetadataMeasure(measure, async () => {
+      if (trace) { trace.metadataStarted = true; trace.metadataStartedAt = clock(); trace.metadataStartedAfterHandler = trace.handlerFinished;
+        trace.metadataOutcome = "running"; counters.metadataStarted++; emit("metadata_start", view(trace)); }
+      let failed = false;
+      try {
+        const result = await operation();
+        if (trace) {
+          // A bounded saved read can return a verification refusal instead of
+          // throwing. Observe that result separately from operation settlement;
+          // no payload, arbitrary status or error text enters the trace. Each
+          // getter is observational and may fail without changing the result.
+          try { const status = result?.status; trace.metadataResultStatus = METADATA_RESULT_STATUSES.has(status) ? status : null; }
+          catch { counters.observerErrors++; }
+          try { trace.metadataResultCode = code(result?.code); }
+          catch { counters.observerErrors++; }
+          if (trace.metadataResultCode === null) try {
+            const diagnostics = result?.diagnostics;
+            if (Array.isArray(diagnostics)) for (let index = 0; index < Math.min(diagnostics.length, 32); index++) {
+              const value = code(diagnostics[index]); if (value) { trace.metadataResultCode = value; break; }
+            }
+          } catch { counters.observerErrors++; }
+          trace.metadataReadGuard = keywordMonthlyGuardDiagnosticFromError(result);
+        }
+        return result;
+      }
+      catch (error) { failed = true; if (trace) { try { trace.metadataErrorCode = code(error?.code); } catch {}
+        trace.metadataReadGuard = keywordMonthlyGuardDiagnosticFromError(error); } throw error; }
+      finally { if (trace) { trace.metadataFinished = true; trace.metadataFinishedAt = clock(); trace.metadataFinishedAfterHandler = trace.handlerFinished;
+        trace.metadataOutcome = failed ? "failed" : "completed"; counters.metadataFinished++;
+        if (trace.handlerFinished) counters.metadataFinishedAfterHandler++;
+        emit("metadata_end", view(trace)); } }
+    });
+  }
+  function lifecycleOptions() {
+    const trace = storage.getStore();
+    if (!trace) return {};
+    return { onLifecycleObservation: value => {
+      if (!value || !LIFECYCLE_EVENTS.has(value.event) || !["owner", "waiter"].includes(value.role)) { counters.observerErrors++; return; }
+      if (value.event === "owner" || value.event === "shared") trace.lifecycleRole = value.role;
+      if (value.event === "waiter_timed_out") trace.lifecycleWaiterOutcome = "timed_out";
+      if (value.event === "waiter_aborted") trace.lifecycleWaiterOutcome = "aborted";
+      if (value.event === "operation_started") trace.lifecycleOperationStarted = true;
+      if (value.event === "operation_settled") { trace.lifecycleOperationFinished = true;
+        if (trace.metadataStarted) emit("metadata_operation_settled", view(trace)); }
+    } };
+  }
+  function guard(error) { const trace = storage.getStore(); if (trace) trace.readGuard = keywordMonthlyGuardDiagnosticFromError(error); }
   function schedulerOptions() {
     const trace = storage.getStore();
     if (!trace) return {};
@@ -103,7 +182,7 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
       if (values.length) res.setHeader?.("Server-Timing", values.join(", "));
     } catch { counters.observerErrors++; }
   }
-  return Object.freeze({ run, measure, work, schedulerOptions, response,
+  return Object.freeze({ run, measure, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response,
     status: () => ({ ...counters, maxRecords, maxEventsPerWindow, windowMs, recent: records.map(trace => view(trace)) }) });
 }
 
