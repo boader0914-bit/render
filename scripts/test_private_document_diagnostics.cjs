@@ -2,6 +2,17 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const { createPrivateDocumentDiagnostics } = require("./lib/private_document_diagnostics.cjs");
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+test("entry-to-static wait is response-local one-shot metadata and preserves headers and results", async () => {
+  let now = 1; const d = createPrivateDocumentDiagnostics({ now: () => now, onLog: null }), headers = {};
+  const res = { setHeader: (k,v) => { headers[k] = v; } };
+  d.markRequest(res); now = 7;
+  assert.equal(await d.run("/admin", async t => { now = 9; t.response(res, 200); return 42; }, res), 42);
+  const first = d.status().recent[0]; assert.equal(first.phases.route_to_static, 6); assert.equal(first.headerReadyMs, 8);
+  assert.match(headers["Server-Timing"], /route_to_static;dur=6/);
+  await d.run("/admin", async () => 43, res);
+  assert.equal(Object.hasOwn(d.status().recent[1].phases, "route_to_static"), false);
+  assert.equal(d.status().started, 2);
+});
 test("trace entropy failure or invalid diagnostic IDs never prevent serving", async () => {
   for (const createTraceId of [() => { throw Error("private entropy failure"); }, () => "private-invalid-id"]) {
     const d = createPrivateDocumentDiagnostics({ createTraceId, onLog: null }), headers = {};

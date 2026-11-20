@@ -19318,7 +19318,7 @@ async function serveStatic(reqUrl, res, req = { method: "GET", headers: {} }) {
       const publicHtml = await timing.measure("html_versions", () => privateStaticAssets.versionHtml(html, { onTiming: timing.assets }));
       timing.response(res, 200);
       return send(res, 200, publicHtml, "text/html; charset=utf-8");
-    });
+    }, res);
   }
   if (privateStaticAssets.eligible(reqUrl.pathname)) {
     const asset = await privateStaticAssets.response(reqUrl, req);
@@ -19342,6 +19342,7 @@ async function serveOutput(reqUrl, res) {
 }
 
 async function route(req, res) {
+  privateDocumentDiagnostics.markRequest(res);
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {

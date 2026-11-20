@@ -8,7 +8,7 @@ const ASSET_FIELDS = ["assetCount", "versionedAssetCount", "digestReads", "diges
 const finite = value => typeof value === "number" && Number.isFinite(value) && value >= 0
   ? Math.round(Math.min(value, 1e12) * 1000) / 1000 : null;
 
-// HTML preparation only: no URL/query, user, cookie, error text, asset paths,
+// Node route entry through HTML preparation: no URL/query, user, cookie, error text, asset paths,
 // buffers or result payloads. Timing is response-header invocation, not socket
 // completion or browser TTFB. Child spans overlap; they must not be summed.
 function createPrivateDocumentDiagnostics({ now = () => performance.now(), maxRecords = 32, maxLogsPerMinute = 30,
@@ -17,7 +17,7 @@ function createPrivateDocumentDiagnostics({ now = () => performance.now(), maxRe
   if (typeof now !== "function" || typeof createTraceId !== "function" || !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > 32
     || !Number.isSafeInteger(maxLogsPerMinute) || maxLogsPerMinute < 1 || maxLogsPerMinute > 60
     || onLog !== null && typeof onLog !== "function") throw TypeError("Invalid private document diagnostics");
-  const records = [], counters = { started: 0, finished: 0, observerErrors: 0, droppedLogs: 0 };
+  const records = [], requestStarts = new WeakMap(), counters = { started: 0, finished: 0, observerErrors: 0, droppedLogs: 0 };
   let logWindow = null, logCount = 0;
   const clock = () => { try { return finite(now()); } catch { counters.observerErrors++; return null; } };
   const traceId = () => { try { const id = createTraceId(); if (typeof id === "string" && /^[a-f0-9]{24}$/.test(id)) return id; }
@@ -33,10 +33,17 @@ function createPrivateDocumentDiagnostics({ now = () => performance.now(), maxRe
     try { const pending = onLog(snapshot(record)); if (pending && typeof pending.then === "function") Promise.resolve(pending).catch(() => { counters.observerErrors++; }); }
     catch { counters.observerErrors++; }
   }
-  async function run(route, operation) {
+  function markRequest(response) {
+    if (!response || typeof response !== "object") return;
+    try { requestStarts.set(response, clock()); } catch { counters.observerErrors++; }
+  }
+  async function run(route, operation, response = null) {
     if (typeof operation !== "function") throw TypeError("A document operation is required");
-    const startedAt = clock(), record = { traceId: traceId(), route: ROUTES.get(route) || "unknown",
+    const preparationAt = clock(); let markedAt = null;
+    if (response && typeof response === "object") { markedAt = requestStarts.get(response) ?? null; requestStarts.delete(response); }
+    const startedAt = markedAt ?? preparationAt, record = { traceId: traceId(), route: ROUTES.get(route) || "unknown",
       elapsedMs: null, headerReadyMs: null, responseStatus: null, outcome: "running", phases: {}, assets: {} };
+    if (markedAt !== null) record.phases.route_to_static = elapsed(markedAt, preparationAt);
     counters.started++;
     const timing = Object.freeze({
       async measure(phase, action) {
@@ -74,6 +81,6 @@ function createPrivateDocumentDiagnostics({ now = () => performance.now(), maxRe
       records.push(snapshot(record)); if (records.length > maxRecords) records.shift(); emit(record);
     }
   }
-  return Object.freeze({ run, status: () => ({ ...counters, maxRecords, maxLogsPerMinute, recent: records.map(snapshot) }) });
+  return Object.freeze({ run, markRequest, status: () => ({ ...counters, maxRecords, maxLogsPerMinute, recent: records.map(snapshot) }) });
 }
 module.exports = { createPrivateDocumentDiagnostics };
