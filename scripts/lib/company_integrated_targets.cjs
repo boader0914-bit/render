@@ -5,6 +5,7 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
+const { runCooperativeCheckpointReads } = require("./cooperative_work_checkpoint.cjs");
 
 const monthOf = value => /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(String(value || "")) ? String(value).slice(0, 7) : null;
 const MAX_CACHED_SCOPES = 16;
@@ -13,7 +14,13 @@ const targetFault = code => Object.assign(new Error("업체별 관측 월의 변
 // This index discovers scopes only. The monthly engine independently checks
 // identity, timestamps, source quality, counts and prices before accepting data.
 function createCompanyIntegratedTargets({ dataDir, catalog, readRevision, maxCacheBytes = MAX_CACHE_BYTES, observationIndex = null,
-  checkpoint = () => new Promise(resolve => setImmediate(resolve)) } = {}) {
+  checkpoint = async () => {
+    await new Promise(resolve => setImmediate(resolve));
+    // Existing pure discovery boundaries only. The exact background owner
+    // stays suspended through a saved DTO and its complete HTTP lifetime.
+    // This does not lend revision reads, filesystem waits or publication.
+    await runCooperativeCheckpointReads();
+  } } = {}) {
   if (!dataDir || typeof catalog !== "function" || readRevision !== undefined && typeof readRevision !== "function") throw new TypeError("Target data directory, catalog and optional revision reader are required");
   if (observationIndex !== null && typeof observationIndex.readRows !== "function") throw new TypeError("A verified observation index is required");
   if (!Number.isSafeInteger(maxCacheBytes) || maxCacheBytes < 0 || maxCacheBytes > MAX_CACHE_BYTES) throw new TypeError("Target cache byte limit must be between zero and 8 MiB");

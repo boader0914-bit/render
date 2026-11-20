@@ -110,7 +110,8 @@ test("the admission deadline is exactly bounded and removes only a queued loan w
 });
 
 test("wrong owners refuse; eligible atomic owners reserve graphlessly until a safe checkpoint or original deadline",async()=>{
-  for(const [kind,priority,cooperativeYield,cooperativeCompanyMonthYield]of [["company-bootstrap","background",true,true],["company-job-prepare","background",true,true],
+  for(const [kind,priority,cooperativeYield,cooperativeCompanyMonthYield]of [["company-bootstrap","background",true,true],["source-targets","background",true,true],
+    ["company-job-prepare","foreground",true,true],
     ["company-month-repair","foreground",true,true],["company-month","foreground",true,true],["company-month","background",true,false],
     ["industry-build","foreground",true,true],["industry-build","background",false,true]]){
     const scheduler=createAnalyticalWorkScheduler({cooperativeYield,cooperativeCompanyMonthYield}),entered=gate(),finish=gate(),done=scheduler.run(async()=>{entered.resolve();await finish.promise;},{kind,priority});await entered.promise;

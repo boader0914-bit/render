@@ -11,7 +11,7 @@ const REASONS = Object.freeze({
     "sample_read_failed", "sample_invalid", "sample_stale", "sample_future", "clock_invalid"]),
   saved_read: new Set(["response_window_closed", "response_flight_settled"])
 });
-const ACTIVE_KINDS = new Set(["industry-build", "company-month", "company-month-repair",
+const ACTIVE_KINDS = new Set(["industry-build", "company-month", "company-month-repair", "company-job-prepare",
   "keyword_monthly_refresh", "keyword_monthly_saved_read", "keyword_monthly_analysis",
   "source-options", "source-catalog", "verified-company-catalog"]);
 const MEMORY_COMPONENT_FIELDS = Object.freeze(["heapUsedBytes", "heapLimitBytes", "heapRatio", "liveAllocationRatio", "estimatedLiveBytes", "limitBytes", "rssBytes"]);

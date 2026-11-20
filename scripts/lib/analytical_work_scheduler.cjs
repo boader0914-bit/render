@@ -57,7 +57,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   // these observations have no admission or scheduling authority.
   const sourceWaitKinds = new Set(["checkpoint_hold", "derived_cache_stat", "derived_cache_read",
     "derived_cache_decode", "derived_cache_encode", "derived_cache_write", "derived_cache_copy", "source_revision"]);
-  const diagnosticOwnerKinds = new Set(["industry-build", "company-month", "company-month-repair", "keyword_monthly_refresh",
+  const diagnosticOwnerKinds = new Set(["industry-build", "company-month", "company-month-repair", "company-job-prepare", "keyword_monthly_refresh",
     "source-options", "source-catalog", "verified-company-catalog"]);
   const diagnosticOwnerKind = owner => owner ? diagnosticOwnerKinds.has(owner.kind) ? owner.kind : "other" : null;
   const checkpointWaitHistory = [];
@@ -255,9 +255,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       // Refresh transactions and opted-in metadata preparations expose only
       // explicitly awaited boundaries, never cooperative yield/restart authority.
       savedReadLoanOnly: task.priority === "background" && (task.kind === "keyword_monthly_refresh"
-        || sourceMetadataSavedReads && ["source-options", "source-catalog", "verified-company-catalog"].includes(task.kind)),
+        || sourceMetadataSavedReads && ["source-options", "source-catalog", "verified-company-catalog", "company-job-prepare"].includes(task.kind)),
       sourceMetadataLoanOnly: task.priority === "background" && sourceMetadataSavedReads
-        && ["source-options", "source-catalog", "verified-company-catalog"].includes(task.kind) };
+        && ["source-options", "source-catalog", "verified-company-catalog", "company-job-prepare"].includes(task.kind) };
     active = token;
     task.attempt = (task.attempt || 0) + 1;
     const eligible = task.priority === "background" && (cooperativeYield && task.kind === "industry-build"
@@ -615,7 +615,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     return Boolean(owner && owner.priority === "background"
       && (["industry-build", "company-month"].includes(owner.kind) && owner.cooperative
         || owner.kind === "keyword_monthly_refresh" && owner.savedReadLoanOnly && !owner.savedReadWindow
-        // The source readers already await sourceReadScheduler.checkpoint().
+        // The source readers already await sourceReadScheduler.checkpoint();
+        // company-job-prepare additionally owns explicit pure target-discovery
+        // loop checkpoints. None of these tags grants a generic await window.
         // The verified catalog wrapper owns the outer lease in production;
         // its nested source-catalog must not be mistaken for the active owner.
         // These scopes may lend only at that awaited boundary. They cannot
