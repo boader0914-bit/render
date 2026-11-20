@@ -773,6 +773,9 @@ const monthlyReportSources = createMonthlyReportSources({
   // corrections below. Industry's internal diagnostics never mutate these rows.
   // Generic adapters and public monthly builders keep independent eager clones.
   ownedSavedJsonObservations: true,
+  // Industry replaces the same local observation Map as rows are produced;
+  // public report consumers keep the complete-array producer contract.
+  streamIndustryObservations: true,
   companySourceVersion: monthlyCompanySourceVersion,
   // A source read that yielded during witness publication has already finished
   // its expensive original/recovery prefix. Reuse that verified derived candidate

@@ -69,3 +69,43 @@ deployment. Complete DTO bytes and original arrays/chunks/metadata/code pins are
 checked, rather than comparing selected totals alone. Actual production UI
 checks remain a separate gate and any authentication reset is reported
 separately from same-session state restoration.
+
+## Cold-source retention and failed navigation
+
+An actual 5f production check subsequently encountered a separate failure:
+process 88 on instance njnv9 exited at 12:51:12 KST with V8 `Reached heap
+limit` around 2,045 MB of old-space usage. Its last recorded owner was industry
+build 9, in a nested source-preparation phase since 12:46:30. A later month
+request received proxy 502 after the process had already exited. This is not a
+monthly-query calculation-version rejection or a proven cgroup OOM kill.
+The exact allocating object is not established by those coarse phase records.
+
+The source adapter formerly retained the original observation Map while the
+recalculation producer retained a second complete monthly row array. The explicit
+`streamIndustryObservations` application opt-in now transfers industry rows into
+that same Map in original run/company/row order as they are produced. Generic
+and public consumers retain the full-array contract. Final evidence metadata,
+freshness assertions, publication rules and transfer checkpoint counts remain.
+This equivalence relies on the application's fixed pure observation projector;
+it is not a contract for arbitrary stateful callbacks. Three bounded diagnostic
+phases distinguish history, recalculation and recovery memory in future runs.
+
+A separate replay sends all 49,492 sealed derived observations through the real
+producer/source factories using explicit stand-in parsing adapters. Both complete
+source digests, row/field order and eight entire DTO byte sequences match. The
+producer's returned row array falls from 49,492 to zero. One pair's sampled
+transport heap is 588,109,800 to 583,175,904 bytes (0.84%); input derived rows
+remain retained for audit. This does not reproduce raw saved-run parsing,
+capacity reconstruction or the complete production cold-source prefix, and
+does not establish that the production heap exhaustion is fully resolved.
+
+The observed failed month navigation also discarded its previous visible KPIs.
+The UI now restores the complete last successful displayed scope on transient
+failure, while retaining the failed request as an unapplied draft and explicit
+notice. Authentication clearing, newer requests, destroyed views and successful
+authoritative missing/stale responses never revive an old result.
+
+Final local gates: 387 core tests across 27 files, 219 UI/cache cases across
+two other files, and both isolated API tests pass. The UI mock suite is split
+into bounded fresh processes; the exact prior 5f UI/test source also exhausted
+a 512 MiB monolithic test process. No production memory threshold was raised.

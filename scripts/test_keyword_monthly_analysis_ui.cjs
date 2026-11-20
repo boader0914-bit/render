@@ -395,13 +395,13 @@ test("calendar keeps missing values gray, observed zero numeric and product sele
   ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await ui.apply(); assert.match(ui.text(), /사전 관측/); assert.equal(ui.find("kma-calendar-cell")[0].attributes["data-date"], "2026-11-01");
 });
 
-function dashboardPayload(companyCount = 2, withUnknown = false) {
+function dashboardPayload(companyCount = 2, withUnknown = false, selection = { keyword: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }) {
   const source = sourceFixture(), original = [...source.observations]; source.companies = []; source.observations = [];
   for (let index = 0; index < companyCount; index++) {
     const companyId = `company-${index}`; source.companies.push({ companyId, primaryName: `비교 업체 ${index}`, capacity: 5, capacitySource: "db_correction" });
     source.observations.push(...original.map(row => { const sold = index === 0 ? row.sold : 1; return { ...row, observationId: `${row.observationId}:${companyId}`, companyId, sold, publicBookings: sold, phoneBookings: 0, estimatedRevenue: sold * 100, publicRevenue: sold * 100, phoneRevenue: 0 }; }));
   }
-  const value = payloadFixture(); value.snapshot = buildMonthlyReportSnapshot({ type: "keyword", targetId: KEYWORD, month: "2026-10", cutoffDate: "2026-10-30" }, source, NOW);
+  const value = payloadFixture(selection); value.snapshot = buildMonthlyReportSnapshot({ type: "keyword", targetId: selection.keyword, month: selection.month, cutoffDate: selection.cutoffDate }, source, NOW);
   if (withUnknown) value.snapshot.companies.push({ companyId: "rank-only", primaryName: "순위만 관측한 업체" });
   return value;
 }
@@ -869,15 +869,122 @@ test("invalid JSON, unexpected content type and network exceptions never expose 
   assert.doesNotMatch(ui.text(), /SECRET_|Unexpected token|SyntaxError/); assert.match(ui.text(), /400원/);
 });
 
-test("a failed new period never displays the former period and returning to its exact scope may show the saved result", async () => {
+test("a failed new period restores the prior displayed scope and keeps the unapplied period only as a clearly labelled draft", async () => {
   let failed = false;
   const ui = mockUi({ request: async url => url.endsWith("/catalogue") ? jsonResponse(optionsFixture()) : failed ? htmlFailure() : jsonResponse(payloadFixture()) });
   await ui.controller.open(); failed = true;
   ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await ui.apply();
-  assert.equal(ui.controller.state().selection.month, "2026-11"); assert.equal(ui.controller.state().showingStored, false);
-  assert.equal(ui.find("kma-metric").length, 0); assert.doesNotMatch(ui.text(), /400원/);
+  assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().applied.month, "2026-10");
+  assert.equal(ui.controller.state().draft.month, "2026-11"); assert.equal(ui.controller.state().showingStored, true);
+  assert.ok(ui.find("kma-metric").length > 0); assert.match(ui.text(), /400원/);
+  assert.match(ui.find("kma-dashboard-title")[0].textContent, /2026-10/);
+  assert.match(ui.find("kma-condition-summary")[0].textContent, /숙박월 2026-10.*입력 초안이 다릅니다/);
+  assert.match(ui.find("kma-notice")[0].textContent, /숙박월 2026-11.*조회를 완료하지 못해.*숙박월 2026-10.*입력 초안은 적용되지 않았습니다/);
   ui.field("month").value = "2026-10"; await ui.field("month").fire("change"); await ui.apply();
   assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().showingStored, true); assert.match(ui.text(), /400원/);
+});
+
+test("a cross-month catalogue 502 restores the whole November view including company product search page and bars", async t => {
+  let failed = false;
+  const ui = mockUi({ request: async url => {
+    if (url.endsWith("/catalogue")) return failed ? htmlFailure(502) : jsonResponse(optionsFixture());
+    const query = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+    return jsonResponse(dashboardPayload(43, false, query));
+  } });
+  t.after(() => ui.controller.destroy());
+  await ui.controller.open({ keyword: KEYWORD, month: "2026-11", cutoffDate: "2026-10-30", cutoffMode: "explicit" });
+  ui.field("companySearch").value = "비교"; await ui.field("companySearch").fire("input");
+  await ui.button("다음 업체").fire("click"); await ui.find("kma-company-row")[5].fire("click"); await ui.button("데이유즈").fire("click");
+  const before = clone(ui.controller.state()), tables = () => descendants(ui.find("kma-results")[0]).filter(node => node.tagName === "TABLE").map(node => text(node)), beforeTables = tables();
+  failed = true; ui.field("month").value = "2026-10"; await ui.field("month").fire("change"); await ui.apply();
+  const after = clone(ui.controller.state());
+  for (const key of ["selection", "applied", "product", "benchmarkCompanyId", "listQuery", "listPage", "mobileView", "expanded"]) assert.deepEqual(after[key], before[key], key);
+  assert.deepEqual(tables(), beforeTables); assert.equal(after.draft.month, "2026-10"); assert.equal(after.errorCode, "KEYWORD_MONTHLY_HTTP_502");
+  assert.equal(after.showingStored, true); assert.match(ui.find("kma-dashboard-title")[0].textContent, /2026-11.*비교 업체 25/);
+  assert.match(ui.find("kma-condition-summary")[0].textContent, /숙박월 2026-11.*입력 초안이 다릅니다/);
+  assert.equal(ui.field("month").value, "2026-10"); assert.ok(ui.find("kma-company-chart-panel").length > 0);
+  assert.match(ui.find("kma-notice")[0].textContent, /숙박월 2026-10.*완료하지 못해.*숙박월 2026-11.*기존 자료를 유지/);
+});
+
+test("cross-month timeout restores the display without overwriting a newer draft or accepting a late response", async t => {
+  const gate = deferred(); let delayed = false;
+  const ui = mockUi({ requestTimeoutMs: 20, request: async url => {
+    if (url.endsWith("/catalogue")) return jsonResponse(optionsFixture());
+    const query = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+    return delayed && query.month === "2026-11" ? gate.promise : jsonResponse(payloadFixture(query));
+  } });
+  t.after(() => ui.controller.destroy());
+  await ui.controller.open(); delayed = true;
+  ui.field("month").value = "2026-11"; await ui.field("month").fire("change");
+  const pending = ui.controller.open({ keyword: KEYWORD, month: "2026-11", cutoffDate: "2026-10-30" }); await settle();
+  ui.field("month").value = "2026-09"; await ui.field("month").fire("change");
+  await pending;
+  assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().applied.month, "2026-10");
+  assert.equal(ui.controller.state().draft.month, "2026-09"); assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_TIMEOUT");
+  assert.match(ui.text(), /400원/); assert.match(ui.find("kma-notice")[0].textContent, /숙박월 2026-11.*완료하지 못해.*숙박월 2026-10/);
+  gate.resolve(jsonResponse(payloadFixture({ keyword: KEYWORD, month: "2026-11", cutoffDate: "2026-10-30" }))); await settle();
+  assert.equal(ui.controller.state().selection.month, "2026-10"); assert.equal(ui.controller.state().draft.month, "2026-09");
+});
+
+test("a failed shared same-scope refresh preserves local company product search and page edits", async t => {
+  const gate = deferred(); let delayed = false;
+  const ui = mockUi({ request: async url => url.endsWith("/catalogue") ? jsonResponse(optionsFixture()) : delayed ? gate.promise : jsonResponse(dashboardPayload(43)) });
+  t.after(() => ui.controller.destroy());
+  await ui.controller.open(); delayed = true; const pending = ui.controller.refresh(); await settle();
+  const joined = ui.controller.open({ ...ui.controller.state().selection, product: "dayuse", benchmarkCompanyId: "company-25", listQuery: "비교", listPage: 2, mobileView: "detail" });
+  await settle(); gate.resolve(jsonResponse({ code: "KEYWORD_MONTHLY_MEMORY_DEFERRED" }, 503)); await Promise.all([pending, joined]);
+  const state = ui.controller.state(); assert.equal(state.selection.month, "2026-10"); assert.equal(state.product, "dayuse");
+  assert.equal(state.benchmarkCompanyId, "company-25"); assert.equal(state.listQuery, "비교"); assert.equal(state.listPage, 2);
+  assert.equal(state.mobileView, "detail"); assert.equal(state.showingStored, true); assert.match(ui.text(), /메모리 보호/);
+});
+
+test("authoritative missing or stale responses for another month do not roll back or later resurrect the former month", async t => {
+  for (const status of ["missing", "stale"]) {
+    let response = null;
+    const ui = mockUi({ request: async url => {
+      if (url.endsWith("/catalogue")) return jsonResponse(optionsFixture());
+      const query = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+      return response || jsonResponse(payloadFixture(query));
+    } });
+    t.after(() => ui.controller.destroy());
+    await ui.controller.open(); response = jsonResponse({ ...payloadFixture({ keyword: KEYWORD, month: "2026-11", cutoffDate: "2026-10-30" }), status, snapshot: null, diagnostics: ["MONTH_NOT_OBSERVED"] });
+    ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await ui.apply();
+    assert.equal(ui.controller.state().selection.month, "2026-11"); assert.equal(ui.find("kma-metric").length, 0);
+    response = htmlFailure(502); await ui.controller.refresh();
+    assert.equal(ui.controller.state().selection.month, "2026-11"); assert.equal(ui.find("kma-metric").length, 0); assert.equal(ui.controller.state().showingStored, false);
+  }
+});
+
+test("cross-month authorization failures clear the prior display instead of restoring it", async t => {
+  for (const status of [401, 403]) {
+    let fail = false;
+    const ui = mockUi({ request: async url => fail ? htmlFailure(status) : jsonResponse(url.endsWith("/catalogue") ? optionsFixture() : payloadFixture(Object.fromEntries(new URL(url, "https://local.test").searchParams))) });
+    t.after(() => ui.controller.destroy());
+    await ui.controller.open(); fail = true; ui.field("month").value = "2026-11"; await ui.field("month").fire("change"); await ui.apply();
+    assert.equal(ui.controller.state().paused, true); assert.equal(ui.controller.state().selection.month, "");
+    assert.equal(ui.controller.state().draft.month, ""); assert.equal(ui.find("kma-metric").length, 0); assert.doesNotMatch(ui.text(), /400원/);
+  }
+});
+
+test("a late failed month cannot restore the former scope after a newer request clear or destroy", async t => {
+  for (const action of ["newer", "clear", "destroy"]) {
+    const gate = deferred(); let delayed = false;
+    const ui = mockUi({ request: async url => {
+      if (url.endsWith("/catalogue")) return jsonResponse(optionsFixture());
+      const query = Object.fromEntries(new URL(url, "https://local.test").searchParams);
+      return delayed && query.month === "2026-11" ? gate.promise : jsonResponse(payloadFixture(query));
+    } });
+    t.after(() => ui.controller.destroy());
+    await ui.controller.open(); delayed = true;
+    const pending = ui.controller.open({ keyword: KEYWORD, month: "2026-11", cutoffDate: "2026-10-30" }); await settle();
+    if (action === "newer") await ui.controller.open({ keyword: OTHER, month: "2026-10", cutoffDate: "2026-10-30" });
+    else if (action === "clear") ui.controller.clear(); else ui.controller.destroy();
+    const before = clone(ui.controller.state()), visibleBefore = ui.text();
+    gate.resolve(htmlFailure(502)); await pending; await settle();
+    assert.deepEqual(clone(ui.controller.state()), before, action); assert.equal(ui.text(), visibleBefore, action);
+    if (action === "newer") assert.equal(before.selection.keyword, OTHER);
+    else assert.equal(ui.find("kma-metric").length, 0, action);
+  }
 });
 
 test("same-scope refresh and repeated submit share the running GET without aborting and restarting it", async () => {
@@ -1537,6 +1644,10 @@ async function warmedDeclaredCatalogue(t) {
     handle: ({ kind, source }) => kind === "options" ? jsonResponse(declaredCacheOptions(source.revision)) : undefined });
   await warm.ready; await warm.controller.open(cacheContext()); await settle();
   assert.equal(JSON.parse(storage.getItem(CATALOGUE_KEY)).metadata.source, "immutable_prepared_result_catalogue");
+  // This fixture intentionally keeps only catalogue metadata. Settle the
+  // independent result digest before removing its entry, so it cannot rewrite
+  // a result after teardown and accidentally test the last-good F5 path.
+  await untilUi(() => warm.find("keyword-monthly-analysis")[0].dataset.reloadCacheState !== "pending");
   warm.controller.destroy(); storage.removeItem(uiModule.RESULT_KEY);
   return { storage, session };
 }
@@ -2324,6 +2435,16 @@ test("an authoritative401 after cached F5 immediately removes the saved financia
   const saved = await warmLastGoodResult(t), ui = cacheUi(t, { ...saved, handle: ({ kind }) => kind === "version" ? htmlFailure(401) : undefined });
   await ui.ready; await ui.controller.open(); assert.equal(ui.find("kma-dashboard-metrics").length, 0); assert.equal(ui.controller.state().paused, true);
   assert.equal(saved.storage.getItem(uiModule.RESULT_KEY), null); assert.equal(saved.storage.getItem(SELECTION_KEY), null);
+});
+
+test("an expired saved result cannot become failure recovery when a fresh F5 query fails", async t => {
+  const saved = await warmLastGoodResult(t), entry = JSON.parse(saved.storage.getItem(uiModule.RESULT_KEY));
+  entry.expiresAt = Date.now() - 1; saved.storage.setItem(uiModule.RESULT_KEY, JSON.stringify(entry));
+  const ui = cacheUi(t, { ...saved, handle: ({ kind }) => kind === "data" ? htmlFailure(502) : undefined });
+  await ui.ready; await ui.controller.open();
+  assert.equal(ui.find("kma-dashboard-metrics").length, 0); assert.equal(ui.controller.state().showingStored, false);
+  assert.equal(ui.controller.state().errorCode, "KEYWORD_MONTHLY_HTTP_502"); assert.equal(saved.storage.getItem(uiModule.RESULT_KEY), null);
+  assert.notEqual(ui.find("keyword-monthly-analysis")[0].dataset.catalogueSource, "session_last_good_pending_version");
 });
 test("the new catalogue contract sends prepared-only on initial data and never needs strict legacy options", async t => {
   const ui = cacheUi(t, { session: liveSession(), storage: memorySelectionStorage(), handle: ({ kind }) => kind === "options"

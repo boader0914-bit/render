@@ -547,6 +547,11 @@
     }
     function rememberScope() {
       if (keyword && month) { const key = scopeKey(); scopes = [...scopes.filter(row => row.key !== key), { key, cutoffDate, cutoffMode, product, companyId: benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded } }].slice(-24); }
+      // A same-scope shared refresh must keep local product/company/list edits.
+      // A request for another scope must not overwrite the displayed scope's view.
+      if (pendingLoad?.recovery && !pendingLoad.changesSelection && sameScope(pendingLoad.recovery.payload, selected())) {
+        Object.assign(pendingLoad.recovery, recoveryView());
+      }
       persistView();
     }
     function changeScope(word, stayMonth) {
@@ -1290,6 +1295,40 @@
       persistView(); return true;
     }
     const sameScope = (value, selection) => value?.request?.keyword === selection.keyword && value?.request?.month === selection.month && value?.request?.cutoffDate === selection.cutoffDate;
+    function recoveryView() {
+      return { selection: selected(), applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId,
+        listQuery, listPage, mobileView, expanded: { ...expanded }, scopes: scopes.map(row => ({ ...row, expanded: { ...row.expanded } })),
+        companyChoices, catalog, restoredLastGood };
+    }
+    function displayedRecovery() {
+      if (!payload || payload !== lastGoodPayload || !sameScope(payload, selected())
+        || !buildViewModel(payload, selected(), catalog?.currentMonth || kstDay(now()).slice(0, 7)).usable) return null;
+      return { ...recoveryView(), payload };
+    }
+    function requestedSelection(context, fallback = selected()) {
+      return { keyword: safeText(context?.keyword, 300, false) ? context.keyword : fallback.keyword,
+        month: MONTH.test(context?.month || "") ? context.month : fallback.month,
+        cutoffDate: dateValid(context?.cutoffDate) ? context.cutoffDate : fallback.cutoffDate };
+    }
+    function restoreDisplayed(task, editRevision) {
+      const saved = task.recovery;
+      if (!saved || saved.payload !== lastGoodPayload || !buildViewModel(saved.payload, saved.selection, saved.catalog?.currentMonth).usable) return;
+      const attempted = task.requested || requestedSelection(task.context, saved.selection);
+      // Only an unchanged draft may be initialized from explicit navigation.
+      // Edits made while the request waited remain the user's current draft.
+      if (task.changesSelection && editRevision === draftRevision) {
+        draft = { ...attempted }; draftCutoffMode = requestedCutoffMode(task.context || {}, draftCutoffMode);
+      }
+      ({ keyword, month, cutoffDate } = saved.selection);
+      catalog = saved.catalog; payload = saved.payload; appliedSelection = saved.applied ? { ...saved.applied } : null;
+      cutoffMode = saved.cutoffMode; product = saved.product; benchmarkCompanyId = saved.benchmarkCompanyId;
+      listQuery = saved.listQuery; listPage = saved.listPage; mobileView = saved.mobileView; expanded = { ...saved.expanded };
+      scopes = saved.scopes.map(row => ({ ...row, expanded: { ...row.expanded } })); companyChoices = saved.companyChoices; restoredLastGood = saved.restoredLastGood;
+      if (!sameScope(saved.payload, attempted)) {
+        restoreNotice = `${attempted.keyword} / 숙박월 ${attempted.month} / 관측 마감 ${attempted.cutoffDate} 조회를 완료하지 못해, ${keyword} / 숙박월 ${month} / 관측 마감 ${cutoffDate}의 기존 자료를 유지합니다. 입력 초안은 적용되지 않았습니다.`;
+      }
+      persistView();
+    }
     function loadKey(context) {
       const mode = requestedCutoffMode(context || {});
       return JSON.stringify([context?.keyword ?? keyword, context?.month ?? month, mode === "auto" ? "auto" : context?.cutoffDate ?? cutoffDate]);
@@ -1365,9 +1404,10 @@
         return pendingLoad.promise;
       }
       const editRevision = draftRevision, changesSelection = context && ["keyword", "month", "cutoffDate"].some(key => Object.hasOwn(context, key) && context[key] !== selected()[key]);
+      const recovery = displayedRecovery() || pendingLoad?.recovery || null;
       const overwriteDraft = applyInput || !draftHasChanges() || changesSelection;
       cancel(); resumeNeeded = false; resumeRequest = null; payload = !changesSelection && sameScope(lastGoodPayload, selected()) ? lastGoodPayload : null; error = errorCode = ""; loading = true; phase = "data"; active = Abort ? new Abort() : null; const token = sequence;
-      const task = { key, context, applyInput, restored, promise: null }; pendingLoad = task;
+      const task = { key, context, applyInput, restored, recovery, changesSelection, promise: null }; pendingLoad = task;
       task.promise = (async () => {
         try {
           if (await restoreLastGoodInitial(context, task, token, editRevision, overwriteDraft)) return;
@@ -1379,14 +1419,14 @@
           if (!catalog.keywords.some(row => row.keyword === keyword && row.stayMonths.includes(month))) { error = "저장 목록에 있는 정확한 검색어와 실제 관측 숙박월을 선택하세요."; errorCode = "KEYWORD_MONTHLY_SELECTION_INVALID"; return; }
           if (!dateValid(cutoffDate) || cutoffDate > catalog.currentDay) { error = "관측 마감일은 오늘 이하의 유효한 날짜로 선택하세요."; errorCode = "KEYWORD_MONTHLY_SELECTION_INVALID"; return; }
           payload = sameScope(lastGoodPayload, selected()) ? lastGoodPayload : null;
-          appliedSelection = selected(); task.key = loadKey(); phase = "data"; rememberScope(); render();
+          appliedSelection = selected(); task.requested = selected(); task.key = loadKey(); phase = "data"; rememberScope(); render();
           const params = new URLSearchParams(appliedSelection); const value = await get(`/api/keyword-monthly?${params}`, token, active, timeoutMs, catalog.metadataOnly === true, "data");
           if (value && current(token)) {
             payload = value;
             if (buildViewModel(value, selected(), catalog.currentMonth).usable) { lastGoodPayload = value; restoredLastGood = false; persistLastGood(value); }
             else { if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null; lastGoodStorage.invalidateScope(selected()); reloadCacheState = "none"; reloadCacheReasonCode = ""; }
           }
-        } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); } }
+        } catch (cause) { if (current(token)) { errorCode = /^KEYWORD_MONTHLY_[A-Z0-9_]{1,75}$/.test(cause?.code || "") ? cause.code : "KEYWORD_MONTHLY_NETWORK_ERROR"; error = failureLabel(errorCode === cause?.code ? cause : failure(errorCode)); restoreDisplayed(task, editRevision); } }
         finally { if (pendingLoad === task) pendingLoad = null; if (token === sequence && !destroyed) { loading = false; phase = ""; active = null; autoDueAt = now() + autoIntervalMs; if (canCheckAutomatically()) autoText = "새 준비 결과가 있으면 자동으로 표시합니다."; render(); await armAutomatic(); } }
       })();
       return task.promise;

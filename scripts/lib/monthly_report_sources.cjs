@@ -17,6 +17,7 @@ const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_
 const { assertCooperativeWorkActive, isCooperativeWorkYield, setCooperativeWorkPhase, setCooperativeWorkRevision } = require("./cooperative_work_checkpoint.cjs");
 const { markSavedMonthlyJsonSource } = require("./monthly_snapshot_owned_inputs.cjs");
 const { createIndustrySourceCandidateCache, witnessInputsMatch } = require("./industry_source_candidate_cache.cjs");
+const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 function sourceError() { return Object.assign(new Error("월간 집계에 필요한 저장자료를 읽지 못했습니다. 원본 상태를 확인해 주세요."), { statusCode: 503, code: "MONTHLY_SOURCE_UNAVAILABLE" }); }
@@ -87,10 +88,11 @@ async function projectMonthlyCatalog({ preparedCompanies, runs, regionMaster, ca
   return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, ownedSavedJsonObservations = false, preparedCatalogProvider = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, ownedSavedJsonObservations = false, streamIndustryObservations = false, preparedCatalogProvider = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
   if (typeof ownedSavedJsonObservations !== "boolean") throw new TypeError("Owned saved-JSON observations opt-in must be boolean");
+  if (typeof streamIndustryObservations !== "boolean" || streamIndustryObservations && typeof recalculateCompanyObservations?.consumeIndustryObservations !== "function") throw new TypeError("Industry streaming requires an explicit recalculation consumer");
   if (ownedSavedJsonObservations && !useSourceReadValidationBoundary) throw new TypeError("Owned saved-JSON observations require a verified source-read boundary");
   if (preparedCatalogProvider !== null && ["readCatalog", "readCompanyCatalog", "withCatalog", "withCompanyCatalog", "stats"]
     .some(method => typeof preparedCatalogProvider?.[method] !== "function")) throw new TypeError("Prepared company catalog provider is incomplete");
@@ -257,6 +259,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
   }
   async function readSourceData(request, includeCatalog, options, data, assertAtReturn = true) {
     const { includeContext = true } = options, checkpoint = checkpointFor(options);
+    const phases = getAnalyticalPhaseDiagnostics();
     setCooperativeWorkPhase(20);
     // This capability is private to one serial source read, not a timed or
     // global freshness cache. The final fresh assert (here or in the owning
@@ -330,6 +333,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       observationOrigins.set(key, origin);
     }
     let malformedHistoryLines;
+    await phases.measure("source_history", {}, async () => {
     if (!observationIndex) malformedHistoryLines = await readHistory(row => addRow(row), checkpoint);
     else {
       try {
@@ -361,6 +365,7 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         if (!Number.isSafeInteger(malformedHistoryLines) || malformedHistoryLines < 0) throw sourceError();
       } catch { throw sourceError(); }
     }
+    });
     setCooperativeWorkPhase(30);
     const rankObservations = [], diagnosticRankRows = [];
     let companyIndex = 0;
@@ -420,16 +425,33 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
       try {
         setCooperativeWorkPhase(40);
         await checkpoint();
-        const recalculated = await recalculateCompanyObservations(request, data, { checkpoint,
-          ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
+        const streaming = streamIndustryObservations && request.type === "industry";
+        const reading = { checkpoint, ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) };
+        let consumerActive = true, received = 0;
+        let recalculated;
+        try {
+          recalculated = await phases.measure("source_recalculation", {}, async () => {
+            const rows = streaming
+              ? await recalculateCompanyObservations.consumeIndustryObservations(request, data, { ...reading, onObservation: row => {
+                if (!consumerActive || !row || typeof row !== "object" || Array.isArray(row)) throw sourceError();
+                addRow(row, false, true, "saved_run_recalculation"); received++;
+              } })
+              : await recalculateCompanyObservations(request, data, reading);
+            return rows;
+          });
+        } finally { consumerActive = false; }
         if (!Array.isArray(recalculated) || recalculated.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw sourceError();
+        if (streaming && (recalculated.length !== 0 || recalculated.streamedObservationCount !== received)) throw sourceError();
         if (Array.isArray(recalculated.productCapacityEvidence)) productCapacityEvidence = recalculated.productCapacityEvidence;
         if (Array.isArray(recalculated.productCapacityWarnings)) productCapacityWarnings = recalculated.productCapacityWarnings;
         if (recalculated.persistedProductCapacityInput) persistedProductCapacityInput = recalculated.persistedProductCapacityInput;
         if (/^[a-f0-9]{64}$/.test(recalculated.productCapacityEvidenceRevision || "")) productCapacityEvidenceRevision = recalculated.productCapacityEvidenceRevision;
-        for (let index = 0; index < recalculated.length; index++) {
+        // Preserve the historical transfer checkpoint count after production.
+        // The opted-in path has already replaced rows in the same Map order;
+        // a rejected checkpoint still prevents the entire source publishing.
+        for (let index = 0; index < (streaming ? received : recalculated.length); index++) {
           if (index % 256 === 0) await checkpoint();
-          addRow(recalculated[index], false, true, "saved_run_recalculation");
+          if (!streaming) addRow(recalculated[index], false, true, "saved_run_recalculation");
         }
       } catch { throw sourceError(); }
     }
@@ -437,8 +459,8 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
     if (readSavedProductRecoveries !== null && request.type !== "keyword") {
       try {
         setCooperativeWorkPhase(50);
-        const recovered = await readSavedProductRecoveries(request, data, { checkpoint, productCapacityEvidence, productCapacityWarnings,
-          ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) });
+        const recovered = await phases.measure("source_saved_recovery", {}, () => readSavedProductRecoveries(request, data, { checkpoint, productCapacityEvidence, productCapacityWarnings,
+          ...(sourceReadValidationBoundary ? { sourceReadValidationBoundary } : {}) }));
         if (!Array.isArray(recovered?.observations) || !Array.isArray(recovered?.warnings)) throw sourceError();
         savedProductRecoveries = recovered.observations;
         if (Array.isArray(recovered.productCapacityEvidence)) productCapacityEvidence = recovered.productCapacityEvidence;

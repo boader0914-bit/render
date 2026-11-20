@@ -212,7 +212,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     if (result.value.runId !== id || !Array.isArray(result.value.companies)) throw unavailable();
     return result.value;
   }
-  async function recalculateCompanyObservations(request, data, { checkpoint = async () => {}, sourceReadValidationBoundary = null } = {}) {
+  async function recalculateOwned(request, data, { checkpoint = async () => {}, sourceReadValidationBoundary = null } = {}, onObservation = null) {
     const boundary = useSourceReadValidationBoundary ? sourceReadValidationBoundary : null;
     if (boundary && (boundary.owner !== data._companySource || boundary.revision !== data._companySource?.revision
       || typeof boundary.revision !== "string" || !boundary.revision || typeof boundary.isActive !== "function" || !boundary.isActive())) throw unavailable();
@@ -258,7 +258,7 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
     const productCapacityWarnings = persisted.warnings;
     const orderedTargets = recalculateAllInventory ? [...targetsByRun].sort(([a], [b]) => Date.parse(eligibleRuns.get(a).collectedAt) - Date.parse(eligibleRuns.get(b).collectedAt) || a.localeCompare(b)) : targetsByRun;
     setCooperativeWorkPhase(42);
-    let runUnitIndex = 0;
+    let runUnitIndex = 0, streamedObservationCount = 0;
     for (const [id, companies] of orderedTargets) {
       setCooperativeWorkPhase(42, ++runUnitIndex);
       await checkpoint();
@@ -286,7 +286,18 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
         const rows = cached ? entry.rows : correctedRows(stored, originalRun, correctedCompany, productCapacityEvidence, productCapacityWarnings);
         for (const row of rows) {
           const stayDate = dayKey(row?.stayDate || row?.date);
-          if (stayDate >= monthStart && stayDate <= monthEnd && (request.type !== "keyword" || row.keyword === request.targetId)) result.push(row);
+          if (stayDate >= monthStart && stayDate <= monthEnd && (request.type !== "keyword" || row.keyword === request.targetId)) {
+            if (onObservation) {
+              // The explicit industry consumer owns this row before the next
+              // one is produced. No second month-sized result array survives
+              // beside the source reader's already-retained observations Map.
+              // The operating sink is synchronous (no per-row await). Generic
+              // consumers may return a promise, which must settle before reuse.
+              const consumed = onObservation(row);
+              if (consumed && typeof consumed.then === "function") await consumed;
+              streamedObservationCount++;
+            } else result.push(row);
+          }
         }
       }
     }
@@ -299,8 +310,19 @@ function createMonthlyCompanyRecalculation({ loadRun, applyCompanyManualCorrecti
       Object.defineProperty(result, "productCapacityEvidenceRevision", { value: productCapacityEvidenceRevision(productCapacityEvidence, scopedCompanyIds,
         new Date(Date.parse(`${cutoff}T23:59:59.999+09:00`)).toISOString(), productCapacityWarnings), enumerable: false });
     }
+    if (onObservation) Object.defineProperty(result, "streamedObservationCount", { value: streamedObservationCount, enumerable: false });
     return result;
   }
+  async function recalculateCompanyObservations(request, data, options) {
+    // Existing company/region/keyword and generic callers keep the complete
+    // historical array contract. Streaming requires a separate explicit call.
+    return recalculateOwned(request, data, options);
+  }
+  recalculateCompanyObservations.consumeIndustryObservations = (request, data, options = {}) => {
+    if (request?.type !== "industry" || typeof options.onObservation !== "function") throw new TypeError("An industry observation consumer is required");
+    const { onObservation, ...reading } = options;
+    return recalculateOwned(request, data, reading, onObservation);
+  };
   recalculateCompanyObservations.stats = () => ({ ...metrics });
   return recalculateCompanyObservations;
 }
