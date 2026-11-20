@@ -76,20 +76,21 @@ function createKeywordMonthlySavedReadService({ saved, runWork, acquirePermit, a
   }
   // Publication detection is a bounded pointer-only status read. It owns no
   // saved graph permit and never falls back to a projection/source calculation.
-  async function version(){
+  const assertMetadataActive=signal=>{if(signal?.aborted)throw fault("KEYWORD_MONTHLY_QUERY_ABORTED");};
+  async function version({signal}={}){
     if(typeof saved.version!=="function")throw fault("KEYWORD_MONTHLY_VERSION_UNAVAILABLE");
-    const operation=()=>saved.version();
+    const operation=async()=>{assertMetadataActive(signal);const result=await saved.version({signal});assertMetadataActive(signal);return result;};
     return typeof diagnostics?.metadata==="function"?diagnostics.metadata(operation)():operation();
   }
-  async function catalogue(){
+  async function catalogue({signal}={}){
     if(typeof saved.catalogue!=="function")throw fault("KEYWORD_MONTHLY_CATALOGUE_UNAVAILABLE");
     // Explicit bounded metadata only: no graph cohort, execution-loan claim,
     // legacy fallback or source reconstruction. Memory and conversion holds
     // remain authoritative before and after the immutable catalogue read.
     const guard=()=>typeof diagnostics?.measure==="function"?diagnostics.measure("conversion_guard",assertReadAdmission):assertReadAdmission();
     const operation=async()=>{
-      await guard();
-      const read=async()=>{await guard();const result=await saved.catalogue();await guard();return result;};
+      assertMetadataActive(signal);await guard();assertMetadataActive(signal);
+      const read=async()=>{assertMetadataActive(signal);await guard();assertMetadataActive(signal);const result=await saved.catalogue({signal});assertMetadataActive(signal);await guard();assertMetadataActive(signal);return result;};
       return typeof diagnostics?.admission==="function"?diagnostics.admission("memory_admission",runMemoryAdmission,read):runMemoryAdmission(read);
     };
     return typeof diagnostics?.metadata==="function"?diagnostics.metadata(operation)():operation();

@@ -104,12 +104,13 @@ test("conversion admission is rechecked after catalogue serialization before sen
   const result=await http(svc,{readAdmission:async()=>++checks===1?{allowed:true,reasonCode:null}:{allowed:false,reasonCode:"KEYWORD_INCREMENTAL_PREPARED_CONVERSION_ACTIVE"}})();
   assert.equal(result.status,503);assert.equal(result.body.code,"KEYWORD_MONTHLY_PREPARED_CONVERSION_ACTIVE");assert.equal(checks,2);
 });
-test("catalogue coalesces one bounded metadata flight and does not admit a second status operation",async()=>{
-  let calls=0,release,entered;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
-  const svc={options:async()=>{},analyze:async()=>{},version:async()=>({status:"available"}),catalogue:async()=>{calls++;entered();await gate;return {status:"available",metadataOnly:true,keywords:[]};}};
+test("catalogue coalesces one bounded metadata flight and queues the next metadata producer until real settlement",async()=>{
+  let calls=0,versionCalls=0,release,entered;const started=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+  const svc={options:async()=>{},analyze:async()=>{},version:async()=>{versionCalls++;return {status:"available"};},catalogue:async()=>{calls++;entered();await gate;return {status:"available",metadataOnly:true,keywords:[]};}};
   const api=http(svc),first=api(),second=api();await started;
-  const other=await api("/api/keyword-monthly/version");assert.equal(other.status,503);assert.equal(other.body.code,"KEYWORD_MONTHLY_QUERY_BUSY");
-  release();const results=await Promise.all([first,second]);assert.equal(calls,1);assert.deepEqual(results.map(row=>row.status),[200,200]);
+  let otherSettled=false;const other=api("/api/keyword-monthly/version").then(value=>{otherSettled=true;return value;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(otherSettled,false);assert.equal(versionCalls,0);
+  release();const results=await Promise.all([first,second,other]);assert.equal(calls,1);assert.equal(versionCalls,1);assert.deepEqual(results.map(row=>row.status),[200,200,200]);
 });
 
 test("actual strict catalogue reads expose bounded metadata phases without financial work or extra file opens",async t=>{

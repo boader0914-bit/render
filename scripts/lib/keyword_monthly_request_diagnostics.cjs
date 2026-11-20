@@ -3,7 +3,7 @@
 const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
 const { keywordMonthlyGuardDiagnosticFromError } = require("./keyword_monthly_guard_diagnostics.cjs");
-const { METADATA_PHASES, withKeywordMonthlyMetadataMeasure } = require("./keyword_monthly_metadata_diagnostics.cjs");
+const { METADATA_PHASES, METADATA_FS_PHASES, withKeywordMonthlyMetadataMeasure } = require("./keyword_monthly_metadata_diagnostics.cjs");
 const ROUTES = new Set(["options", "catalogue", "data", "refresh_status", "version", "unknown"]);
 const PHASES = new Set(["admission", "read", "serialize", "refresh_status", ...METADATA_PHASES]);
 const LIFECYCLE_EVENTS = new Set(["owner", "shared", "waiter_timed_out", "waiter_aborted", "operation_started", "operation_settled"]);
@@ -42,6 +42,7 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
     return { traceId: trace.traceId, route: trace.route, handlerFinished: trace.handlerFinished,
       elapsedMs: trace.elapsedMs, responseStatus: trace.responseStatus, responseCode: trace.responseCode,
       sendInvoked: trace.sendInvoked, phases: { ...trace.phases }, phaseCounts: { ...trace.phaseCounts },
+      metadataFs: Object.fromEntries(Object.entries(trace.metadataFs).map(([key, value]) => [key, { ...value }])),
       readGuard: trace.readGuard ? copy(trace.readGuard) : null,
       lifecycleRole: trace.lifecycleRole, lifecycleWaiterOutcome: trace.lifecycleWaiterOutcome,
       lifecycleOperationStarted: trace.lifecycleOperationStarted, lifecycleOperationFinished: trace.lifecycleOperationFinished,
@@ -59,10 +60,14 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
       taskTimingObserved: trace.taskTimingObserved, taskTimingObservedAfterHandler: trace.taskTimingObservedAfterHandler,
       task: trace.task ? { ...trace.task } : null };
   }
+  function trimRecords() {
+    try { while (records.length > maxRecords || Buffer.byteLength(JSON.stringify(records.map(view))) > 64 * 1024 - 1024) records.shift(); }
+    catch { counters.observerErrors++; }
+  }
   async function run(route, operation) {
     if (!ROUTES.has(route) || typeof operation !== "function") throw new TypeError("Invalid monthly diagnostic route");
     const trace = { traceId: crypto.randomBytes(12).toString("hex"), route, startedAt: clock(), handlerFinished: false,
-      elapsedMs: null, responseStatus: null, responseCode: null, sendInvoked: false, phases: {}, phaseCounts: {}, readGuard: null,
+      elapsedMs: null, responseStatus: null, responseCode: null, sendInvoked: false, phases: {}, phaseCounts: {}, metadataFs: {}, readGuard: null,
       lifecycleRole: null, lifecycleWaiterOutcome: null, lifecycleOperationStarted: false, lifecycleOperationFinished: false,
       metadataStarted: false, metadataFinished: false, metadataStartedAt: null, metadataFinishedAt: null,
       metadataStartedAfterHandler: false, metadataFinishedAfterHandler: false, metadataOutcome: "not_observed", metadataErrorCode: null, metadataReadGuard: null,
@@ -79,7 +84,7 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
         // shared flight. It never asserts that no other caller's work ran.
         trace.workStateAtHandlerEnd = !trace.workStarted ? "not_observed" : trace.workFinished ? "finished" : "running";
         trace.workElapsedAtHandlerEndMs = trace.workStarted ? elapsed(trace.workStartedAt,trace.workFinishedAt ?? trace.handlerFinishedAt) : null;
-        records.push(trace); if (records.length > maxRecords) records.shift(); emit("handler_end", view(trace));
+        records.push(trace); trimRecords(); emit("handler_end", view(trace));
       }
     });
   }
@@ -152,7 +157,12 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
       finally { if (trace) { trace.metadataFinished = true; trace.metadataFinishedAt = clock(); trace.metadataFinishedAfterHandler = trace.handlerFinished;
         trace.metadataOutcome = failed ? "failed" : "completed"; counters.metadataFinished++;
         if (trace.handlerFinished) counters.metadataFinishedAfterHandler++;
-        emit("metadata_end", view(trace)); } }
+        trimRecords(); emit("metadata_end", view(trace)); } }
+    }, (phase, ms) => {
+      if (!trace || !METADATA_FS_PHASES.includes(phase) || duration(ms) === null) return;
+      const prior = trace.metadataFs[phase] || { count: 0, wallMs: 0 };
+      trace.metadataFs[phase] = { count: Math.min(1000000, prior.count + 1), wallMs: duration(prior.wallMs + ms) };
+      if (trace.handlerFinished) trimRecords();
     });
   }
   function lifecycleOptions() {
@@ -195,7 +205,8 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
   // async context. It is observational only and never creates a trace.
   const currentTraceId = () => storage.getStore()?.traceId ?? null;
   return Object.freeze({ run, measure, measureSync, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response, currentTraceId,
-    status: () => ({ ...counters, maxRecords, maxEventsPerWindow, windowMs, recent: records.map(trace => view(trace)) }) });
+    status: () => { trimRecords(); return { ...counters, maxRecords, maxEventsPerWindow, windowMs, byteLimit:64*1024,
+      metadataFsInterpretation:"Fixed scalar wall-time sums only; path_check includes queue and filesystem phases, concurrent spans overlap and must not be added. No OS I/O or threadpool attribution.", recent: records.map(trace => view(trace)) }; } });
 }
 
 module.exports = { createKeywordMonthlyRequestDiagnostics };

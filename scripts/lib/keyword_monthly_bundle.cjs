@@ -10,7 +10,8 @@ const { createKeywordMonthlyAnalysis, createKeywordMonthlyOptionsIndexReader, KE
 const { getAnalyticalPhaseDiagnostics } = require("./analytical_phase_runtime.cjs");
 const { runKeywordMonthlyMemoryAdmission, keywordMonthlyAllocationCheckpoint } = require("./keyword_monthly_memory_admission.cjs");
 const { keywordMonthlyGuardDiagnosticFromError } = require("./keyword_monthly_guard_diagnostics.cjs");
-const { measureKeywordMonthlyMetadata } = require("./keyword_monthly_metadata_diagnostics.cjs");
+const { measureKeywordMonthlyMetadata, captureKeywordMonthlyMetadataFsObserver,
+  beginKeywordMonthlyMetadataFs, measureKeywordMonthlyMetadataFs } = require("./keyword_monthly_metadata_diagnostics.cjs");
 const { calculationFingerprint, queryId, validatePreparedDescriptor, encodePreparedResult, decodePreparedResult,
   KEYWORD_MONTHLY_PREPARED_RESULT_LIMITS: RESULT_LIMITS } = require("./keyword_monthly_prepared_results.cjs");
 const measureDefault = async (phase, metadata, operation) => {
@@ -49,7 +50,13 @@ const PREVALIDATION_KIND = "keyword_monthly_bundle_semantic_prevalidation_v1", P
 const inputIdentity = inputs => hash(JSON.stringify(inputs.map(input => ({ directory: path.resolve(input.directory), ...(input.exposeScopes === undefined ? {} : { exposeScopes: input.exposeScopes }) }))));
 function fault(code, statusCode = 503) { return Object.assign(new Error(code), { code, statusCode }); }
 function ensure(value, code, statusCode = 503) { if (!value) throw fault(code, statusCode); }
-async function checkPath(file, directory = false) {
+function assertMetadataActive(signal) { if (signal?.aborted) throw fault("KEYWORD_MONTHLY_QUERY_ABORTED"); }
+async function checkPath(file, directory = false, signal) {
+  assertMetadataActive(signal);
+  const observer = signal ? captureKeywordMonthlyMetadataFsObserver() : null;
+  const observed = (phase, operation) => observer ? measureKeywordMonthlyMetadataFs(phase, operation, observer) : operation();
+  const endCheck = beginKeywordMonthlyMetadataFs("path_check", observer);
+  try {
   const absolute = path.resolve(file), root = path.parse(absolute).root, ancestors = []; let current = root;
   for (const part of absolute.slice(root.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part); ancestors.push(current);
@@ -57,27 +64,49 @@ async function checkPath(file, directory = false) {
   // Recheck every ancestor on every call. Only independent path pairs overlap;
   // each pair still performs lstat then realpath. All queued checks settle on
   // failure too, before the caller may open/parse a file or release its owner.
-  const completed = await Promise.allSettled(ancestors.map(file => pathCheck(async () => {
-    const stat = await fs.lstat(file);
-    ensure(!stat.isSymbolicLink() && samePath(await fs.realpath(file), file) && (file === absolute || stat.isDirectory()), "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+  const completed = await Promise.allSettled(ancestors.map(file => {
+    const endQueue = beginKeywordMonthlyMetadataFs("path_queue", observer);
+    return pathCheck(async () => {
+    endQueue();
+    assertMetadataActive(signal);
+    const stat = await observed("lstat", () => fs.lstat(file));
+    assertMetadataActive(signal);
+    ensure(!stat.isSymbolicLink(), "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+    const real = await observed("realpath", () => fs.realpath(file)); assertMetadataActive(signal);
+    ensure(samePath(real, file) && (file === absolute || stat.isDirectory()), "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
     return { file, stat };
-  })));
+  }); }));
+  assertMetadataActive(signal);
   const failure = completed.find(result => result.status === "rejected"); if (failure) throw failure.reason;
-  const stat = await pathCheck(()=>fs.lstat(absolute)); ensure(directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1, "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
+  const endQueue = beginKeywordMonthlyMetadataFs("path_queue", observer);
+  const stat = await pathCheck(()=>{ endQueue(); assertMetadataActive(signal); return observed("lstat", () => fs.lstat(absolute)); }); assertMetadataActive(signal);
+  ensure(directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1, "KEYWORD_MONTHLY_BUNDLE_UNSAFE_PATH");
   if (completed.length) ensure(sameStat(completed.at(-1).value.stat, stat), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
   pathProofs.set(stat, completed.slice(0, -1).map(({ value }) => ({ file: value.file, dev: value.stat.dev, ino: value.stat.ino, mode: value.stat.mode })));
   return stat;
+  } finally { endCheck(); }
 }
-async function readFile(file, maximum) {
-  const before = await checkPath(file); ensure(before.size > 0 && before.size <= maximum, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
-  const handle = await fs.open(file, C.O_RDONLY | (C.O_NOFOLLOW || 0));
+async function readFile(file, maximum, signal) {
+  const observer = signal ? captureKeywordMonthlyMetadataFsObserver() : null;
+  const observed = (phase, operation) => observer ? measureKeywordMonthlyMetadataFs(phase, operation, observer) : operation();
+  const before = await checkPath(file, false, signal); ensure(before.size > 0 && before.size <= maximum, "KEYWORD_MONTHLY_BUNDLE_SIZE_LIMIT");
+  assertMetadataActive(signal);
+  const handle = await observed("open", () => fs.open(file, C.O_RDONLY | (C.O_NOFOLLOW || 0)));
+  let result;
   try {
-    ensure(sameStat(before, await handle.stat()), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    assertMetadataActive(signal);
+    ensure(sameStat(before, await observed("fstat", () => handle.stat())), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    assertMetadataActive(signal);
     const bytes = Buffer.alloc(before.size + 1); let offset = 0;
-    while (offset < bytes.length) { const result = await handle.read(bytes, offset, bytes.length - offset, offset); if (!result.bytesRead) break; offset += result.bytesRead; }
-    ensure(offset === before.size && sameStat(before, await handle.stat()) && sameStat(before, await checkPath(file)), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-    const buffer = bytes.subarray(0, offset); return { file, bytes: buffer, size: buffer.length, sha256: hash(buffer), stamp: before };
-  } finally { await handle.close(); }
+    while (offset < bytes.length) { assertMetadataActive(signal); const read = await observed("read", () => handle.read(bytes, offset, bytes.length - offset, offset)); assertMetadataActive(signal); if (!read.bytesRead) break; offset += read.bytesRead; }
+    ensure(offset === before.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    const afterHandle = await observed("fstat", () => handle.stat()); assertMetadataActive(signal);
+    ensure(sameStat(before, afterHandle), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    const afterPath = await checkPath(file, false, signal); assertMetadataActive(signal);
+    ensure(sameStat(before, afterPath), "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+    const buffer = bytes.subarray(0, offset); result = { file, bytes: buffer, size: buffer.length, sha256: hash(buffer), stamp: before };
+  } finally { await observed("close", () => handle.close()); }
+  assertMetadataActive(signal); return result;
 }
 async function exactDirectoryEntries(directory, expected, maximum) {
   const before = await checkPath(directory, true), entries = await fs.readdir(directory, { withFileTypes: true });
@@ -117,9 +146,9 @@ function validateCatalog(value) {
   }
   return value;
 }
-async function loadBundle(directory) {
-  const pointerRead = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes), pointer = validatePointer(json(pointerRead));
-  const generationDir = path.join(directory, "generations", pointer.generation), catalogRead = await readFile(path.join(generationDir, "catalog.json"), LIMITS.catalogBytes);
+async function loadBundle(directory, signal) {
+  const pointerRead = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes, signal), pointer = validatePointer(json(pointerRead));
+  const generationDir = path.join(directory, "generations", pointer.generation), catalogRead = await readFile(path.join(generationDir, "catalog.json"), LIMITS.catalogBytes, signal);
   ensure(catalogRead.sha256 === pointer.catalogSha256 && catalogRead.size === pointer.catalogBytes, "KEYWORD_MONTHLY_BUNDLE_CATALOG_MISMATCH");
   return { pointerRead, pointer, generationDir, catalog: validateCatalog(json(catalogRead)), catalogRead };
 }
@@ -199,28 +228,31 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
     return { ...basic(), status: "needs_verification", ...(request ? { request, snapshot: null } : { keywords: [] }), diagnostics: [safeError(error)], provenance: null, activity: null, latestAttempt: null, lastSuccessfulAttempt: null,
       ...(readGuard ? { readGuard } : {}) };
   };
-  async function version() {
+  async function version({signal}={}) {
     const common = { schemaVersion: 1, currentDay: basic().currentDay, readOnly: true, networkAttempted: false, originalFreshnessVerified: false };
     try {
       // This is a publication notification only. Never open the catalog,
       // indexes, results, original sources or a legacy analysis from this path.
-      const file = path.join(directory, "current.json"), first = await measureKeywordMonthlyMetadata("version_open",()=>readFile(file, LIMITS.pointerBytes)), pointer = validatePointer(json(first));
+      assertMetadataActive(signal);
+      const file = path.join(directory, "current.json"), first = await measureKeywordMonthlyMetadata("version_open",()=>readFile(file, LIMITS.pointerBytes, signal)), pointer = validatePointer(json(first));
       await measureKeywordMonthlyMetadata("version_revalidate",async()=>{
-        const final = await readFile(file, LIMITS.pointerBytes); validatePointer(json(final));
+        const final = await readFile(file, LIMITS.pointerBytes, signal); validatePointer(json(final));
         ensure(final.sha256 === first.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
       });
       return { ...common, status: "available", revision: first.sha256, generation: pointer.generation, publishedAt: pointer.publishedAt };
     } catch (error) {
+      if(error?.code==="KEYWORD_MONTHLY_QUERY_ABORTED")throw error;assertMetadataActive(signal);
       return { ...common, status: "needs_verification", revision: null, generation: null, publishedAt: null,
         diagnostics: [error?.code === "ENOENT" ? "KEYWORD_MONTHLY_BUNDLE_POINTER_MISSING" : safeError(error)] };
     }
   }
-  async function catalogue() {
+  async function catalogue({signal}={}) {
     // A selector is a declaration in the immutable prepared-result catalog,
     // not verification of the financial result or its partition indexes. This
     // bounded metadata capability must never enter a legacy/source calculator.
     try {
-      const bundle = await measureKeywordMonthlyMetadata("catalogue_open",()=>loadBundle(directory)), current = basic();
+      assertMetadataActive(signal);
+      const bundle = await measureKeywordMonthlyMetadata("catalogue_open",()=>loadBundle(directory, signal)), current = basic();
       ensure(bundle.catalog.schemaVersion === 2, "KEYWORD_MONTHLY_CATALOGUE_NOT_PREPARED");
       const result=await measureKeywordMonthlyMetadata("catalogue_project",()=>{
       const rows = new Map(), cutoffSets = new Map();
@@ -259,9 +291,10 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
       });
       // Revalidate the complete bounded catalog and pointer, not a cached stat.
       // The ordinary financial read still validates each selected index/result.
-      await measureKeywordMonthlyMetadata("catalogue_revalidate",()=>unchanged(bundle));
+      await measureKeywordMonthlyMetadata("catalogue_revalidate",()=>unchanged(bundle, undefined, 1, signal));
+      assertMetadataActive(signal);
       return result;
-    } catch (error) { return { ...absent(error), metadataOnly: true, financialResultValidated: false }; }
+    } catch (error) { if(error?.code==="KEYWORD_MONTHLY_QUERY_ABORTED")throw error;assertMetadataActive(signal);return { ...absent(error), metadataOnly: true, financialResultValidated: false }; }
   }
   async function open() { try { return await loadBundle(directory); } catch (error) { if (error.code === "ENOENT") {
       // Only a genuinely absent pointer permits the unchanged legacy reader.
@@ -272,17 +305,17 @@ function createKeywordMonthlyBundleAnalysis({ projectionDir, now = () => Date.no
     try { await fs.lstat(path.join(directory, "current.json")); throw fault("KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"); } catch (error) { if (error.code !== "ENOENT") throw error; }
     return result;
   }
-  async function unchanged(bundle, part, indexReadConcurrency = 1) {
-    const after = await loadBundle(directory); ensure(after.pointerRead.sha256 === bundle.pointerRead.sha256 && after.catalogRead.sha256 === bundle.catalogRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
+  async function unchanged(bundle, part, indexReadConcurrency = 1, signal) {
+    const after = await loadBundle(directory, signal); ensure(after.pointerRead.sha256 === bundle.pointerRead.sha256 && after.catalogRead.sha256 === bundle.catalogRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
     const items = part ? Array.isArray(part) ? part : [part] : [];
     const verifyIndex = async item => {
-      const index = await measure("keyword_index_read", { readCount: 1, inputBytes: item.index.size }, () => readFile(path.join(item.directory, "index.json"), CHILD_LIMITS.indexBytes));
+      const index = await measure("keyword_index_read", { readCount: 1, inputBytes: item.index.size }, () => readFile(path.join(item.directory, "index.json"), CHILD_LIMITS.indexBytes, signal));
       ensure(index.sha256 === item.index.sha256 && index.size === item.index.size, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
     };
     if (indexReadConcurrency === 1) for (const item of items) await verifyIndex(item);
     else await settledIndexBatches(items, indexReadConcurrency, verifyIndex, result => { if (result.status === "rejected") throw result.reason; });
     // A publication during the final index pass cannot return the old generation.
-    const final = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes);
+    const final = await readFile(path.join(directory, "current.json"), LIMITS.pointerBytes, signal);
     ensure(final.sha256 === bundle.pointerRead.sha256, "KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
   }
   async function loadOptions(bundle) {

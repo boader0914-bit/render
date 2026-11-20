@@ -21,10 +21,16 @@ function createKeywordMonthlyResponseBudget({ maxResponseBytes = 8 * 1024 * 1024
     }
     if(reservedBytes+maxResponseBytes>maxReservedBytes)throw fault("KEYWORD_MONTHLY_RESPONSE_BUSY");
     reservedBytes+=maxResponseBytes;activeResponses++;
-    const controller=new AbortController();let timer=null,stopped=false,completed=false,released=false,preparing=true,invoke=operation,wake;
+    const controller=new AbortController();let timer=null,stopped=false,completed=false,released=false,preparing=true,cleanupPending=false,invoke=operation,wake;
     operation=null;
     const done=new Promise(resolve=>{wake=resolve;});
-    const release=()=>{if(!released){released=true;reservedBytes-=maxResponseBytes;activeResponses--;}};
+    const release=()=>{if(!released&&!preparing&&!cleanupPending){released=true;reservedBytes-=maxResponseBytes;activeResponses--;}};
+    const retainUntil=promise=>{
+      if(!preparing||cleanupPending||!promise||typeof promise.then!=="function")throw new TypeError("A single preparation cleanup lifetime is required");
+      cleanupPending=true;
+      const settled=()=>{cleanupPending=false;if(stopped&&!preparing)release();};
+      Promise.resolve(promise).then(settled,settled);
+    };
     const detach=()=>{try{if(timer!==null)clearTimeoutImpl(timer);}catch{}for(const [name,listener] of [["finish",finish],["close",close],["error",error]]){try{res.removeListener(name,listener);}catch{}}};
     const stop=success=>{if(stopped)return;stopped=true;completed=success===true;controller.abort();detach();wake();};
     const finish=()=>stop(true),close=()=>stop(false),error=()=>{stop(false);res.destroy?.();};
@@ -33,7 +39,7 @@ function createKeywordMonthlyResponseBudget({ maxResponseBytes = 8 * 1024 * 1024
       timer=setTimeoutImpl(()=>{stop(false);try{res.destroy?.();}catch{}},timeoutMs);timer?.unref?.();
     }catch(cause){preparing=false;stop(false);release();throw cause;}
     const production=Promise.resolve().then(()=>{
-      if(stopped)return;const work=invoke;invoke=null;return work({signal:controller.signal,maxResponseBytes,nativeResponse:true});
+      if(stopped)return;const work=invoke;invoke=null;return work({signal:controller.signal,maxResponseBytes,nativeResponse:true,retainUntil});
     }).then(()=>{preparing=false;if(stopped)release();return true;},cause=>{preparing=false;if(stopped){release();return false;}throw cause;});
     try {
       const produced=await Promise.race([production,done.then(()=>false)]);

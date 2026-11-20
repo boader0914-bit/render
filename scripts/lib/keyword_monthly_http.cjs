@@ -19,10 +19,11 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
   statusResponseBudget = createKeywordMonthlyResponseBudget({maxResponseBytes:2*1024*1024,maxReservedBytes:4*1024*1024}) } = {}) {
   if (typeof service?.options !== "function" || typeof service?.analyze !== "function" || typeof requireAdmin !== "function" || typeof send !== "function") throw new TypeError("Read-only keyword monthly service and HTTP helpers are required");
   const assertReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission});
+  const metadataTraceId=()=>{try{return requestDiagnostics.currentTraceId?.()??null;}catch{return null;}};
   const invokeSend = (res,status,body) => typeof requestDiagnostics.measureSync === "function"
     ? requestDiagnostics.measureSync("response_send",()=>send(res,status,body)) : send(res,status,body);
   const reply = (res,status,body) => { requestDiagnostics.guard?.(body); requestDiagnostics.response(res,status,body?.code); return invokeSend(res,status,body); };
-  async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal,trackSavedFlight=false}={}) {
+  async function read(req, res, identity, operation, {lifecycle=queryLifecycle,signal,trackSavedFlight=false,metadataKind=null,retainUntil}={}) {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     const onClose = () => { if (!res.writableEnded) controller.abort(); };
@@ -31,13 +32,15 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
     req.once?.("aborted", onAbort); res.once?.("close", onClose);signal?.addEventListener("abort",onAbort,{once:true});
     if (req.aborted || res.destroyed && !res.writableEnded || signal?.aborted) controller.abort();
     try { return await lifecycle.run(identity, operation, { signal: controller.signal,
+      ...(metadataKind ? {metadataKind,ownerTraceId:metadataTraceId(),
+        ...(typeof retainUntil==="function"?{onOperationLifetime:retainUntil}:{})} : {}),
       ...(typeof requestDiagnostics.lifecycleOptions==="function"?requestDiagnostics.lifecycleOptions():{}),
       ...(trackSavedFlight&&typeof service.lifecycleOptions==="function"?service.lifecycleOptions():{}) }); }
     finally { req.removeListener?.("aborted", onAbort); res.removeListener?.("close", onClose);signal?.removeEventListener("abort",onAbort); }
   }
-  async function deliver(req,res,identity,operation,{statusRead=false,metadataRead=false}={}) {
-    const produce=async({signal,maxResponseBytes,nativeResponse})=>{
-      const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle,trackSavedFlight:!statusRead}));
+  async function deliver(req,res,identity,operation,{statusRead=false,metadataRead=false,metadataKind=null}={}) {
+    const produce=async({signal,maxResponseBytes,nativeResponse,retainUntil})=>{
+      const result=await requestDiagnostics.measure("read",()=>read(req,res,identity,operation,{signal,lifecycle:statusRead?statusLifecycle:queryLifecycle,trackSavedFlight:!statusRead,metadataKind,retainUntil}));
       if(req.aborted||res.destroyed||signal?.aborted)return;
       let body=result.body;
       if(result.http===503 && body && Object.hasOwn(body,"readGuard")) {
@@ -75,18 +78,18 @@ function createKeywordMonthlyHttpHandler({ service, requireAdmin, send, readRefr
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         if (typeof service.catalogue !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_CATALOGUE_UNAVAILABLE", statusCode: 503 });
         await requestDiagnostics.measure("admission",assertReadAdmission);
-        await deliver(req,res,"catalogue",async()=>{const result=await service.catalogue();return {http:result.status==="available"?200:503,body:result};},{statusRead:true,metadataRead:true});return true;
+        await deliver(req,res,"catalogue",async({signal}={})=>{const result=await service.catalogue({signal});return {http:result.status==="available"?200:503,body:result};},{statusRead:true,metadataRead:true,metadataKind:"catalogue"});return true;
       }
       if (url.pathname === `${base}/version`) {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         if (typeof service.version !== "function") throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_VERSION_UNAVAILABLE", statusCode: 503 });
-        await deliver(req,res,"version",async()=>{const result=await service.version();return {http:result.status==="available"?200:503,body:result};},{statusRead:true});return true;
+        await deliver(req,res,"version",async({signal}={})=>{const result=await service.version({signal});return {http:result.status==="available"?200:503,body:result};},{statusRead:true,metadataKind:"version"});return true;
       }
       if (url.pathname === `${base}/refresh-status` && typeof readRefreshStatus === "function") {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });
         await deliver(req,res,"refresh-status",async()=>({http:200,body:{...(await readRefreshStatus()),phaseDiagnostics:getAnalyticalPhaseDiagnostics().status(),
           queryDiagnostics:queryLifecycle.status(),statusQueryDiagnostics:statusLifecycle.status(),responseDiagnostics:responseBudget.status(),statusResponseDiagnostics:statusResponseBudget.status(),requestDiagnostics:requestDiagnostics.status(),
-          ...(typeof service.status==="function"?{savedReadDiagnostics:service.status()}:{}),readOnly:true,networkAttempted:false}}),{statusRead:true});return true;
+          ...(typeof service.status==="function"?{savedReadDiagnostics:service.status()}:{}),readOnly:true,networkAttempted:false}}),{statusRead:true,metadataKind:"refresh_status"});return true;
       }
       if (url.pathname === `${base}/options`) {
         if (url.searchParams.size) throw Object.assign(new Error(), { code: "KEYWORD_MONTHLY_INVALID_REQUEST", statusCode: 400 });

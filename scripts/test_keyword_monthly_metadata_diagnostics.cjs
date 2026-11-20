@@ -38,10 +38,10 @@ test("one actual catalogue owner and shared waiter retain late end, exact phases
   assert.equal(blockedStatus.pair.res.body.statusQueryDiagnostics.abandonedInFlight,1,"status metadata is visible even when this same status lane is full");
   blocked.resolve();await tick();await tick();assert.equal(f.statusLifecycle.status().inFlight,0);
   const after=f.diagnostics.status().recent.find(row=>row.traceId===owner.traceId);
-  assert.equal(after.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(after.metadataFinished,true);assert.equal(after.metadataFinishedAfterHandler,true);assert.equal(after.metadataOutcome,"completed");
-  assert.equal(after.metadataResultStatus,"available");assert.equal(after.metadataResultCode,null);
+  assert.equal(after.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(after.metadataFinished,true);assert.equal(after.metadataFinishedAfterHandler,true);assert.equal(after.metadataOutcome,"failed");
+  assert.equal(after.metadataErrorCode,"KEYWORD_MONTHLY_QUERY_ABORTED");assert.equal(after.metadataResultStatus,null);assert.equal(after.metadataResultCode,null);
   assert.equal(after.lifecycleOperationFinished,true);assert.equal(after.phases.memory_admission,3,"memory timing excludes admitted filesystem work");
-  assert.equal(after.phases.conversion_guard,6);assert.equal(after.phaseCounts.conversion_guard,3);assert.equal(after.phases.catalogue_project,4);assert.equal(after.phases.catalogue_revalidate,9);
+  assert.equal(after.phases.conversion_guard,4);assert.equal(after.phaseCounts.conversion_guard,2);assert.equal(after.phases.catalogue_project,4);assert.equal(after.phases.catalogue_revalidate,9);
   assert.ok(after.phases.catalogue_open>=6000);assert.equal(after.phaseCounts.catalogue_open,1);assert.equal(f.calls(),1);
   const late=f.logs.filter(row=>row.event==="metadata_end"||row.event==="metadata_operation_settled");assert.equal(late.length,2);assert.ok(late.every(row=>row.traceId===owner.traceId));
   assert.equal(late.find(row=>row.event==="metadata_operation_settled").lifecycleOperationFinished,true);
@@ -60,22 +60,22 @@ test("late original guard reason stays sanitized and distinct from an already re
   record.metadataReadGuard.reason="changed";record.phaseCounts.catalogue_open=999;assert.equal(f.diagnostics.status().recent[0].metadataReadGuard.reason,"ineligible_owner");assert.equal(f.diagnostics.status().recent[0].phaseCounts.catalogue_open,1);
 });
 
-test("late returned verification refusal retains its safe code and guard on the actual owner, without replacing HTTP timeout",async()=>{
+test("metadata cancellation cannot adopt a late returned verification refusal as a completed result",async()=>{
   const blocked=gate(),refusal=withKeywordMonthlyGuardDiagnostic({status:"needs_verification",diagnostics:["private-cookie /secret/company","KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"],keywords:[]},
     {component:"scheduler",reason:"ineligible_owner",activeKind:"industry-build",observedAt:1,ownerToken:"private-owner",keyword:"private-keyword"});
   const f=fixture({catalogue:async()=>{await blocked.promise;return refusal;}}),owner=f.request(),waiter=f.request();await tick();
   f.clock.advance(5000);await Promise.all([owner.promise,waiter.promise]);blocked.resolve();await tick();await tick();
   const records=f.diagnostics.status().recent,actual=records.find(row=>row.lifecycleRole==="owner"),shared=records.find(row=>row.lifecycleRole==="waiter");
-  assert.equal(actual.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(actual.metadataOutcome,"completed");assert.equal(actual.metadataErrorCode,null);
-  assert.equal(actual.metadataResultStatus,"needs_verification");assert.equal(actual.metadataResultCode,"KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ");
-  assert.equal(actual.metadataReadGuard.reason,"ineligible_owner");assert.equal(actual.metadataReadGuard.activeKind,"industry-build");assert.equal(actual.readGuard,null);
+  assert.equal(actual.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(actual.metadataOutcome,"failed");assert.equal(actual.metadataErrorCode,"KEYWORD_MONTHLY_QUERY_ABORTED");
+  assert.equal(actual.metadataResultStatus,null);assert.equal(actual.metadataResultCode,null);
+  assert.equal(actual.metadataReadGuard,null);assert.equal(actual.readGuard,null);
   assert.equal(actual.metadataFinishedAfterHandler,true);assert.equal(shared.metadataResultStatus,null);assert.equal(shared.metadataResultCode,null);assert.equal(shared.metadataReadGuard,null);
   const late=f.logs.filter(row=>row.event==="metadata_end"||row.event==="metadata_operation_settled");assert.equal(late.length,2);
-  assert.ok(late.every(row=>row.traceId===actual.traceId&&row.metadataResultCode==="KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"));
+  assert.ok(late.every(row=>row.traceId===actual.traceId&&row.metadataErrorCode==="KEYWORD_MONTHLY_QUERY_ABORTED"));
   assert.ok(!JSON.stringify({records,logs:f.logs}).includes("private"));
 });
 
-test("shared version reads retain actual late completion or verification refusal on the original owner trace",async()=>{
+test("shared version reads record late canceled cleanup without adopting completion or verification values",async()=>{
   for(const refused of [false,true]){
     let reads=0;const blocked=gate(),value=refused?{status:"needs_verification",revision:null,diagnostics:["KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ"]}
       :{status:"available",revision:"a".repeat(64),originalFreshnessVerified:false};
@@ -86,8 +86,8 @@ test("shared version reads retain actual late completion or verification refusal
     f.clock.advance(5000);await Promise.all([first.promise,second.promise]);assert.equal(first.pair.res.body.code,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(second.pair.res.body.code,"KEYWORD_MONTHLY_QUERY_TIMEOUT");
     assert.equal(f.statusLifecycle.status().abandonedInFlight,1);blocked.resolve();await tick();await tick();
     const records=f.diagnostics.status().recent,owner=records.find(row=>row.lifecycleRole==="owner"),waiter=records.find(row=>row.lifecycleRole==="waiter");
-    assert.equal(owner.route,"version");assert.equal(owner.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(owner.metadataOutcome,"completed");assert.equal(owner.metadataFinishedAfterHandler,true);
-    assert.equal(owner.lifecycleOperationFinished,true);assert.equal(owner.metadataResultStatus,value.status);assert.equal(owner.metadataResultCode,refused?"KEYWORD_MONTHLY_BUNDLE_CHANGED_DURING_READ":null);
+    assert.equal(owner.route,"version");assert.equal(owner.responseCode,"KEYWORD_MONTHLY_QUERY_TIMEOUT");assert.equal(owner.metadataOutcome,"failed");assert.equal(owner.metadataErrorCode,"KEYWORD_MONTHLY_QUERY_ABORTED");assert.equal(owner.metadataFinishedAfterHandler,true);
+    assert.equal(owner.lifecycleOperationFinished,true);assert.equal(owner.metadataResultStatus,null);assert.equal(owner.metadataResultCode,null);
     assert.equal(owner.phaseCounts.version_open,1);assert.equal(owner.phaseCounts.version_revalidate,1);assert.ok(owner.phases.version_open>=5000);assert.equal(owner.phases.version_revalidate,3);
     assert.equal(owner.workStarted,false);assert.equal(owner.task,null);assert.equal(waiter.metadataStarted,false);assert.equal(waiter.metadataResultStatus,null);assert.equal(f.statusLifecycle.status().inFlight,0);
     const late=f.logs.filter(row=>row.event==="metadata_end"||row.event==="metadata_operation_settled");assert.equal(late.length,2);assert.ok(late.every(row=>row.traceId===owner.traceId));
