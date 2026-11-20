@@ -708,6 +708,7 @@ const monthlyCompanySourceVersion = crypto.createHash("sha256")
   .update(companyIntegratedCalculationFingerprint())
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_company_source_catalog.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_report_sources.cjs")))
+  .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_snapshot_owned_inputs.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_observation_identity.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "monthly_observation_identity_review.cjs")))
   .update(fs.readFileSync(path.join(__dirname, "lib", "company_address_basis.cjs")))
@@ -768,6 +769,10 @@ const monthlyReportSources = createMonthlyReportSources({
   // These internal consumers read compact metadata without mutating it. Share
   // one independent frozen copy per verified generation; full bodies stay local.
   shareFrozenCatalogMetadata: true,
+  // This adapter reads JSON records and applies the audited pure saved-data
+  // corrections below. Industry's internal diagnostics never mutate these rows.
+  // Generic adapters and public monthly builders keep independent eager clones.
+  ownedSavedJsonObservations: true,
   companySourceVersion: monthlyCompanySourceVersion,
   // A source read that yielded during witness publication has already finished
   // its expensive original/recovery prefix. Reuse that verified derived candidate
@@ -874,7 +879,7 @@ const readCompanyIntegratedRevision = createCompanyIntegratedSourceRevision({
   regionMasterFile: path.join(WEB_DIR, "data", "region_master.json"),
   tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: true,
   calculationFiles: ["company_integrated_db.cjs", "monthly_reports.cjs", "monthly_report_comparison.cjs",
-    "monthly_report_sources.cjs", "company_address_basis.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
+    "monthly_report_sources.cjs", "monthly_snapshot_owned_inputs.cjs", "company_address_basis.cjs", "monthly_report_context.cjs", "monthly_company_recalculation.cjs", "monthly_company_source_catalog.cjs",
     "company_capacity_registry.cjs", "monthly_report_insights.cjs", "industry_analysis.cjs",
     "inventory_manual_corrections.cjs", "product_capacity_baseline.cjs", "product_capacity_store.cjs", "company_master_stream.cjs", "history_observation_index.cjs", "saved_product_recovery.cjs"].map(name => path.join(__dirname, "lib", name))
     .concat([path.join(__dirname, "inventory_estimation.cjs"), path.join(__dirname, "verified_room_inventory.json")]),

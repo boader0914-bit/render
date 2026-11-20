@@ -15,6 +15,7 @@ const { createMonthlyReportMaterializedCache } = require("./monthly_report_mater
 const { readCompanyMasterProjection } = require("./company_master_stream.cjs");
 const { createMonthlyCompanySourceCatalog } = require("./monthly_company_source_catalog.cjs");
 const { assertCooperativeWorkActive, isCooperativeWorkYield, setCooperativeWorkPhase, setCooperativeWorkRevision } = require("./cooperative_work_checkpoint.cjs");
+const { markSavedMonthlyJsonSource } = require("./monthly_snapshot_owned_inputs.cjs");
 const { createIndustrySourceCandidateCache, witnessInputsMatch } = require("./industry_source_candidate_cache.cjs");
 
 const token = value => String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
@@ -86,9 +87,11 @@ async function projectMonthlyCatalog({ preparedCompanies, runs, regionMaster, ca
   return { companies, rawCompanies, runs, regions: units.map(unit => ({ id: unit.regionKey, label: unit.fullName || unit.name, level: unit.level })) };
 }
 
-function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, preparedCatalogProvider = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
+function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, observationIndex = null, prepareCompanies = null, projectCapacityCompany = null, companySourceVersion = "monthly-company-source-v1", useSourceReadValidationBoundary = false, shareFrozenCatalogMetadata = false, ownedSavedJsonObservations = false, preparedCatalogProvider = null, projectObservation = row => row, capacityForCompany = () => null, recalculateCompanyObservations = null, readSavedProductRecoveries = null, publishProductCapacityEvidence = null, readContext = async () => ({ sources: [], networkAttempted: false }), readSpecialDays = async () => null, readRevision = null, readOptionsRevision = null, selectorCacheVersion = "monthly-selector-v1", industrySourceCandidateCacheEnabled = false, companySourceCandidateCacheEnabled = false, industrySourceCandidateCacheVersion = "industry-source-candidate-v1", readPersistedProductCapacityEvidence = null, runProductCapacityVerification = operation => operation(), now = () => new Date(), runWork = operation => operation() }) {
   if (typeof useSourceReadValidationBoundary !== "boolean") throw new TypeError("Source-read validation opt-in must be boolean");
   if (typeof shareFrozenCatalogMetadata !== "boolean") throw new TypeError("Frozen catalog sharing opt-in must be boolean");
+  if (typeof ownedSavedJsonObservations !== "boolean") throw new TypeError("Owned saved-JSON observations opt-in must be boolean");
+  if (ownedSavedJsonObservations && !useSourceReadValidationBoundary) throw new TypeError("Owned saved-JSON observations require a verified source-read boundary");
   if (preparedCatalogProvider !== null && ["readCatalog", "readCompanyCatalog", "withCatalog", "withCompanyCatalog", "stats"]
     .some(method => typeof preparedCatalogProvider?.[method] !== "function")) throw new TypeError("Prepared company catalog provider is incomplete");
   if (readSavedProductRecoveries !== null && typeof readSavedProductRecoveries !== "function") throw new TypeError("Saved recovery reader must be a function");
@@ -570,6 +573,9 @@ function createMonthlyReportSources({ dataDir, regionMasterFile, listRuns, obser
         }
       }
       assertCooperativeWorkActive();
+      // Only the operating adapter's audited JSON/saved-data producers opt in.
+      // No marker enters the source body, persistence, hashes or HTTP results.
+      if (ownedSavedJsonObservations) markSavedMonthlyJsonSource(source);
       return result;
     };
     if (companySourceCatalog && useSourceReadValidationBoundary) {

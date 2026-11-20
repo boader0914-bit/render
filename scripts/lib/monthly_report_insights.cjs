@@ -180,6 +180,17 @@ function rankVisibility(request, period, companies, sourceRows, runs) {
     sourceRunIds: ids([...daily.values()]), basis: "latest_per_company_keyword_kst_day_observed_share" };
 }
 
+function mergeInsightSourceRunIds(observations, rankingSourceRunIds) {
+  return [...new Set([...ids(observations), ...rankingSourceRunIds])].sort();
+}
+
+// Match the full builder: all supplied observation run IDs, plus the unchanged
+// rank-visibility result. Do not apply the pickup grouping eligibility filter.
+function buildMonthlyReportInsightSourceRunIds({ request, period, companies = [], observations = [], rankObservations = [], runs = [] }) {
+  const ranking = rankVisibility(request, period, companies, rankObservations, runs);
+  return mergeInsightSourceRunIds(observations, ranking.sourceRunIds);
+}
+
 function companyPriceDistribution(rows) {
   const totals = new Map();
   for (const row of rows) {
@@ -294,7 +305,7 @@ function buildMonthlyReportInsights({ request, period, companies = [], observati
       ...Object.fromEntries(PRODUCTS.map(product => [product, metrics(rows.filter(row => row.productType === product), memberIds.size * period.days)])) };
   }).sort((a, b) => a.regionLabel.localeCompare(b.regionLabel)) };
   const ranking = rankVisibility(request, period, companies, rankObservations, runs);
-  const sourceRunIds = [...new Set([...ids(observations), ...ranking.sourceRunIds])].sort();
+  const sourceRunIds = mergeInsightSourceRunIds(observations, ranking.sourceRunIds);
   const capacities = companies.filter(company => Number.isInteger(company.capacity) && company.capacity >= 0);
   const collectionDates = new Set(ranking.collectionDates);
   for (const group of groups.values()) for (const row of group) collectionDates.add(new Date(timeOf(row) + 9 * 3600000).toISOString().slice(0, 10));
@@ -323,4 +334,4 @@ function buildMonthlyReportInsights({ request, period, companies = [], observati
   };
 }
 
-module.exports = { buildMonthlyReportInsights };
+module.exports = { buildMonthlyReportInsights, buildMonthlyReportInsightSourceRunIds };

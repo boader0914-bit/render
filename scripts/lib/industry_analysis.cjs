@@ -2,7 +2,8 @@
 
 // Read-only view over saved evidence. Inventory validation and capacity review
 // stay owned by the monthly-report pipeline; search rank is a separate cohort.
-const { buildMonthlyReportSnapshot } = require("./monthly_reports.cjs");
+const { buildMonthlyReportIndustryProjection } = require("./monthly_reports.cjs");
+const { carrySavedMonthlyJsonSource, registerIndustryDiscard, withIndustryEvidenceScope } = require("./monthly_snapshot_owned_inputs.cjs");
 const { industrySourceRevisionOwnedCapability } = require("./industry_source_revision.cjs");
 const { createIndustryAnalysisStore } = require("./industry_analysis_store.cjs");
 const { createIndustryAnalysisSavedReader } = require("./industry_analysis_saved_reader.cjs");
@@ -68,6 +69,7 @@ function compactIndustrySources(source, catalog) {
     })),
     rankObservations: (source.rankObservations || []).map(row => pick(row, RANK_FIELDS)),
     runs: (source.runs || []).map(run => ({ ...pick(run, RUN_FIELDS), collectionQuality: { status: qualityOf(run) } })) };
+  carrySavedMonthlyJsonSource(source, compact);
   return { source: compact, catalog: { companies, regions: catalog.regions } };
 }
 function sourceCacheFits(value, maxBytes) {
@@ -333,7 +335,7 @@ function createReviewDiagnostics(selectedIds, request, source) {
     }
     cells.set(key, cell);
   }
-  return { onDiscard, discardedByReason, cells };
+  return { onDiscard: registerIndustryDiscard(onDiscard), discardedByReason, cells };
 }
 function buildIndustryReview({ selected, rows, dates, diagnostics, source, request, cohort }) {
   const rowMap = new Map(rows.map(row => [reviewCellKey(row.companyId, row.date), row]));
@@ -402,8 +404,10 @@ function buildIndustryAnalysis(source = {}, input = {}, { now = new Date() } = {
   const selectedIds = new Set(selected.map(idOf)), diagnostics = createReviewDiagnostics(selectedIds, request, source);
   // A synthetic region merely scopes the existing engine to canonical members.
   // No location is inferred from the search keyword.
-  const snapshot = buildMonthlyReportSnapshot({ type: "region", targetId: "__industry_cohort__", month: request.month, cutoffDate: request.cutoffDate },
-    { ...source, companies: scoped.map(company => ({ ...company, regionKeys: [...(company.regionKeys || []), "__industry_cohort__"] })) }, new Date(now).toISOString(), { onDiscard: diagnostics.onDiscard });
+  const monthlySource = { ...source, companies: scoped.map(company => ({ ...company, regionKeys: [...(company.regionKeys || []), "__industry_cohort__"] })) };
+  const snapshot = withIndustryEvidenceScope(monthlySource, source, diagnostics.onDiscard, () =>
+    buildMonthlyReportIndustryProjection({ type: "region", targetId: "__industry_cohort__", month: request.month, cutoffDate: request.cutoffDate },
+      monthlySource, new Date(now).toISOString(), { onDiscard: diagnostics.onDiscard }));
   const allRows = snapshot.sources.observations.filter(row => row.productType === "lodging");
   const rows = allRows.filter(row => selectedIds.has(row.companyId));
   const dates = snapshot.daily.map(row => row.date), days = snapshot.period.days;
