@@ -267,25 +267,25 @@ function mutateEvidence(row, value) {
   row.capacityWitnesses[0].nested.value = value;
 }
 
-test("engine scoped borrowing has exact eager JSON output and leaves the synthetic source untouched", () => {
+test("public engine remains eager even inside a valid private industry scope and leaves the synthetic source untouched", () => {
   const source = engineSource(), before = JSON.stringify(source), eager = engineSnapshot(source);
   let superseded = 0;
   const fn = register((reason, row) => {
     assert.equal(mayBorrow(source, fn), true);
     if (reason !== "superseded_observation") return;
     superseded++;
-    for (const key of BORROW_FIELDS) assert.equal(row[key], source.observations[0][key]);
+    for (const key of BORROW_FIELDS) assert.notEqual(row[key], source.observations[0][key]);
     assert.notEqual(row.capacityBasis, source.observations[0].capacityBasis);
   });
   mark(source);
   const borrowed = withScope(source, source, fn, () => engineSnapshot(source, fn));
-  assert.equal(superseded, 1, "the historical normalized row really used borrowed evidence");
+  assert.equal(superseded, 1, "the historical normalized row remains an independent eager clone");
   assert.equal(JSON.stringify(borrowed), JSON.stringify(eager));
   assert.equal(JSON.stringify(source), before);
   assert.equal(mayBorrow(source, fn), false);
 });
 
-test("engine winner evidence is cloned per output row with unchanged key order and plain descriptors", () => {
+test("public engine winner evidence is always cloned per output row with unchanged key order and plain descriptors", () => {
   const source = mark(engineSource()), eager = engineSnapshot(source), fn = diagnostic();
   const result = withScope(source, source, fn, () => engineSnapshot(source, fn));
   const rows = result.sources.observations;
@@ -385,7 +385,7 @@ test("engine eager paths reject a superseded toJSON-undefined observation before
   }
 });
 
-test("engine borrowed output preserves absent, null, empty-array and original property order rules", () => {
+test("public engine scoped output preserves absent, null, empty-array and original property order rules", () => {
   const source = engineSource();
   source.observations = [source.observations[1]];
   const row = source.observations[0];
@@ -461,10 +461,8 @@ test("industry compact carry and scoped wrapper borrow historical evidence while
 });
 
 
-const {
-  buildMonthlyReportInsights,
-  buildMonthlyReportInsightSourceRunIds
-} = require("./lib/monthly_report_insights.cjs");
+const { buildMonthlyReportInsights } = require("./lib/monthly_report_insights.cjs");
+const { buildMonthlyReportInsightSourceRunIds } = require("./lib/industry_monthly_insights.cjs");
 
 function insightSourceFixture() {
   const request = { type: "keyword", targetId: "fixture", month: "2026-10", cutoffDate: "2026-10-20" };
@@ -586,12 +584,12 @@ test("the public full snapshot still clones all four winner fields while private
   assert.equal(JSON.parse, originalParse);
   assert.equal(borrowed.serialized, eager.serialized);
   assert.equal(eager.parses, 12);
-  assert.equal(borrowed.parses, 4, "the public full DTO must still own independent winner evidence");
+  assert.equal(borrowed.parses, 12, "private authority cannot change the public engine's eager historical or winner evidence contract");
 });
 
 
 test("private industry projection equals the full subset and preserves intermediate, partial, recovery and rank lineage without aliases", () => {
-  const { buildMonthlyReportIndustryProjection } = require("./lib/monthly_reports.cjs");
+  const { buildMonthlyReportIndustryProjection } = require("./lib/industry_monthly_snapshot.cjs");
   const { recoveryRowDigest } = require("./lib/saved_product_recovery.cjs");
   const source = engineSource();
   const normal = source.observations[0];
@@ -656,7 +654,7 @@ test("private industry projection equals the full subset and preserves intermedi
 });
 
 test("public snapshot cannot be switched to projection by unknown options or a foreign token and projection falls back without authority", () => {
-  const { buildMonthlyReportIndustryProjection } = require("./lib/monthly_reports.cjs");
+  const { buildMonthlyReportIndustryProjection } = require("./lib/industry_monthly_snapshot.cjs");
   const source = engineSource(), expected = JSON.stringify(engineSnapshot(source)), fn = diagnostic();
   assert.equal(JSON.stringify(buildMonthlyReportIndustryProjection(ENGINE_REQUEST, source, ENGINE_AT, { onDiscard: fn })), expected);
   mark(source);

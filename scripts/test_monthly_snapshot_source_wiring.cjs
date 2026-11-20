@@ -7,6 +7,7 @@ const fs = require("node:fs/promises"), path = require("node:path"), os = requir
 const { createMonthlyReportSources } = require("./lib/monthly_report_sources.cjs");
 const { compactMonthlyCapacityCompany } = require("./lib/monthly_company_source_catalog.cjs");
 const { buildMonthlyReportSnapshot } = require("./lib/monthly_reports.cjs");
+const { buildMonthlyReportIndustryProjection } = require("./lib/industry_monthly_snapshot.cjs");
 const { mayBorrowMonthlyEvidence, registerIndustryDiscard, withIndustryEvidenceScope } = require("./lib/monthly_snapshot_owned_inputs.cjs");
 const { YIELD_CODE } = require("./lib/cooperative_work_checkpoint.cjs");
 
@@ -125,7 +126,7 @@ test("default-false saved sources stay eager even inside a registered industry s
   assert.equal(JSON.stringify(source), body); await f.assertProtected();
 });
 
-test("a completed cold source gains authority only in the exact registered industry scope", async t => {
+test("a completed cold source authorizes only the private industry path while public snapshots remain eager", async t => {
   const f = await fixture(t), source = await f.create({ ownedSavedJsonObservations: true }).loadSources(request, readOptions);
   const body = JSON.stringify(source), keys = Reflect.ownKeys(source);
   assert.equal(mayBorrowMonthlyEvidence(source, null), false, "the marker alone cannot activate generic snapshot borrowing");
@@ -135,10 +136,20 @@ test("a completed cold source gains authority only in the exact registered indus
   const discard = registerIndustryDiscard((reason, row) => { if (reason === "superseded_observation") discarded = row; });
   const snapshot = withIndustryEvidenceScope(source, source, discard,
     () => buildMonthlyReportSnapshot(request, source, generatedAt, { onDiscard: discard }));
-  assert.ok(discarded); assert.strictEqual(discarded.capacityWitnesses, original.capacityWitnesses);
+  assert.ok(discarded); assert.notStrictEqual(discarded.capacityWitnesses, original.capacityWitnesses,
+    "the public full snapshot must remain eager even inside a valid private scope");
   assert.equal(snapshot.sources.selectedObservationCount, 1);
   assert.notStrictEqual(snapshot.sources.observations[0].capacityWitnesses, source.observations.find(row => row.runId === "r2").capacityWitnesses,
     "the issued snapshot still owns its output evidence");
+  discarded = null;
+  const projected = withIndustryEvidenceScope(source, source, discard,
+    () => buildMonthlyReportIndustryProjection(request, source, generatedAt, { onDiscard: discard }));
+  assert.ok(discarded); assert.strictEqual(discarded.capacityWitnesses, original.capacityWitnesses,
+    "only the private industry projection can use the completed producer's scoped authority");
+  assert.equal(projected.sources.observations.length, 1);
+  assert.equal(Object.hasOwn(projected.sources.observations[0], "capacityWitnesses"), false,
+    "borrowed evidence does not escape the private projection");
+  assert.deepEqual(projected.sources.runIds, snapshot.sources.runIds);
   assert.deepEqual(Reflect.ownKeys(source), keys); assert.equal(JSON.stringify(source), body);
   assert.equal(mayBorrowMonthlyEvidence(source, discard), false, "authority ends with the industry work callback");
   await f.assertProtected();

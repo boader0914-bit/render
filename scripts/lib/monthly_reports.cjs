@@ -3,13 +3,12 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { buildMonthlyReportInsights, buildMonthlyReportInsightSourceRunIds } = require("./monthly_report_insights.cjs");
+const { buildMonthlyReportInsights } = require("./monthly_report_insights.cjs");
 const { buildMonthlyComparison, previousMonthlyReportRequest } = require("./monthly_report_comparison.cjs");
 const { performance, monitorEventLoopDelay } = require("node:perf_hooks");
 const { createMonthlyReportMaterializedCache } = require("./monthly_report_materialized_cache.cjs");
 const { recoveryRowDigest } = require("./saved_product_recovery.cjs");
 const { listMonthlyReportActionEvidence, normalizeMonthlyReportActionPlan } = require("./monthly_report_actions.cjs");
-const { mayBorrowMonthlyEvidence } = require("./monthly_snapshot_owned_inputs.cjs");
 
 const { createVerifiedReportProjectionReader } = require('./verified_report_projection.cjs');
 const { projectIssuedList } = require('./monthly_report_delivery_projection.cjs');
@@ -18,8 +17,6 @@ const SCHEMA_VERSION = 1;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const PREVIEW_CACHE_BYTES = 32 * 1024 * 1024;
 const PRODUCTS = ["lodging", "dayuse"];
-const INDUSTRY_PROJECTION_TOKEN = Symbol("owned-industry-projection");
-const OBSERVATION_POLICY = "latest_valid_per_company_stay_date_product_type_kst_no_post_stay";
 // Missing-price rooms are a diagnostic quantity of every selected valid
 // inventory row, including rows whose entire monetary value is unavailable.
 const METRICS = ["supply", "sold", "publicBookings", "phoneBookings", "sharedDayUseExcluded", "explicitBlockedBookings", "phoneMissingPriceBookings"];
@@ -371,11 +368,7 @@ function rankChanges(observations, companies, runMap, request, period) {
     period: { start: period.start, end: period.end, cutoffDate: request.cutoffDate }, basis: "동일 업체·동일 키워드의 해당 월 첫 관측과 마지막 관측. 양수는 순위 상승." };
 }
 
-function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, projectionToken = null) {
-  // Only the private saved-JSON industry scope may keep historical evidence
-  // borrowed during this synchronous calculation. Public callbacks stay eager.
-  const borrowEvidence = mayBorrowMonthlyEvidence(source, onDiscard);
-  const projectIndustry = borrowEvidence && projectionToken === INDUSTRY_PROJECTION_TOKEN;
+function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}) {
   const identityReview = Object.hasOwn(source || {}, "identityReview") ? normalizeMonthlyReportIdentityReview(source.identityReview) : undefined;
   const { dates, ...period } = calendar(request.month);
   period.cutoffDate = request.cutoffDate;
@@ -478,13 +471,13 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, 
       supply: number(row.supply ?? row.total), sold: number(row.sold), publicBookings: number(row.publicBookings), phoneBookings: number(row.phoneBookings),
       sharedDayUseExcluded: number(row.sharedDayUseExcluded) || 0, explicitBlockedBookings: number(row.explicitBlockedBookings) || 0,
       ...valuation, revenueEligible: valuation.eligible, revenueMissingReason: valuation.reason,
-      phonePriceEstimates: Array.isArray(row.phonePriceEstimates) ? borrowEvidence ? row.phonePriceEstimates : clone(row.phonePriceEstimates) : [],
+      phonePriceEstimates: Array.isArray(row.phonePriceEstimates) ? clone(row.phonePriceEstimates) : [],
       ...(unknownCauses !== null ? { priceUnknownCauses: unknownCauses } : {}),
-      ...(row.phoneValuation ? { phoneValuation: borrowEvidence ? row.phoneValuation : clone(row.phoneValuation) } : {}),
+      ...(row.phoneValuation ? { phoneValuation: clone(row.phoneValuation) } : {}),
       ...(row.priceRecoveryPolicy === "inventory_price_recovery_v1" ? { priceRecoveryPolicy: row.priceRecoveryPolicy } : {}),
-      ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: borrowEvidence ? row.sharedDayUseEvidence : clone(row.sharedDayUseEvidence) } : {}),
+      ...(row.sharedDayUseEvidence ? { sharedDayUseEvidence: clone(row.sharedDayUseEvidence) } : {}),
       capacityBasis: row.capacityBasis ? clone(row.capacityBasis) : null,
-      ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: borrowEvidence ? row.capacityWitnesses : clone(row.capacityWitnesses) } : {}),
+      ...(Array.isArray(row.capacityWitnesses) ? { capacityWitnesses: clone(row.capacityWitnesses) } : {}),
       dayUseSharingStatus: String(row.dayUseSharingStatus || ""),
       phoneValuationPolicy: String(row.phoneValuationPolicy || "")
     };
@@ -507,23 +500,6 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, 
   const selectedKeys = new Set(selected.map(rowKey));
   const partialRows = [...partialGroups.entries()].filter(([key]) => !selectedKeys.has(key)).map(([, row]) => row);
   for (const row of partialRows) selectedRunIds.add(row.runId);
-  const partialEvidence = () => [...partialGroups.entries()].map(([key, row]) => ({ companyId: row.companyId, date: row.date, productType: row.productType, runId: row.runId,
-    collectedAt: row.collectedAt, knownPartialRevenue: row.knownPartialRevenue, knownPartialPublicRevenue: row.knownPartialPublicRevenue,
-    knownPartialBlockedRevenue: row.knownPartialBlockedRevenue, includedInPartialSubtotal: !selectedKeys.has(key), reason: row.recalculationUnavailable ? "capacity_recalculation_unavailable" : "partial_inventory" }));
-  if (projectIndustry) {
-    // Industry consumes only the common kernel's selected values and lineage.
-    // Its own public DTO never exposes the four large nested evidence fields.
-    const rankInputs = [...rankObservations, ...rawObservations];
-    const ranks = rankChanges(rankInputs, companyMap, runMap, request, period);
-    for (const rank of ranks.rows) for (const id of new Set([rank.firstRunId, rank.lastRunId])) selectedRunIds.add(id);
-    const insightRunIds = buildMonthlyReportInsightSourceRunIds({ request, period, companies: [...companyMap.values()],
-      observations: [...groups.values()].flat(), rankObservations: rankInputs, runs });
-    for (const id of insightRunIds) selectedRunIds.add(id);
-    return { period, daily: dates.map(date => ({ date })), sources: {
-      observations: selected.map(({ time, tie, eligible, reason, phonePriceEstimates, phoneValuation, sharedDayUseEvidence, capacityWitnesses, ...row }) => row),
-      partialEvidence: partialEvidence(), runIds: [...selectedRunIds].sort(), observationPolicy: OBSERVATION_POLICY
-    } };
-  }
   const summaryFor = (rows, partials, expected) => Object.fromEntries(PRODUCTS.map(product => [product, aggregate(rows.filter(row => row.productType === product), expected, partials.filter(row => row.productType === product))]));
   const dailyFor = (rows, partials, companyCount) => dates.map(date => ({ date,
     ...summaryFor(rows.filter(row => row.date === date), partials.filter(row => row.date === date), companyCount) }));
@@ -582,17 +558,7 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, 
     globalDiagnostics: source?.globalDiagnostics ? clone(source.globalDiagnostics) : null,
     ...(identityReview === undefined ? {} : { identityReview })
   };
-  const cleanSelected = selected.map(({ time, tie, eligible, reason, ...row }) => {
-    if (borrowEvidence) {
-      // Materialize each returned row independently. Replacing existing data
-      // properties retains their JSON order and never exposes borrowed values.
-      row.phonePriceEstimates = clone(row.phonePriceEstimates);
-      if (Object.hasOwn(row, "phoneValuation")) row.phoneValuation = clone(row.phoneValuation);
-      if (Object.hasOwn(row, "sharedDayUseEvidence")) row.sharedDayUseEvidence = clone(row.sharedDayUseEvidence);
-      if (Object.hasOwn(row, "capacityWitnesses")) row.capacityWitnesses = clone(row.capacityWitnesses);
-    }
-    return row;
-  });
+  const cleanSelected = selected.map(({ time, tie, eligible, reason, ...row }) => row);
   const insights = buildMonthlyReportInsights({ request, period, companies: [...companyMap.values()],
     observations: [...groups.values()].flat(), selected, rankObservations: [...rankObservations, ...rawObservations], runs, specialDays: source?.specialDays });
   // Timing/distribution uses intermediate observations as well as the selected
@@ -621,8 +587,10 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, 
       } : { basis: request.type === "company" ? "canonical_company_id" : "current_company_region", companyIds: [...companyMap.keys()].sort() },
       excludedRuns: sourceRuns.filter(run => !["complete", "reused", "partial"].includes(run.collectionQuality.status) && !run.recoveredObservationCount).map(run => ({ id: run.id, status: run.collectionQuality.status, reason: "ineligible_run_quality" })),
       observations: cleanSelected,
-      partialEvidence: partialEvidence(),
-      observationPolicy: OBSERVATION_POLICY,
+      partialEvidence: [...partialGroups.entries()].map(([key, row]) => ({ companyId: row.companyId, date: row.date, productType: row.productType, runId: row.runId,
+        collectedAt: row.collectedAt, knownPartialRevenue: row.knownPartialRevenue, knownPartialPublicRevenue: row.knownPartialPublicRevenue,
+        knownPartialBlockedRevenue: row.knownPartialBlockedRevenue, includedInPartialSubtotal: !selectedKeys.has(key), reason: row.recalculationUnavailable ? "capacity_recalculation_unavailable" : "partial_inventory" })),
+      observationPolicy: "latest_valid_per_company_stay_date_product_type_kst_no_post_stay",
       digest: crypto.createHash("sha256").update(JSON.stringify(identityReview === undefined ? cleanSelected : { observations: cleanSelected, identityReview })).digest("hex")
     },
     context: source?.context ? clone(source.context) : null,
@@ -645,11 +613,6 @@ function buildSnapshot(request, source, generatedAt, { onDiscard = null } = {}, 
       publication: "발행본의 숫자·메모·근거는 고정됩니다. 수정본은 별도 ID와 버전으로 생성됩니다."
     }
   };
-}
-
-function buildMonthlyReportIndustryProjection(request, source, generatedAt, { onDiscard = null } = {}) {
-  const token = mayBorrowMonthlyEvidence(source, onDiscard) ? INDUSTRY_PROJECTION_TOKEN : null;
-  return buildSnapshot(request, source, generatedAt, { onDiscard }, token);
 }
 
 function createMonthlyReportService({ dataDir, loadSources, readSourceRevision = null, readReportContext = null,
@@ -1016,4 +979,4 @@ function createMonthlyReportService({ dataDir, loadSources, readSourceRevision =
     getPublishedListSummary: id => listReader.read(id), deliveryListReadMetrics: () => listReader.metrics() };
 }
 
-module.exports = { createMonthlyReportService, buildMonthlyReportSnapshot: buildSnapshot, buildMonthlyReportIndustryProjection, monthlyReportKeywordMembership, normalizeMonthlyReportIdentityReview };
+module.exports = { createMonthlyReportService, buildMonthlyReportSnapshot: buildSnapshot, monthlyReportKeywordMembership, normalizeMonthlyReportIdentityReview };

@@ -839,6 +839,7 @@ const industryAnalysisService = createIndustryAnalysisService({
   dataDir: DATA_DIR, sources: monthlyReportSources, readContext: readMonthlyRegionContext,
   calculationFingerprint: crypto.createHash("sha256").update(monthlyCompanySourceVersion)
     .update(["monthly_reports.cjs", "monthly_report_insights.cjs", "monthly_report_comparison.cjs",
+      "industry_monthly_snapshot.cjs", "industry_monthly_insights.cjs", "monthly_snapshot_owned_inputs.cjs",
       "monthly_company_recalculation.cjs", "inventory_manual_corrections.cjs", "industry_analysis_store.cjs", "industry_source_revision.cjs"]
       .map(name => `${name}:${crypto.createHash("sha256").update(fs.readFileSync(path.join(__dirname, "lib", name))).digest("hex")}`).join("\n")).digest("hex"),
   readSourceRevision: readIndustryRevision, savedReferenceRevisionScope: savedIndustryRevisionScope

@@ -2,7 +2,7 @@
 
 // Read-only view over saved evidence. Inventory validation and capacity review
 // stay owned by the monthly-report pipeline; search rank is a separate cohort.
-const { buildMonthlyReportIndustryProjection } = require("./monthly_reports.cjs");
+const { buildMonthlyReportIndustryProjection } = require("./industry_monthly_snapshot.cjs");
 const { carrySavedMonthlyJsonSource, registerIndustryDiscard, withIndustryEvidenceScope } = require("./monthly_snapshot_owned_inputs.cjs");
 const { industrySourceRevisionOwnedCapability } = require("./industry_source_revision.cjs");
 const { createIndustryAnalysisStore } = require("./industry_analysis_store.cjs");
