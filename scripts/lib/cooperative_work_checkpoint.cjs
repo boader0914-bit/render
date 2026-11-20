@@ -59,6 +59,20 @@ async function runCooperativeCheckpointReads() {
   // It cannot borrow a boundary inside an atomic publication operation.
   await owner.drainCheckpointReads?.();
 }
+// Only an owner already parked at an explicit safe checkpoint installs this
+// wake. It resumes that owner's continuation; it never runs a reader here.
+function registerCooperativeCheckpointWake(wake) {
+  try {
+    const owner = current(), unregister = owner && typeof wake === "function" ? owner.registerCheckpointWake?.(wake) : null;
+    return typeof unregister === "function" ? () => { try { unregister(); } catch {} } : () => {};
+  } catch { return () => {}; }
+}
+function beginCooperativeSourceWait(kind, maxBytes = null) {
+  try {
+    const end = current()?.beginSourceWait?.(kind, maxBytes);
+    return typeof end === "function" ? () => { try { end(); } catch {} } : () => {};
+  } catch { return () => {}; }
+}
 async function runNonInterruptibleCooperativeWork(operation) {
   if (typeof operation !== "function") throw new TypeError("Publication work must be a function");
   assertCooperativeWorkActive();
@@ -71,10 +85,12 @@ async function runNonInterruptibleCooperativeWork(operation) {
   if (!owner.isCurrent()) throw Object.assign(new Error("ANALYTICAL_WORK_OWNER_EXPIRED"), { code: "ANALYTICAL_WORK_OWNER_EXPIRED" });
   assertCooperativeWorkActive();
   owner.nonInterruptibleDepth++;
+  try { owner.notifyCheckpointWake?.(); } catch {}
   try { return await operation(); }
-  finally { owner.nonInterruptibleDepth--; }
+  finally { owner.nonInterruptibleDepth--; try { owner.notifyCheckpointWake?.(); } catch {} }
 }
 function isCooperativeWorkYield(error) { return error?.code === YIELD_CODE; }
 
 module.exports = { runWithCooperativeWork, cooperativeWorkCheckpoint, setCooperativeWorkStage, setCooperativeWorkPhase, setCooperativeWorkRevision, assertCooperativeWorkActive,
-  runCooperativeCheckpointReads, runNonInterruptibleCooperativeWork, isCooperativeWorkYield, YIELD_CODE };
+  runCooperativeCheckpointReads, registerCooperativeCheckpointWake, beginCooperativeSourceWait,
+  runNonInterruptibleCooperativeWork, isCooperativeWorkYield, YIELD_CODE };

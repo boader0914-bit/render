@@ -42,6 +42,7 @@ const { createRuntimeResponsiveness } = require("./lib/runtime_responsiveness.cj
 const { installApplicationShutdown } = require("./lib/application_shutdown.cjs");
 const { readPreparedConversionAdmission } = require("./lib/keyword_monthly_maintenance.cjs");
 const { createPrivateStaticAssets } = require("./lib/private_static_assets.cjs");
+const { createPrivateDocumentDiagnostics } = require("./lib/private_document_diagnostics.cjs");
 const { createCompanyIntegratedCatalog, createCompanyIntegratedCatalogRevision, createRevisionCheckedCompanyCatalog } = require("./lib/company_integrated_catalog.cjs");
 const { createCompanyIntegratedTargets } = require("./lib/company_integrated_targets.cjs");
 const { createCompanyCapacityRegistry } = require("./lib/company_capacity_registry.cjs");
@@ -699,8 +700,10 @@ const readMonthlyReportRevision = createMonthlyReportSourceRevision({ dataDir: D
     tourismRegionMapFile: path.join(WEB_DIR, "data", "tourism_region_map.json"), includeContext: false });
 const analyticalMemory = createAnalyticalMemorySampler();
 const runtimeResponsiveness = createRuntimeResponsiveness();
+const keywordMonthlyRequestDiagnostics = createKeywordMonthlyRequestDiagnostics();
 const analyticalWork = createAnalyticalWorkScheduler({ sampleMemory: analyticalMemory.sample, highWatermark: 0.65, lowWatermark: 0.55,
   cooperativeYield: true, cooperativeCompanyMonthYield: true,
+  readSavedReadTraceId: () => keywordMonthlyRequestDiagnostics.currentTraceId(),
   externalAdmission: () => readPreparedConversionAdmission({ dataDir: DATA_DIR }) });
 startupAnalyticalStatus = () => analyticalWork.status();
 const runAnalyticalWork = (operation, options) => analyticalWork.run(operation, options);
@@ -924,7 +927,6 @@ const keywordMonthlyRefreshIntegration = createKeywordMonthlyRefreshIntegration(
 });
 // Saved DTO reads use one bounded permit only while idle or in the isolated
 // child's explicit wait window. Legacy graphs retain the exclusive lease.
-const keywordMonthlyRequestDiagnostics = createKeywordMonthlyRequestDiagnostics();
 const keywordMonthlyReadAdmission = createKeywordMonthlyHttpReadAdmission({readAdmission:()=>readPreparedConversionAdmission({dataDir:DATA_DIR})});
 const keywordMonthlyAnalysis = createKeywordMonthlySavedReadService({
   saved: keywordMonthlyPreparedAnalysis, runWork: runAnalyticalWork,
@@ -19308,11 +19310,15 @@ async function runCrawlerInternal(payload) {
 }
 
 const privateStaticAssets = createPrivateStaticAssets({ directory: WEB_DIR });
+const privateDocumentDiagnostics = createPrivateDocumentDiagnostics();
 async function serveStatic(reqUrl, res, req = { method: "GET", headers: {} }) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
-    const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
-    const publicHtml = await privateStaticAssets.versionHtml(html);
-    return send(res, 200, publicHtml, "text/html; charset=utf-8");
+    return privateDocumentDiagnostics.run(reqUrl.pathname, async timing => {
+      const html = await timing.measure("html_read", () => fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8"));
+      const publicHtml = await timing.measure("html_versions", () => privateStaticAssets.versionHtml(html, { onTiming: timing.assets }));
+      timing.response(res, 200);
+      return send(res, 200, publicHtml, "text/html; charset=utf-8");
+    });
   }
   if (privateStaticAssets.eligible(reqUrl.pathname)) {
     const asset = await privateStaticAssets.response(reqUrl, req);
@@ -19730,6 +19736,7 @@ async function route(req, res) {
       // originals or acquire the analytical work lease merely to report it.
       const historyIndex = historyObservationIndex.describe();
       return send(res, 200, { work: analyticalWork.status(), memory: analyticalMemory.status(), responsiveness: runtimeResponsiveness.status(),
+        documentResponses: privateDocumentDiagnostics.status(),
         companyIntegratedRead: companyIntegratedDb.cacheReadsStats(),
         monthlySources: typeof monthlyReportSources.sourceReadMetrics === "function" ? monthlyReportSources.sourceReadMetrics() : null,
         monthlyRecalculation: recalculateMonthlyCompanyObservations.stats(),

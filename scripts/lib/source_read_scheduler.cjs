@@ -1,6 +1,7 @@
 "use strict";
 
-const { cooperativeWorkCheckpoint, runCooperativeCheckpointReads } = require("./cooperative_work_checkpoint.cjs");
+const { cooperativeWorkCheckpoint, runCooperativeCheckpointReads, registerCooperativeCheckpointWake,
+  beginCooperativeSourceWait } = require("./cooperative_work_checkpoint.cjs");
 
 // Source reconstruction is deliberately single-file: overlapping it multiplies
 // the complete history/catalog heap. Ordinary readers finish before a peer;
@@ -89,7 +90,25 @@ function createSourceReadScheduler({ foregroundBurst = 4, maxInteractiveHoldMs =
     await new Promise(resolve => setImmediate(resolve));
     await runCooperativeCheckpointReads();
     cooperativeWorkCheckpoint();
-    while (shouldPauseBackground()) await new Promise(resolve => checkpointWaiters.push(resolve));
+    while (shouldPauseBackground()) {
+      const endWait = beginCooperativeSourceWait("checkpoint_hold");
+      let wake, unregister = () => {};
+      try {
+        await new Promise(resolve => {
+          wake = resolve; checkpointWaiters.push(wake);
+          // Register after storing the local waiter. Registration also checks
+          // an already queued read, closing the drain-to-park race. This does
+          // not renew the independent interactive hold's absolute deadline.
+          unregister = registerCooperativeCheckpointWake(wake);
+        });
+      } finally {
+        unregister();
+        const index = checkpointWaiters.indexOf(wake);
+        if (index >= 0) checkpointWaiters.splice(index, 1);
+        endWait();
+      }
+      await runCooperativeCheckpointReads();
+    }
   }
 
   return { run, runInteractive, checkpoint,

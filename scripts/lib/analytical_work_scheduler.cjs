@@ -18,7 +18,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
   onTaskTiming = null, timingHistoryLimit = 32, cooperativeYield = false, cooperativeCompanyMonthYield = false,
   sourceMetadataSavedReads = cooperativeYield,
   cooperativeMinRunMs = 250, cooperativeMinProgress = 1, externalAdmission = null,
-  externalAdmissionTimeoutMs = 1500, savedReadCheckpointWaitMs = 1500 } = {}) {
+  externalAdmissionTimeoutMs = 1500, savedReadCheckpointWaitMs = 1500, readSavedReadTraceId = null } = {}) {
   if (!Number.isSafeInteger(foregroundBurst) || foregroundBurst < 1
     || sampleMemory !== null && typeof sampleMemory !== "function"
     || !Number.isFinite(highWatermark) || highWatermark <= 0 || highWatermark > 1
@@ -34,7 +34,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     || !Number.isSafeInteger(cooperativeMinProgress) || cooperativeMinProgress < 1
     || externalAdmission !== null && typeof externalAdmission !== "function"
     || !Number.isSafeInteger(externalAdmissionTimeoutMs) || externalAdmissionTimeoutMs < 1 || externalAdmissionTimeoutMs > 10000
-    || !Number.isSafeInteger(savedReadCheckpointWaitMs) || savedReadCheckpointWaitMs < 1 || savedReadCheckpointWaitMs > 1500) {
+    || !Number.isSafeInteger(savedReadCheckpointWaitMs) || savedReadCheckpointWaitMs < 1 || savedReadCheckpointWaitMs > 1500
+    || readSavedReadTraceId !== null && typeof readSavedReadTraceId !== "function") {
     throw new TypeError("Invalid analytical scheduler options");
   }
   const context = new AsyncLocalStorage(), foreground = [], background = [], checkpointReads = [], idleWaiters = [];
@@ -52,6 +53,67 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     if (!Number.isFinite(value)) throw fault("ANALYTICAL_WORK_CLOCK_INVALID");
     return value;
   };
+  // Scalar-only diagnostics. No source/result/error/Promise is retained and
+  // these observations have no admission or scheduling authority.
+  const sourceWaitKinds = new Set(["checkpoint_hold", "derived_cache_stat", "derived_cache_read",
+    "derived_cache_decode", "derived_cache_encode", "derived_cache_write", "derived_cache_copy", "source_revision"]);
+  const diagnosticOwnerKinds = new Set(["industry-build", "company-month", "company-month-repair", "keyword_monthly_refresh",
+    "source-options", "source-catalog", "verified-company-catalog"]);
+  const diagnosticOwnerKind = owner => owner ? diagnosticOwnerKinds.has(owner.kind) ? owner.kind : "other" : null;
+  const checkpointWaitHistory = [];
+  let activeCheckpointWait = null, checkpointWaitDropped = 0;
+  // Never consume the injected admission clock for observations. A stateful
+  // or invalid clock must have exactly the same scheduling behavior with and
+  // without diagnostics; production uses this wall clock for both.
+  const diagnosticTime = () => { try { const at = Date.now(); return Number.isFinite(at) ? at : null; } catch { return null; } };
+  const diagnosticTrace = () => { try { const value = readSavedReadTraceId?.(); return typeof value === "string" && /^[a-f0-9]{24}$/.test(value) ? value : null; } catch { return null; } };
+  function checkpointWaitSnapshot(owner) {
+    const scope = owner?.checkpointScope, cursor = scope?.sourceWaits?.at(-1);
+    return { observedAt: diagnosticTime(), ownerMatches: Boolean(owner?.active && active === owner),
+      activeKind: diagnosticOwnerKind(active), externalChecking: Boolean(externalChecking), maintenancePaused: Boolean(maintenance.paused),
+      checkpointReaderActive: Boolean(checkpointReader), atomicWork: Boolean(scope?.nonInterruptibleDepth > 0),
+      stageIndex: scope?.stageIndex ?? null, phaseIndex: scope?.phaseIndex ?? null, unitIndex: scope?.unitIndex ?? null,
+      checkpoints: scope?.checkpoints ?? null,
+      sourceWait: cursor ? { kind: cursor.kind, startedAt: cursor.startedAt, maxBytes: cursor.maxBytes } : null };
+  }
+  function observeCheckpointWait(owner) {
+    const record = activeCheckpointWait;
+    if (!record || record.ownerId !== owner.id) return;
+    const snapshot = checkpointWaitSnapshot(owner), previous = record.transitions.at(-1) || record.initial;
+    // Ignore wall-clock-only changes; every retained transition is a change
+    // of known owner/phase/wait state, not a per-row event log.
+    const state = value => JSON.stringify({ ...value, observedAt: null });
+    if (state(previous) === state(snapshot)) return;
+    if (record.transitions.length >= 8) {
+      record.transitions.shift(); record.droppedTransitions = Math.min(Number.MAX_SAFE_INTEGER, record.droppedTransitions + 1);
+    }
+    record.transitions.push(snapshot);
+  }
+  function trimCheckpointWaitHistory() {
+    // Reserve space before an active record grows its eight fixed-schema
+    // snapshots. This avoids repeatedly serializing history on every source
+    // transition while keeping the complete status below the byte ceiling.
+    const budget = 64 * 1024 - 512 - (activeCheckpointWait ? 8192 : 0);
+    while (checkpointWaitHistory.length + (activeCheckpointWait ? 1 : 0) > 32
+      || Buffer.byteLength(JSON.stringify({ recent: checkpointWaitHistory, active: activeCheckpointWait })) > budget) {
+      if (!checkpointWaitHistory.length) break;
+      checkpointWaitHistory.shift(); checkpointWaitDropped = Math.min(Number.MAX_SAFE_INTEGER, checkpointWaitDropped + 1);
+    }
+  }
+  function startCheckpointWait(token, owner, reservedAt, admitUntil) {
+    const record = { version: 1, id: token.id, checkpointReadId: null, traceId: diagnosticTrace(), ownerId: owner.id, ownerKind: diagnosticOwnerKind(owner),
+      reservedAt, admissionDeadlineAt: admitUntil, initial: checkpointWaitSnapshot(owner), transitions: [], droppedTransitions: 0,
+      deadline: null, final: null, finishedAt: null, outcome: null, reason: null };
+    activeCheckpointWait = record; trimCheckpointWaitHistory();
+    return record;
+  }
+  function finishCheckpointWait(record, owner, outcome, reason = null) {
+    if (record.outcome !== null) return;
+    record.final = checkpointWaitSnapshot(owner); record.finishedAt = diagnosticTime();
+    record.outcome = outcome; record.reason = reason;
+    if (activeCheckpointWait === record) activeCheckpointWait = null;
+    checkpointWaitHistory.push(record); trimCheckpointWaitHistory();
+  }
   // Diagnostic records contain controlled kind tags and numeric identities,
   // never task inputs, results, exception messages or caller context. Nested
   // reads share their parent's lease: their overlapping wall time is kept
@@ -203,10 +265,32 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     const checkpointScope = {
       enabled: true, yieldRequested: false, nonInterruptibleDepth: 0, checkpoints: 0, lastCheckpointAt: task.startedAt,
       stageIndex: 0, phaseIndex: 0, phaseCheckpoints: 0, unitIndex: 0, unitCheckpoints: 0,
+      sourceWaits: [], checkpointWakes: new Set(),
       isCurrent: () => token.active && active === token,
       drainCheckpointReads: () => drainCheckpointReads(token),
       hasCheckpointRead: () => checkpointReader?.ownerId === token.id,
       waitForCheckpointRead: () => checkpointReader?.ownerId === token.id ? checkpointReader.done : Promise.resolve(),
+      registerCheckpointWake(wake) {
+        if (!this.isCurrent() || typeof wake !== "function" || this.checkpointWakes.size >= 4) return () => {};
+        this.checkpointWakes.add(wake); this.notifyCheckpointWake();
+        return () => { this.checkpointWakes.delete(wake); };
+      },
+      notifyCheckpointWake() {
+        observeCheckpointWait(token);
+        if (!this.isCurrent() || closed || maintenance.paused || checkpointReader || this.yieldRequested
+          || this.nonInterruptibleDepth !== 0 || !checkpointReads.length) return;
+        for (const wake of this.checkpointWakes) { try { wake(); } catch {} }
+      },
+      beginSourceWait(kind, maxBytes) {
+        if (!this.isCurrent() || !sourceWaitKinds.has(kind) || this.sourceWaits.length >= 8) return () => {};
+        const cursor = { kind, startedAt: diagnosticTime(), maxBytes: Number.isSafeInteger(maxBytes) && maxBytes >= 0 ? maxBytes : null };
+        this.sourceWaits.push(cursor); observeCheckpointWait(token);
+        return () => {
+          const index = this.sourceWaits.indexOf(cursor);
+          if (index >= 0) this.sourceWaits.splice(index, 1);
+          if (this.isCurrent()) observeCheckpointWait(token);
+        };
+      },
       setStage(index) {
         // A company month reads the requested month and its comparison month
         // in order. Their source phases repeat 10..70; a later stage is fresh
@@ -214,6 +298,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         if (index > this.stageIndex) {
           this.stageIndex = index; this.phaseIndex = 0; this.phaseCheckpoints = 0;
           this.unitIndex = 0; this.unitCheckpoints = 0;
+          observeCheckpointWait(token);
         }
       },
       setRevision(revision) {
@@ -238,6 +323,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         } else if (index === this.phaseIndex && unitIndex > this.unitIndex) {
           this.unitIndex = unitIndex; this.unitCheckpoints = 0;
         }
+        observeCheckpointWait(token);
       },
       checkpoint() {
         if (!eligible) return;
@@ -284,7 +370,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (task.checkpointRead && (closed || task.signal?.aborted)) {
         didFail = true; error = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted();
       }
-      token.active = false; task.signal?.removeEventListener("abort", onAbort);
+      token.active = false; checkpointScope.checkpointWakes.clear(); checkpointScope.sourceWaits.length = 0;
+      task.signal?.removeEventListener("abort", onAbort);
       if (active === token) active = null;
       recordTask(task, error, finishedAt, didFail);
       if (requestedYield && !closed && !task.signal?.aborted) {
@@ -348,6 +435,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       if (closed || task.signal?.aborted || owner.controller.signal.aborted) { failure = closed ? fault("ANALYTICAL_WORK_CLOSED") : aborted(); failed = true; }
       recordTask(task, failure, accountWaiting(), failed);
       if (failed) task.reject(failure); else task.resolve(value);
+      owner.checkpointScope?.notifyCheckpointWake();
       // A bounded monthly DTO is larger than a proof. Lend at most once at
       // this boundary, then let the background owner's own work advance.
       if (task.kind === savedCheckpointKind) break;
@@ -395,7 +483,9 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       // No async boundary between clearing 'checking' and dispatch. An idle
       // reader cannot observe a false idle while an old allow check can still
       // launch work after a maintenance marker was acquired.
-      if (active || maintenance.paused) poll(); else pumpOwned();
+      if (active || maintenance.paused) {
+        active?.checkpointScope?.notifyCheckpointWake(); poll();
+      } else pumpOwned();
     };
     externalCancel = () => finish(null, true);
     try {
@@ -489,7 +579,8 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         const index = checkpointReads.indexOf(task); if (index < 0) return;
         const at = accountWaiting(); checkpointReads.splice(index, 1); task.cleanup(); const error = aborted(); recordTask(task, error, at); reject(error); pump();
       };
-      timing.checkpointReadEnqueued++; checkpointReads.push(task); task.attach(); pump();
+      timing.checkpointReadEnqueued++; checkpointReads.push(task); task.attach();
+      active?.checkpointScope?.notifyCheckpointWake(); pump();
     });
   }
   async function checkpointPressure() {
@@ -552,11 +643,21 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
     let reservedAt;
     try { reservedAt = timestamp(); } catch { throw savedReadBusy("checkpoint_clock_invalid", owner); }
     const admitUntil = reservedAt + savedReadCheckpointWaitMs;
+    const waitDiagnostic = startCheckpointWait(token, owner, reservedAt, admitUntil);
+    const rejectedReason = error => {
+      try {
+        const reason = error?.readGuard?.reason;
+        return ["checkpoint_expired", "checkpoint_clock_invalid", "owner_changed", "atomic_work", "ineligible_owner",
+          "checkpoint_context_mismatch", "scheduler_closed", "external_checking", "maintenance", "owner_aborted",
+          "checkpoint_aborted", "reservation_changed", "saved_permit_busy"].includes(reason) ? reason : "checkpoint_failed";
+      } catch { return "checkpoint_failed"; }
+    };
     let lastAdmissionAt = reservedAt, admissionClosed = false, admissionClosedReason = null;
     const admissionTime = () => {
       if (admissionClosed) return null;
-      try { const at = timestamp(); if (at < lastAdmissionAt || at >= admitUntil) { admissionClosed = true; admissionClosedReason = at < lastAdmissionAt ? "checkpoint_clock_invalid" : "checkpoint_expired"; return null; } lastAdmissionAt = at; return at; }
-      catch { admissionClosed = true; admissionClosedReason = "checkpoint_clock_invalid"; return null; }
+      try { const at = timestamp(); if (at < lastAdmissionAt || at >= admitUntil) { admissionClosed = true; admissionClosedReason = at < lastAdmissionAt ? "checkpoint_clock_invalid" : "checkpoint_expired";
+        waitDiagnostic.deadline ||= checkpointWaitSnapshot(owner); return null; } lastAdmissionAt = at; return at; }
+      catch { admissionClosed = true; admissionClosedReason = "checkpoint_clock_invalid"; waitDiagnostic.deadline ||= checkpointWaitSnapshot(owner); return null; }
     };
     savedReadReservation = token;
     let admissionTimer = null, loan = null, began = false, released = false, resolveRelease, admissionTimeoutFired = false;
@@ -574,7 +675,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         try {
           const admittedAt = admissionTime();
           if (admittedAt === null) throw savedReadBusy(admissionClosedReason, owner);
-          admissionTimer = setTimeoutImpl(() => { if (!began) { admissionTimeoutFired = true; controller.abort(); } }, Math.max(1, admitUntil - admittedAt));
+          admissionTimer = setTimeoutImpl(() => { if (!began) { admissionTimeoutFired = true;
+            // Capture before abort listeners can remove the queue or pump a
+            // maintenance check. Post-cleanup flags alone are not the cause.
+            waitDiagnostic.deadline ||= checkpointWaitSnapshot(owner); controller.abort(); } }, Math.max(1, admitUntil - admittedAt));
           admissionTimer?.unref?.();
           loan = runCheckpointRead(async info => {
             // Generic proof loans remain unchanged. This private capability
@@ -598,6 +702,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
             began = true; clearAdmissionTimer();
             if (savedReadReservation !== token || savedReadPermit) throw savedReadBusy(savedReadReservation !== token ? "reservation_changed" : "saved_permit_busy", owner);
             savedReadReservation = null; accountWaiting(); savedReadPermit = token;
+            finishCheckpointWait(waitDiagnostic, owner, "admitted");
             token.running = true;
             let failure;
             try {
@@ -609,18 +714,22 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
             // does not authorize the suspended background owner to resume.
             await releaseGate;
             if (failure) throw failure;
-          }, { kind: savedCheckpointKind, signal: controller.signal }, savedCheckpointCapability);
+          }, { kind: savedCheckpointKind, signal: controller.signal,
+            onTaskTiming: record => { waitDiagnostic.checkpointReadId = record.id; } }, savedCheckpointCapability);
           loan.then(() => {}, error => {
             if (!began) {
               token.active = false;
               if (savedReadReservation === token) savedReadReservation = null;
             }
-            rejectReady(!began && error?.code === "ANALYTICAL_WORK_ABORTED"
-              ? savedReadBusy(admissionTimeoutFired ? "checkpoint_expired" : owner.controller.signal.aborted ? "owner_aborted" : "checkpoint_aborted", owner) : error);
+            const failure = !began && error?.code === "ANALYTICAL_WORK_ABORTED"
+              ? savedReadBusy(admissionTimeoutFired ? "checkpoint_expired" : owner.controller.signal.aborted ? "owner_aborted" : "checkpoint_aborted", owner) : error;
+            finishCheckpointWait(waitDiagnostic, owner, "rejected", rejectedReason(failure));
+            rejectReady(failure);
           }).finally(clearAdmissionTimer);
         } catch (error) {
           clearAdmissionTimer(); token.active = false;
           if (savedReadReservation === token) savedReadReservation = null;
+          finishCheckpointWait(waitDiagnostic, owner, "rejected", rejectedReason(error));
           rejectReady(error);
         }
         return ready;
@@ -629,6 +738,7 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         if (released) return;
         if (token.running) throw fault("KEYWORD_MONTHLY_SAVED_READ_PERMIT_ACTIVE");
         released = true; token.active = false; clearAdmissionTimer();
+        if (!token.invoked) finishCheckpointWait(waitDiagnostic, owner, "released_before_start");
         if (savedReadReservation === token) { savedReadReservation = null; controller.abort(); }
         if (savedReadPermit === token) { accountWaiting(); savedReadPermit = null; }
         resolveRelease(); settleIdle(); pump();
@@ -684,6 +794,10 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
       queuedForeground: foreground.length + checkpointReads.length, queuedBackground: background.length,
       queuedCheckpointReads: checkpointReads.length, activeCheckpointReadKind: checkpointReader?.kind || null,
       sampling: Boolean(sampling), memory: memoryStatus(), maintenance: { ...maintenance },
+      checkpointWaitDiagnostics: { version: 1, historyLimit: 32, transitionLimit: 8, byteLimit: 64 * 1024,
+        droppedRecords: checkpointWaitDropped,
+        interpretation: "Latest eight scalar transitions. Observation timestamps use wall time; reservation/deadline use the admission clock. A null sourceWait is uninstrumented or idle, not proof of no I/O. Admission diagnostics are not CPU or allocator attribution.",
+        ...JSON.parse(JSON.stringify({ active: activeCheckpointWait, recent: checkpointWaitHistory })) },
       cooperative: { enabled: cooperativeYield || cooperativeCompanyMonthYield, industryEnabled: cooperativeYield,
         companyMonthEnabled: cooperativeCompanyMonthYield,
         minRunMs: cooperativeMinRunMs, minProgressCheckpoints: cooperativeMinProgress,
@@ -693,13 +807,16 @@ function createAnalyticalWorkScheduler({ foregroundBurst = 4, sampleMemory = nul
         activeCheckpointsInPhase: active?.cooperative?.phaseCheckpoints || 0,
         activeUnitIndex: active?.cooperative?.unitIndex || 0,
         activeCheckpointsInUnit: active?.cooperative?.unitCheckpoints || 0,
-        yieldRequested: active?.cooperative?.yieldRequested || false },
+        yieldRequested: active?.cooperative?.yieldRequested || false,
+        activeSourceWait: active?.checkpointScope?.sourceWaits?.length
+          ? { ...active.checkpointScope.sourceWaits.at(-1) } : null },
       timing: { ...timing, historyLimit: timingHistoryLimit, recent: recent.map(row => ({ ...row,
         ...(row.progressHighWater ? { progressHighWater: { ...row.progressHighWater } } : {}) })),
         interpretation: "Exclusive lease wall time includes I/O, not only CPU. Reentrant wall time overlaps its parent and is excluded from exclusive totals. Checkpoint reads have separate counters; borrowed reads pause their parent at a safe boundary and never overlap execution or atomic publication. Wait reasons are disjoint; busy ownership precedes memory pressure. Queue wait totals sum per task and can overlap across queued tasks; they are not elapsed scheduler uptime." } };
   }
   async function close() {
     const at = accountWaiting(); closed = true; clearPoll();
+    if (activeCheckpointWait) finishCheckpointWait(activeCheckpointWait, active, "rejected", "scheduler_closed");
     externalCancel?.();
     for (const task of [...foreground.splice(0), ...background.splice(0), ...checkpointReads.splice(0)]) { task.cleanup(); const error = fault("ANALYTICAL_WORK_CLOSED");
       recordTask(task, error, at); task.reject(error); }

@@ -191,7 +191,10 @@ function createKeywordMonthlyRequestDiagnostics({ now = Date.now, maxRecords = 3
       if (values.length) res.setHeader?.("Server-Timing", values.join(", "));
     } catch { counters.observerErrors++; }
   }
-  return Object.freeze({ run, measure, measureSync, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response,
+  // The scheduler may capture this fixed opaque ID before entering another
+  // async context. It is observational only and never creates a trace.
+  const currentTraceId = () => storage.getStore()?.traceId ?? null;
+  return Object.freeze({ run, measure, measureSync, admission, metadata, guard, work, lifecycleOptions, schedulerOptions, response, currentTraceId,
     status: () => ({ ...counters, maxRecords, maxEventsPerWindow, windowMs, recent: records.map(trace => view(trace)) }) });
 }
 

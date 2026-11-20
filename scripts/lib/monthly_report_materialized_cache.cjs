@@ -5,9 +5,19 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { performance } = require("node:perf_hooks");
 const { gzipSync, gunzipSync, constants: zlibConstants } = require("node:zlib");
+const { beginCooperativeSourceWait } = require("./cooperative_work_checkpoint.cjs");
+
+async function observedWait(kind, maxBytes, operation) {
+  const end = beginCooperativeSourceWait(kind, maxBytes);
+  try { return await operation(); } finally { end(); }
+}
+function observedSync(kind, maxBytes, operation) {
+  const end = beginCooperativeSourceWait(kind, maxBytes);
+  try { return operation(); } finally { end(); }
+}
 
 const digest = value => crypto.createHash("sha256").update(value).digest("hex");
-const copy = value => JSON.parse(JSON.stringify(value));
+const copy = value => observedSync("derived_cache_copy", null, () => JSON.parse(JSON.stringify(value)));
 const changed = () => Object.assign(new Error("집계 중 저장 자료가 변경되었습니다. 기존 저장본은 보존했으며, 다시 미리보기해 주세요."), { code: "MONTHLY_SOURCE_CHANGED", statusCode: 409 });
 
 // Derived calculations only. Issued reports and approved preview tokens never
@@ -23,26 +33,26 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
   const entryName = compression === "gzip" ? /^[a-f0-9]{64}\.json(?:\.gz)?$/ : /^[a-f0-9]{64}\.json$/;
   const inFlight = new Map();
   async function revision(readRevision) {
-    const value = await readRevision();
+    const value = await observedWait("source_revision", null, readRevision);
     if (typeof value !== "string" || !value || value.length > 512) throw Object.assign(new Error("저장 자료의 변경 여부를 확인하지 못했습니다."), { code: "MONTHLY_SOURCE_REVISION_UNAVAILABLE", statusCode: 503 });
     return value;
   }
   async function read(file, key) {
     try {
-      const stat = await fs.lstat(file);
+      const stat = await observedWait("derived_cache_stat", maxEntryBytes, () => fs.lstat(file));
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxEntryBytes) return null;
       let serialized;
       if (compression === "gzip") {
-        const encoded = await fs.readFile(file);
+        const encoded = await observedWait("derived_cache_read", maxEntryBytes, () => fs.readFile(file));
         if (encoded.length > maxEntryBytes) return null;
         // The decoded bound is independent of the disk compression ratio. A
         // corrupt or oversized compressed file is a miss, never trusted data.
-        serialized = gunzipSync(encoded, { maxOutputLength: maxEntryBytes }).toString("utf8");
-      } else serialized = await fs.readFile(file, "utf8");
-      const entry = JSON.parse(serialized);
+        serialized = observedSync("derived_cache_decode", maxEntryBytes, () => gunzipSync(encoded, { maxOutputLength: maxEntryBytes }).toString("utf8"));
+      } else serialized = await observedWait("derived_cache_read", maxEntryBytes, () => fs.readFile(file, "utf8"));
+      const entry = observedSync("derived_cache_decode", maxEntryBytes, () => JSON.parse(serialized));
       if (entry.schemaVersion !== 1 || entry.key !== key
         || typeof entry.sourceRevision !== "string" || !entry.sourceRevision || entry.sourceRevision.length > 512
-        || !entry.value || entry.valueHash !== digest(JSON.stringify(entry.value))) return null;
+        || !entry.value || entry.valueHash !== observedSync("derived_cache_encode", maxEntryBytes, () => digest(JSON.stringify(entry.value)))) return null;
       return entry;
     } catch { return null; } // An invalid derived file is a miss, never a zero.
   }
@@ -59,18 +69,20 @@ function createMonthlyReportMaterializedCache({ directory, maxEntries = 64, maxB
     }
   }
   async function write(file, entry) {
-    const serialized = JSON.stringify(entry);
+    const serialized = observedSync("derived_cache_encode", maxEntryBytes, () => JSON.stringify(entry));
     if (Buffer.byteLength(serialized) > maxEntryBytes) return "too_large";
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
-      const encoded = compression === "gzip" ? gzipSync(serialized, { level: zlibConstants.Z_BEST_SPEED }) : serialized;
+      const encoded = compression === "gzip" ? observedSync("derived_cache_encode", maxEntryBytes, () => gzipSync(serialized, { level: zlibConstants.Z_BEST_SPEED })) : serialized;
       if (compression === "gzip" && encoded.length > maxEntryBytes) return "too_large";
-      await fs.mkdir(directory, { recursive: true });
-      const handle = await fs.open(temp, "wx");
-      try { await handle.writeFile(encoded, "utf8"); await handle.sync(); }
-      finally { await handle.close(); }
-      await fs.rename(temp, file);
-      await trim(file).catch(() => {});
+      await observedWait("derived_cache_write", maxEntryBytes, async () => {
+        await fs.mkdir(directory, { recursive: true });
+        const handle = await fs.open(temp, "wx");
+        try { await handle.writeFile(encoded, "utf8"); await handle.sync(); }
+        finally { await handle.close(); }
+        await fs.rename(temp, file);
+        await trim(file).catch(() => {});
+      });
       return "saved";
     } catch { return "failed"; }
     finally { await fs.unlink(temp).catch(() => {}); }

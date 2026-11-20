@@ -6,6 +6,15 @@ const {createKeywordMonthlyQueryLifecycle}=require("./lib/keyword_monthly_query_
 const {createAnalyticalWorkScheduler}=require("./lib/analytical_work_scheduler.cjs");
 const immediate=()=>new Promise(resolve=>setImmediate(resolve));
 const gate=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
+test("current trace getter is request-local and does not create records or change counters",async()=>{
+  const d=createKeywordMonthlyRequestDiagnostics({onLog:null}), hold=gate();
+  const before=d.status();assert.equal(d.currentTraceId(),null);assert.deepEqual(d.status(),before);
+  let firstId,secondId;
+  const first=d.run("data",async()=>{firstId=d.currentTraceId();assert.match(firstId,/^[a-f0-9]{24}$/);await hold.promise;assert.equal(d.currentTraceId(),firstId);return 1;});
+  const second=d.run("catalogue",async()=>{secondId=d.currentTraceId();assert.notEqual(secondId,firstId);return 2;});
+  assert.equal(d.currentTraceId(),null);assert.equal(await second,2);hold.resolve();assert.equal(await first,1);
+  assert.equal(d.currentTraceId(),null);assert.equal(d.status().started,2);assert.equal(d.status().finished,2);
+});
 function request(handler,keyword="private-keyword"){const res={headers:{},setHeader(key,value){this.headers[key]=value;}};return handler({method:"GET"},res,new URL("https://example.test/api/keyword-monthly?keyword="+keyword+"&month=2026-11"),{}).then(()=>res);}
 
 test("concurrent shared reads retain distinct request IDs and only the owner observes the actual scheduler timing",async()=>{
