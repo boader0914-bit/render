@@ -135,7 +135,7 @@
   const catalogueApi = root.KeywordMonthlyCatalogueCache || catalogueModule;
   const catalogueCache = catalogueApi?.createCatalogueCache?.({ storage: sessionStorage }) || null;
   const selectionStorage = createSelectionStorage({ storage: sessionStorage });
-  const RESULT_KEY = "staydatalab:keyword-monthly-last-good:v1", RESULT_LIMIT = 2 * 1024 * 1024, RESULT_TTL = 12 * 3600000;
+  const RESULT_KEY = "staydatalab:keyword-monthly-last-good:v1", RESULT_LIMIT = 2 * 1024 * 1024, RESULT_TTL = 12 * 3600000, RESULT_PROJECTION_VERSION = 1;
   // One bounded, same-session administrator result is a display fallback only.
   // Its catalogue deliberately excludes live execution/protection state. A new
   // GET /version must succeed before the UI may claim a latest confirmation.
@@ -171,17 +171,111 @@
       if (typeof value === "number") return Number.isFinite(value) ? null : "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
       if (typeof value === "string") return value.length <= 32768 ? null : "KEYWORD_MONTHLY_CACHE_STRING_LIMIT";
       if (!value || typeof value !== "object") return "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
+      // A cache projection accepts JSON data, never a custom serializer or an
+      // accessor that could conceal a conflict while evidence is omitted.
+      let prototype = value;
+      for (let i = 0; prototype !== null; i++) {
+        if (i > 24 || Object.getOwnPropertyDescriptor(prototype, "toJSON")) return "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
+        prototype = Object.getPrototypeOf(prototype);
+      }
       for (const key of Object.keys(value)) {
         if (/(password|cookie|authorization|secret|token|private|rawPayload|guest|customer|contact|address|account|kosis)/i.test(key)
           || ["__proto__", "prototype", "constructor", "apikey", "credentials", "headers", "sessionid", "session", "username", "memberid", "email", "phonenumber"].includes(key.toLowerCase())) return "KEYWORD_MONTHLY_CACHE_UNSAFE_FIELD";
-        const failure = treeFailure(value[key], depth + 1, budget); if (failure) return failure;
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) return "KEYWORD_MONTHLY_CACHE_VALUE_INVALID";
+        const failure = treeFailure(descriptor.value, depth + 1, budget); if (failure) return failure;
       }
       return null;
     };
-    function project(value, catalogue, rejected = () => {}) {
+    class ProjectionFailure extends Error { constructor(code) { super(code); this.code = code; } }
+    const projectionFailure = code => { throw new ProjectionFailure(code); };
+    const omittedEvidence = ["capacityWitnesses", "phonePriceEstimates", "phoneValuation", "sharedDayUseEvidence"];
+    const omittedSnapshot = ["changes", "ranks", "insights", "context", "definitions"];
+    function dataRecord(value) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== null) {
+        const constructor = Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+        if (Object.getPrototypeOf(prototype) !== null || typeof constructor !== "function"
+          || Function.prototype.toString.call(constructor) !== Function.prototype.toString.call(Object) || constructor.prototype !== prototype)
+          projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+      }
+      const entries = [];
+      for (const key of Reflect.ownKeys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (typeof key !== "string" || !descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+        entries.push([key, descriptor.value]);
+      }
+      return Object.fromEntries(entries);
+    }
+    function displayRows(rows, previous, stored) {
+      if (!Array.isArray(rows)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+      const seen = new Map(), output = [];
+      for (const row of rows) {
+        const fields = dataRecord(row);
+        if (stored && previous) {
+          if (Object.keys(fields).join(",") !== "productType" || !safeText(fields.productType, 100, false)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+          output.push(fields); continue;
+        }
+        // The aggregate stored-tree bound remains150k. The original row is
+        // checked separately before omission, including custom toJSON/getters.
+        const invalid = treeFailure(row); if (invalid) projectionFailure(invalid);
+        if (!safeText(fields.companyId, 180, false) || !dateValid(fields.date) || !safeText(fields.productType, 100, false)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+        for (const key of ["companyId", "date", "productType"]) if (!Object.hasOwn(fields, key)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+        const key = JSON.stringify([fields.companyId, fields.date, fields.productType]);
+        if (seen.has(key)) {
+          // Keep the original whole-row JSON equality and order. Comparing
+          // compact rows would hide conflicts in omitted evidence fields.
+          if (JSON.stringify(seen.get(key)) !== JSON.stringify(row)) projectionFailure("KEYWORD_MONTHLY_CACHE_OBSERVATION_CONFLICT");
+        } else seen.set(key, row);
+        if (previous) output.push({ productType: fields.productType });
+        else {
+          for (const field of omittedEvidence) {
+            if (stored && Object.hasOwn(fields, field)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+            delete fields[field];
+          }
+          output.push(fields);
+        }
+      }
+      return output;
+    }
+    function displaySnapshot(value, stored) {
+      const snapshot = dataRecord(value);
+      for (const key of omittedSnapshot) {
+        if (stored && Object.hasOwn(snapshot, key)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+        if (Object.hasOwn(snapshot, key)) { const invalid = treeFailure(snapshot[key]); if (invalid) projectionFailure(invalid); }
+        delete snapshot[key];
+      }
+      if (!Array.isArray(snapshot.companies)) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+      snapshot.companies = snapshot.companies.map(value => {
+        const company = dataRecord(value);
+        if (stored && Object.hasOwn(company, "daily")) projectionFailure("KEYWORD_MONTHLY_CACHE_PROJECTION_INVALID");
+        if (Object.hasOwn(company, "daily")) { const invalid = treeFailure(company.daily); if (invalid) projectionFailure(invalid); }
+        delete company.daily; return company;
+      });
+      snapshot.sources = dataRecord(snapshot.sources);
+      snapshot.sources.observations = displayRows(snapshot.sources.observations, false, stored);
+      const comparison = value => {
+        if (value == null) return value;
+        const result = dataRecord(value);
+        if (result.previousSources != null) {
+          result.previousSources = dataRecord(result.previousSources);
+          if (Object.hasOwn(result.previousSources, "observations")) result.previousSources.observations = displayRows(result.previousSources.observations, true, stored);
+        }
+        return result;
+      };
+      if (Object.hasOwn(snapshot, "comparison")) snapshot.comparison = comparison(snapshot.comparison);
+      if (snapshot.comparisonByProduct != null) snapshot.comparisonByProduct = Object.fromEntries(Object.entries(dataRecord(snapshot.comparisonByProduct)).map(([key, value]) => [key, comparison(value)]));
+      return snapshot;
+    }
+    function project(value, catalogue, rejected = () => {}, mode = "live") {
       const reject = code => { rejected(code); return null; };
-      if (value?.schemaVersion !== 1 || value.snapshot?.schemaVersion !== 1 || value.status !== "available" || value.readOnly !== true || value.networkAttempted !== false
-        || value.preparedResult?.status !== "ready") return reject("KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID");
+      if (value?.schemaVersion !== 1) return reject("KEYWORD_MONTHLY_CACHE_RESPONSE_SCHEMA_INVALID");
+      if (value.snapshot?.schemaVersion !== 1) return reject("KEYWORD_MONTHLY_CACHE_SNAPSHOT_SCHEMA_INVALID");
+      if (value.status !== "available" && !historicalSnapshotEligible(value, value.request)) return reject("KEYWORD_MONTHLY_CACHE_RESPONSE_STATUS_INVALID");
+      if (value.readOnly !== true) return reject("KEYWORD_MONTHLY_CACHE_READ_ONLY_INVALID");
+      if (value.networkAttempted !== false) return reject("KEYWORD_MONTHLY_CACHE_NETWORK_ATTEMPTED_INVALID");
+      if (value.preparedResult?.status !== "ready") return reject("KEYWORD_MONTHLY_CACHE_PREPARED_STATUS_INVALID");
       if (value.provenance?.originalFreshnessVerified !== false
         || !/^[a-f0-9]{64}$/.test(value.provenance?.currentPointerSha256 || "") || !/^[a-f0-9]{64}$/.test(value.provenance?.inputSha256 || "")
         || !/^[a-f0-9]{32}$/.test(value.bundle?.generation || "")) return reject("KEYWORD_MONTHLY_CACHE_PROVENANCE_INVALID");
@@ -200,6 +294,8 @@
       if (metadata.status === "stale" && !metadata.diagnostics.some(code => ["PROJECTION_EXPIRED", "KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT"].includes(code))) return reject("KEYWORD_MONTHLY_CACHE_CATALOGUE_UNAVAILABLE");
       const payload = Object.fromEntries(["schemaVersion", "status", "readOnly", "networkAttempted", "request", "snapshot", "activity", "latestAttempt", "lastSuccessfulAttempt", "provenance", "diagnostics", "preparedResult", "supportedCutoffDate", "bundle"]
         .filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+      if (mode !== "legacy") try { payload.snapshot = displaySnapshot(payload.snapshot, mode === "stored"); }
+      catch (error) { if (error instanceof ProjectionFailure) return reject(error.code); throw error; }
       const unsafe = treeFailure({ payload, catalogue: metadata }); if (unsafe) return reject(unsafe);
       return { payload, catalogue: metadata };
     }
@@ -210,18 +306,21 @@
         const raw = storage?.getItem(RESULT_KEY); if (!raw) return null;
         if (raw.length > RESULT_LIMIT || new root.TextEncoder().encode(raw).byteLength > RESULT_LIMIT) { clear(); return null; }
         const entry = JSON.parse(raw), at = Number(now()), age = at - entry?.storedAt;
-        if (!entry || Object.keys(entry).sort().join(",") !== "catalogue,contentSha256,expiresAt,payload,schema,scope,storedAt" || entry.schema !== 1 || entry.scope !== allowed.scope
+        const legacy = entry?.schema === 1;
+        const keys = legacy ? "catalogue,contentSha256,expiresAt,payload,schema,scope,storedAt" : "catalogue,contentSha256,expiresAt,payload,projectionVersion,schema,scope,storedAt";
+        if (!entry || Object.keys(entry).sort().join(",") !== keys || (!legacy && (entry.schema !== 2 || entry.projectionVersion !== RESULT_PROJECTION_VERSION)) || entry.scope !== allowed.scope
           || !Number.isFinite(age) || age < 0 || age > RESULT_TTL || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= at
           || entry.expiresAt > allowed.expiresAt || entry.expiresAt > entry.storedAt + RESULT_TTL) { clear(); return null; }
-        const checked = project(entry.payload, entry.catalogue); if (!checked) { clear(); return null; }
+        const checked = project(entry.payload, entry.catalogue, () => {}, legacy ? "legacy" : "stored"); if (!checked) { clear(); return null; }
         if (!context || ["keyword", "month", "cutoffDate"].some(key => context[key] !== checked.payload.request[key])) return null;
-        const verified = /^[a-f0-9]{64}$/.test(entry.contentSha256 || "") && await checksum(JSON.stringify(checked)) === entry.contentSha256;
+        const content = legacy ? checked : { projectionVersion: RESULT_PROJECTION_VERSION, ...checked };
+        const verified = /^[a-f0-9]{64}$/.test(entry.contentSha256 || "") && await checksum(JSON.stringify(content)) === entry.contentSha256;
         // A delayed read may not remove a newer result written or configured
         // while its digest was pending.
         if (ticket !== revision || auth()?.scope !== allowed.scope || storage?.getItem(RESULT_KEY) !== raw) return null;
         const after = Number(now());
         if (!verified || after >= entry.expiresAt || after - entry.storedAt > RESULT_TTL || checked.catalogue.currentDay !== kstDay(after)) { clear(); return null; }
-        return checked;
+        return legacy ? checked : { ...checked, projectionVersion: RESULT_PROJECTION_VERSION };
       } catch { clear(); return null; }
     }
     async function writeResult(value, catalogue) {
@@ -237,7 +336,7 @@
         if (!checked) return finish(false, projectionFailure || "KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID");
         pendingWrite = { ticket, request: requestKey(checked.payload.request), scope: allowed.scope };
         stage = "serialization";
-        const content = JSON.stringify(checked);
+        const projected = { projectionVersion: RESULT_PROJECTION_VERSION, ...checked }, content = JSON.stringify(projected);
         stage = "storage_read";
         if (content === lastWritten?.content && allowed.scope === lastWritten.scope && Number(now()) < lastWritten.expiresAt
           && storage?.getItem(RESULT_KEY) === lastWritten.raw) return finish(true);
@@ -250,7 +349,11 @@
         if (auth()?.scope !== allowed.scope) return finish(false, "KEYWORD_MONTHLY_CACHE_SESSION_CHANGED");
         if (checked.catalogue.currentDay !== kstDay(now())) return finish(false, "KEYWORD_MONTHLY_CACHE_DAY_CHANGED");
         stage = "serialization";
-        const at = Number(now()), expiresAt = Math.min(allowed.expiresAt, at + RESULT_TTL), raw = JSON.stringify({ schema: 1, scope: allowed.scope, storedAt: at, contentSha256, expiresAt, ...checked });
+        const at = Number(now()), expiresAt = Math.min(allowed.expiresAt, at + RESULT_TTL);
+        // Bind the exact JSON captured before async hashing. Re-traversing
+        // caller-owned objects here could serialize different values.
+        const header = JSON.stringify({ schema: 2, scope: allowed.scope, storedAt: at, contentSha256, expiresAt });
+        const raw = `${header.slice(0, -1)},${content.slice(1)}`;
         stage = "encoding";
         if (raw.length > RESULT_LIMIT || new root.TextEncoder().encode(raw).byteLength > RESULT_LIMIT) return finish(false, "KEYWORD_MONTHLY_CACHE_SIZE_LIMIT");
         if (typeof storage?.setItem !== "function") return finish(false, "KEYWORD_MONTHLY_CACHE_STORAGE_UNAVAILABLE");
@@ -259,7 +362,7 @@
       } catch (error) {
         const reason = stage === "storage_write" || stage === "storage_read"
           ? error?.name === "QuotaExceededError" ? "KEYWORD_MONTHLY_CACHE_STORAGE_QUOTA" : "KEYWORD_MONTHLY_CACHE_STORAGE_DENIED"
-          : stage === "encoding" ? "KEYWORD_MONTHLY_CACHE_ENCODING_UNAVAILABLE" : stage === "serialization" ? "KEYWORD_MONTHLY_CACHE_SERIALIZATION_FAILED" : "KEYWORD_MONTHLY_CACHE_RESPONSE_INVALID";
+          : stage === "encoding" ? "KEYWORD_MONTHLY_CACHE_ENCODING_UNAVAILABLE" : stage === "serialization" ? "KEYWORD_MONTHLY_CACHE_SERIALIZATION_FAILED" : "KEYWORD_MONTHLY_CACHE_VALIDATION_FAILED";
         return finish(false, reason);
       }
       finally { if (pendingWrite?.ticket === ticket) pendingWrite = null; }
@@ -407,6 +510,13 @@
       return { date, day, observed: value.observed, reservationRate: value.observed ? value.reservationRate : null, coverageRate: value.observed ? value.coverageRate : null };
     });
   }
+  function historicalSnapshotEligible(payload, selection, diagnostics = Array.isArray(payload?.diagnostics) ? payload.diagnostics : []) {
+    // Both display and bounded reload storage recognize the same historical
+    // evidence. Neither path relabels it available or verifies later collection.
+    return payload?.status === "stale" && hasDiagnostic(diagnostics, "PROJECTION_EXPIRED")
+      && !hasDiagnostic(diagnostics, "CUTOFF_AFTER_DATA_THROUGH") && Number.isFinite(Date.parse(payload.provenance?.dataThrough || ""))
+      && typeof selection?.cutoffDate === "string" && selection.cutoffDate <= dataThroughDay({ provenance: payload.provenance });
+  }
   function buildViewModel(payload = {}, selection = {}, currentMonth = "") {
     const request = payload.request || {}, snapshot = payload.snapshot;
     const scopeMatches = request.keyword === selection.keyword && request.month === selection.month && request.cutoffDate === selection.cutoffDate;
@@ -417,9 +527,7 @@
     const diagnostics = [...(Array.isArray(payload.diagnostics) ? payload.diagnostics : [])];
     // An expired preparation remains inspectable as historical evidence. It is
     // never relabelled fresh, and a cutoff beyond that evidence stays blocked.
-    const historicalSnapshot = payload.status === "stale" && hasDiagnostic(diagnostics, "PROJECTION_EXPIRED")
-      && !hasDiagnostic(diagnostics, "CUTOFF_AFTER_DATA_THROUGH") && Number.isFinite(Date.parse(payload.provenance?.dataThrough || ""))
-      && selection.cutoffDate <= dataThroughDay({ provenance: payload.provenance });
+    const historicalSnapshot = historicalSnapshotEligible(payload, selection, diagnostics);
     const eligible = payload.status === "available" || historicalSnapshot;
     const usable = eligible && scopeMatches && snapshotMatches && dailyValid;
     const status = eligible && !usable ? "needs_verification" : payload.status || "needs_verification";
@@ -454,7 +562,7 @@
     const autoTimeoutMs = Number.isSafeInteger(options.autoRefreshTimeoutMs) && options.autoRefreshTimeoutMs > 0 ? options.autoRefreshTimeoutMs : 5000;
     let autoTimer = null, autoTask = null, autoEpoch = 0, autoDueAt = 0, autoFailures = 0, autoText = "", autoErrorCode = "", composingSearch = null;
     let initialAutomaticNeeded = true, initialAutomaticWait = null, initialFrameObservation = null;
-    let cachedStatusState = "", cachedStatusTask = null, restoredLastGood = false, reloadCacheState = "none", reloadCacheReasonCode = "", reloadCacheWriteTicket = 0;
+    let cachedStatusState = "", cachedStatusTask = null, restoredLastGood = false, reloadCacheState = "none", reloadCacheReasonCode = "", reloadCacheWriteTicket = 0, displayCacheProjectionVersion = 0;
     let pendingScrollRestore = null, scrollRestoreCancelled = false, priorViewportWidth = win.innerWidth;
     const emptyInitialTiming = () => ({ renderedAt: null, framesCompletedAt: null, startedAt: null, completedAt: null, outcome: "pending" });
     let initialAutomaticTiming = emptyInitialTiming();
@@ -497,8 +605,11 @@
     function renderCacheNotice() {
       panel.dataset.reloadCacheState = reloadCacheState;
       panel.dataset.reloadCacheReasonCode = reloadCacheReasonCode;
-      cacheNotice.hidden = !allowed() || paused || reloadCacheState !== "unavailable";
-      cacheNotice.textContent = cacheNotice.hidden ? "" : `이 결과는 브라우저 임시 저장을 사용할 수 없습니다. 현재 자료는 유지하며 새로고침하면 서버에서 다시 확인합니다.${reloadCacheReasonCode ? ` (${reloadCacheReasonCode})` : ""}`;
+      const projected = displayCacheProjectionVersion === RESULT_PROJECTION_VERSION && payload && payload === lastGoodPayload;
+      panel.dataset.reloadCacheProjectionVersion = projected ? String(displayCacheProjectionVersion) : "";
+      cacheNotice.hidden = !allowed() || paused || reloadCacheState !== "unavailable" && !projected;
+      cacheNotice.textContent = cacheNotice.hidden ? "" : [projected ? "이전에 확인한 저장 자료를 복원했습니다. 최신 상태 확인 결과는 별도로 표시합니다." : "",
+        reloadCacheState === "unavailable" ? `이 결과는 브라우저 임시 저장을 사용할 수 없습니다. 현재 자료는 유지하며 새로고침하면 서버에서 다시 확인합니다.${reloadCacheReasonCode ? ` (${reloadCacheReasonCode})` : ""}` : ""].filter(Boolean).join(" ");
     }
     function persistLastGood(value) {
       const token = sequence, writeTicket = ++reloadCacheWriteTicket; reloadCacheState = "pending"; reloadCacheReasonCode = ""; renderCacheNotice();
@@ -883,7 +994,8 @@
       conditionSummary.textContent = keyword ? `현재 조회 기준 · ${keyword} / 숙박월 ${month} / 관측 마감 ${cutoffDate} (${cutoffMode === "explicit" ? "사용자 선택" : "최신 근거 자동"}) / ${PRODUCTS[product].label}${draftHasChanges() ? " · 입력 초안이 다릅니다. 현재 자료는 위 조회 기준입니다." : ""}` : "저장된 키워드와 실제 숙박월을 선택하세요.";
       renderControls(dashboard); panel.setAttribute("aria-busy", String(loading)); results.replaceChildren();
       persistView();
-      notice.textContent = retained ? loading || restoredLastGood && !autoErrorCode ? "같은 조회 조건의 마지막 정상 저장 자료를 표시하며 최신 상태를 확인하고 있습니다." : resumeNeeded ? "같은 조회 조건의 마지막 정상 저장 자료입니다. 화면 복귀 시 중단된 최신 상태 확인을 다시 진행합니다." : "최신 조회를 완료하지 못했습니다. 아래는 같은 조회 조건의 마지막 정상 저장 자료이며 최신 반영 완료를 뜻하지 않습니다."
+      const retainedLabel = candidate?.historicalSnapshot ? "과거 저장 근거" : "마지막 정상 저장 자료";
+      notice.textContent = retained ? loading || restoredLastGood && !autoErrorCode ? `같은 조회 조건의 ${retainedLabel}를 표시하며 최신 상태를 확인하고 있습니다.` : resumeNeeded ? `같은 조회 조건의 ${retainedLabel}입니다. 화면 복귀 시 중단된 최신 상태 확인을 다시 진행합니다.` : `최신 조회를 완료하지 못했습니다. 아래는 같은 조회 조건의 ${retainedLabel}이며 최신 반영 완료를 뜻하지 않습니다.`
         : loading ? phase === "options" ? "저장된 검색어와 숙박월을 확인하고 있습니다." : "선택한 조건의 저장 집계를 확인하고 있습니다." : "숙박월 성과와 수집월 실행 횟수는 별도 기준입니다. 조회는 수집이나 재집계를 시작하지 않습니다.";
       if (restoreNotice && !loading) notice.textContent = `${restoreNotice} ${notice.textContent}`;
       renderAutomaticNotice();
@@ -1104,7 +1216,7 @@
           // may replace the visible result, its options and its source marker.
           const scrollX = win.scrollX, scrollY = win.scrollY, resultFocus = captureResultFocus();
           catalog = nextCatalog; cutoffDate = nextSelection.cutoffDate; appliedSelection = selected();
-          payload = lastGoodPayload = value; error = errorCode = ""; restoredLastGood = false; persistLastGood(value);
+          payload = lastGoodPayload = value; error = errorCode = ""; restoredLastGood = false; displayCacheProjectionVersion = 0; persistLastGood(value);
           if (task.overwriteDraft && task.editRevision === draftRevision) { draft = selected(); draftCutoffMode = cutoffMode; }
           autoText = "새 준비 결과를 반영했습니다. 이후 변경도 자동으로 확인합니다."; autoErrorCode = "";
           rememberScope(); render(); restoreResultFocus(resultFocus);
@@ -1122,7 +1234,7 @@
           autoText = payload && payload === lastGoodPayload
             ? `${scopeFailure ? "선택 조건의 새 준비 결과가 없어" : "새 준비 결과 확인을 완료하지 못해"} 기존 저장 자료를 유지합니다. 잠시 후 다시 확인합니다. (${autoErrorCode})`
             : `새 준비 결과를 확인하지 못했습니다. 잠시 후 다시 확인합니다. (${autoErrorCode})`;
-          if (restoredLastGood) notice.textContent = "최신 확인을 완료하지 못했습니다. 같은 조회 조건의 마지막 정상 저장 자료를 유지하며 최신 반영 완료로 표시하지 않습니다.";
+          if (restoredLastGood) notice.textContent = `최신 확인을 완료하지 못했습니다. 같은 조회 조건의 ${payload?.status === "stale" ? "과거 저장 근거" : "마지막 정상 저장 자료"}를 유지하며 최신 반영 완료로 표시하지 않습니다.`;
         }
       } finally {
         if (autoTask === task) {
@@ -1142,7 +1254,7 @@
       if (erasePersistence) { selectionStorage.revoke(); catalogueCache?.revoke(); lastGoodStorage.clear(); }
       cancel(); requestOrdinal = 0; paused = true; resumeNeeded = false; resumeRequest = null; catalog = null; payload = lastGoodPayload = null; keyword = month = cutoffDate = benchmarkCompanyId = ""; companyChoices = []; pendingContext = null; pendingRestore = false;
       initialAutomaticNeeded = true; initialAutomaticTiming = emptyInitialTiming();
-      cachedStatusState = ""; restoredLastGood = false; reloadCacheState = "none"; reloadCacheReasonCode = "";
+      cachedStatusState = ""; restoredLastGood = false; reloadCacheState = "none"; reloadCacheReasonCode = ""; displayCacheProjectionVersion = 0;
       autoText = autoErrorCode = ""; autoFailures = 0; autoDueAt = 0;
       product = "lodging"; cutoffMode = draftCutoffMode = "auto"; draft = { ...initialView.draft }; appliedSelection = null; draftRevision++; listQuery = ""; listPage = 1; mobileView = "list"; expanded = {}; scopes = []; restoreAttempted = false; restoreNotice = ""; viewState.clear(); error = reason; errorCode = reason ? "KEYWORD_MONTHLY_AUTH_REQUIRED" : ""; render();
     }
@@ -1298,7 +1410,7 @@
     function recoveryView() {
       return { selection: selected(), applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId,
         listQuery, listPage, mobileView, expanded: { ...expanded }, scopes: scopes.map(row => ({ ...row, expanded: { ...row.expanded } })),
-        companyChoices, catalog, restoredLastGood };
+        companyChoices, catalog, restoredLastGood, displayCacheProjectionVersion };
     }
     function displayedRecovery() {
       if (!payload || payload !== lastGoodPayload || !sameScope(payload, selected())
@@ -1323,7 +1435,7 @@
       catalog = saved.catalog; payload = saved.payload; appliedSelection = saved.applied ? { ...saved.applied } : null;
       cutoffMode = saved.cutoffMode; product = saved.product; benchmarkCompanyId = saved.benchmarkCompanyId;
       listQuery = saved.listQuery; listPage = saved.listPage; mobileView = saved.mobileView; expanded = { ...saved.expanded };
-      scopes = saved.scopes.map(row => ({ ...row, expanded: { ...row.expanded } })); companyChoices = saved.companyChoices; restoredLastGood = saved.restoredLastGood;
+      scopes = saved.scopes.map(row => ({ ...row, expanded: { ...row.expanded } })); companyChoices = saved.companyChoices; restoredLastGood = saved.restoredLastGood; displayCacheProjectionVersion = saved.displayCacheProjectionVersion || 0;
       if (!sameScope(saved.payload, attempted)) {
         restoreNotice = `${attempted.keyword} / 숙박월 ${attempted.month} / 관측 마감 ${attempted.cutoffDate} 조회를 완료하지 못해, ${keyword} / 숙박월 ${month} / 관측 마감 ${cutoffDate}의 기존 자료를 유지합니다. 입력 초안은 적용되지 않았습니다.`;
       }
@@ -1377,7 +1489,7 @@
         || !buildViewModel(value, selection, cachedCatalogue.currentMonth).usable) { catalogueCache.clear(); return false; }
       if (!applyCatalog(cachedCatalogue, task.context || context, editRevision, overwriteDraft, task.restored)) { catalogueCache.clear(); return false; }
       pendingContext = null; pendingRestore = false; appliedSelection = selected(); task.key = loadKey();
-      payload = lastGoodPayload = value; restoredLastGood = false; persistLastGood(value); cachedStatusState = "pending"; panel.dataset.catalogueSource = "session_metadata_verified_by_version";
+      payload = lastGoodPayload = value; restoredLastGood = false; displayCacheProjectionVersion = 0; persistLastGood(value); cachedStatusState = "pending"; panel.dataset.catalogueSource = "session_metadata_verified_by_version";
       rememberScope(); return true;
     }
     async function restoreLastGoodInitial(context, task, token, editRevision, overwriteDraft) {
@@ -1385,7 +1497,7 @@
       const cached = await lastGoodStorage.read(context); if (!cached || !current(token)) return false;
       if (!applyCatalog(cached.catalogue, task.context || context, editRevision, overwriteDraft, task.restored)) return false;
       pendingContext = null; pendingRestore = false; appliedSelection = selected(); task.key = loadKey();
-      payload = lastGoodPayload = cached.payload; restoredLastGood = true; cachedStatusState = "pending"; reloadCacheState = "ready"; reloadCacheReasonCode = "";
+      payload = lastGoodPayload = cached.payload; restoredLastGood = true; displayCacheProjectionVersion = cached.projectionVersion || 0; cachedStatusState = "pending"; reloadCacheState = "ready"; reloadCacheReasonCode = "";
       panel.dataset.catalogueSource = "session_last_good_pending_version";
       rememberScope(); return true;
     }
@@ -1422,7 +1534,7 @@
           appliedSelection = selected(); task.requested = selected(); task.key = loadKey(); phase = "data"; rememberScope(); render();
           const params = new URLSearchParams(appliedSelection); const value = await get(`/api/keyword-monthly?${params}`, token, active, timeoutMs, catalog.metadataOnly === true, "data");
           if (value && current(token)) {
-            payload = value;
+            payload = value; displayCacheProjectionVersion = 0;
             if (buildViewModel(value, selected(), catalog.currentMonth).usable) { lastGoodPayload = value; restoredLastGood = false; persistLastGood(value); }
             else { if (sameScope(lastGoodPayload, selected())) lastGoodPayload = null; lastGoodStorage.invalidateScope(selected()); reloadCacheState = "none"; reloadCacheReasonCode = ""; }
           }
@@ -1487,7 +1599,7 @@
     for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) win.addEventListener?.(type, cancelScrollRestore, { capture: true, passive: true });
     win.addEventListener?.("resize", onViewportResize); win.addEventListener?.("pagehide", saveScrollOnPageHide);
     const controller = { open, refresh: () => load(), pause() { cancelScrollRestore(); rememberScope(); cancel(); paused = true; resumeNeeded = false; resumeRequest = null; payload = null; render(); }, clear: clearPrivate,
-      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, errorCode, requestDiagnostic: requestDiagnostic ? { ...requestDiagnostic, details: [...requestDiagnostic.details] } : null, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded || autoTask || autoErrorCode || restoredLastGood)), automatic: { checking: Boolean(autoTask), failureCount: autoFailures, revision: displayedRevision(), errorCode: autoErrorCode, initial: { ...initialAutomaticTiming } } }),
+      state: () => ({ selection: externalSelection(), draft: { ...draft }, applied: appliedSelection ? { ...appliedSelection } : null, cutoffMode, product, benchmarkCompanyId, listQuery, listPage, mobileView, expanded: { ...expanded }, viewState: viewState.snapshot(), loading, paused, status: payload?.status || null, cacheProjectionVersion: displayCacheProjectionVersion, errorCode, requestDiagnostic: requestDiagnostic ? { ...requestDiagnostic, details: [...requestDiagnostic.details] } : null, showingStored: Boolean(!paused && payload === lastGoodPayload && sameScope(payload, selected()) && (loading || error || resumeNeeded || autoTask || autoErrorCode || restoredLastGood)), automatic: { checking: Boolean(autoTask), failureCount: autoFailures, revision: displayedRevision(), errorCode: autoErrorCode, initial: { ...initialAutomaticTiming } } }),
       destroy() { if (destroyed) return; clearPrivate("", false); destroyed = true; observer?.disconnect(); doc.removeEventListener("visibilitychange", onVisibility);
         for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) win.removeEventListener?.(type, cancelScrollRestore, true);
         win.removeEventListener?.("resize", onViewportResize); win.removeEventListener?.("pagehide", saveScrollOnPageHide);

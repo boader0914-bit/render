@@ -1589,6 +1589,13 @@ const cacheContext = () => ({ keyword: KEYWORD, month: "2026-10", cutoffDate: "2
 function cachePayload(revision, selection = cacheContext(), companies = 3) {
   return { ...automaticPayload(revision, selection, companies), readOnly: true, networkAttempted: false, preparedResult: { status: "ready", sourceRevalidated: false } };
 }
+function historicalCachePayload(revision, selection = cacheContext(), companies = 3) {
+  // Synthetic prepared-response shape; this is not the unrecorded live cache rejection body.
+  const value = cachePayload(revision, selection, companies);
+  value.status = "stale"; value.diagnostics = ["PROJECTION_EXPIRED"];
+  value.provenance.dataThrough = selection.cutoffDate + "T00:00:00Z";
+  return value;
+}
 function cacheOptions(revision) {
   const today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10), value = automaticOptions(revision, today);
   value.readOnly = true; value.networkAttempted = false; value.provenance.originalFreshnessVerified = false;
@@ -2377,15 +2384,17 @@ test("merged healthy version checks retain a manual failure diagnostic until its
   assert.equal(ui.find("kma-query-diagnostic")[0].hidden, true);
 });
 
-async function warmLastGoodResult(t, { partial = false, companies = 30 } = {}) {
+async function warmLastGoodResult(t, { partial = false, historical = false, companies = 30 } = {}) {
   const storage = memorySelectionStorage(), session = liveSession(), ui = cacheUi(t, { storage, session, companies,
     handle: ({ kind }) => {
       if (kind === "options" && partial) return jsonResponse({ ...cacheOptions(AUTO_A), status: "stale", diagnostics: ["KEYWORD_MONTHLY_BUNDLE_STALE_PARTITIONS_PRESENT"] });
+      if (kind === "data" && historical) return jsonResponse(historicalCachePayload(AUTO_A, cacheContext(), companies));
     } });
   await ui.ready; await ui.controller.open({ ...selectorFixture(), benchmarkCompanyId: "company-25" });
   for (let wait = 0; wait < 1000 && !storage.getItem(uiModule.RESULT_KEY); wait++) await new Promise(resolve => setImmediate(resolve));
   assert.ok(storage.getItem(uiModule.RESULT_KEY)); const selection = clone(ui.controller.state().selection), metrics = ui.find("kma-dashboard-metrics").map(text);
-  ui.controller.destroy(); return { storage, session, selection, metrics, companies };
+  const bars = ui.find("kma-benchmark-bars").map(text), chartConfigs = clone(ui.chartCalls.map(call => call.config));
+  ui.controller.destroy(); return { storage, session, selection, metrics, companies, bars, chartConfigs };
 }
 async function untilUi(predicate) {
   for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setImmediate(resolve)); }
@@ -2401,6 +2410,63 @@ test("same-session F5 displays a verified saved result before the live version f
   gate.resolve(jsonResponse(automaticVersion(AUTO_A, cacheOptions(AUTO_A).currentDay))); await opening;
   assert.equal(ui.controller.state().automatic.initial.outcome, "complete"); assert.equal(ui.controller.state().showingStored, false);
   assert.deepEqual(ui.find("kma-dashboard-metrics").map(text), saved.metrics); assert.match(ui.text(), /같은 저장 버전을 확인/);
+});
+test("historical prepared F5 restores product company search page and charts while retaining stale provenance and pending confirmation", async t => {
+  const saved = await warmLastGoodResult(t, { historical: true }), gate = deferred();
+  const ui = cacheUi(t, { ...saved, handle: ({ kind }) => kind === "version" ? gate.promise : undefined });
+  await ui.ready; const opening = ui.controller.open(); await untilUi(() => ui.counts.version === 1);
+  assert.deepEqual(clone(ui.controller.state().selection), saved.selection);
+  assert.equal(saved.selection.product, "dayuse"); assert.equal(saved.selection.benchmarkCompanyId, "company-25");
+  assert.equal(saved.selection.listQuery, "비교"); assert.equal(saved.selection.listPage, 2);
+  assert.deepEqual(ui.find("kma-dashboard-metrics").map(text), saved.metrics);
+  assert.deepEqual(ui.find("kma-benchmark-bars").map(text), saved.bars);
+  assert.deepEqual(clone(ui.chartCalls.map(call => call.config)), saved.chartConfigs);
+  assert.equal(ui.controller.state().status, "stale"); assert.equal(ui.controller.state().showingStored, true);
+  assert.equal(ui.controller.state().cacheProjectionVersion, 1); assert.match(ui.text(), /이전에 확인한 저장 자료를 복원했습니다/);
+  assert.doesNotMatch(text(ui.find("kma-reload-cache-status")[0]), /projection|schema|capacityWitnesses|phoneValuation/i);
+  assert.equal(ui.controller.state().automatic.initial.outcome, "running");
+  assert.match(ui.text(), /과거 저장근거.*갱신 확인 필요/); assert.match(ui.text(), /과거 저장 근거를 표시하며 최신 상태를 확인/);
+  assert.doesNotMatch(ui.text(), /마지막 정상 저장 자료를 표시/);
+  assert.equal(ui.counts.options, 0); assert.equal(ui.counts.data, 0);
+  const entry = JSON.parse(saved.storage.getItem(uiModule.RESULT_KEY));
+  assert.equal(entry.payload.status, "stale"); assert.equal(entry.payload.provenance.originalFreshnessVerified, false);
+  gate.resolve(jsonResponse(automaticVersion(AUTO_A, cacheOptions(AUTO_A).currentDay))); await opening;
+  assert.equal(ui.controller.state().status, "stale"); assert.match(ui.text(), /과거 저장근거.*갱신 확인 필요/);
+  assert.equal(ui.controller.state().automatic.initial.outcome, "complete"); assert.match(ui.text(), /같은 저장 버전을 확인/);
+});
+test("historical prepared F5 version503 preserves only labelled prior evidence and never fans out into a financial retry", async t => {
+  const saved = await warmLastGoodResult(t, { historical: true });
+  const ui = cacheUi(t, { ...saved, handle: ({ kind }) => kind === "version" ? htmlFailure(503) : undefined });
+  await ui.ready; await ui.controller.open();
+  assert.deepEqual(clone(ui.controller.state().selection), saved.selection);
+  assert.deepEqual(ui.find("kma-dashboard-metrics").map(text), saved.metrics);
+  assert.equal(ui.controller.state().status, "stale"); assert.equal(ui.controller.state().showingStored, true);
+  assert.equal(ui.controller.state().automatic.initial.outcome, "failed");
+  assert.match(ui.text(), /같은 조회 조건의 과거 저장 근거를 유지하며 최신 반영 완료로 표시하지 않습니다/);
+  assert.deepEqual(ui.counts, { version: 1, options: 0, data: 0, status: 0 });
+});
+test("historical F5 evidence is erased by authoritative missing unusable or authentication results without later resurrection", async t => {
+  for (const outcome of ["missing", "unusable", "401", "403"]) {
+    const saved = await warmLastGoodResult(t, { historical: true, companies: 3 }); let invalidate = false;
+    const ui = cacheUi(t, { ...saved, handle: ({ kind, selection }) => {
+      if (!invalidate || kind !== "data") return undefined;
+      if (outcome === "401" || outcome === "403") return htmlFailure(Number(outcome));
+      const value = historicalCachePayload(AUTO_A, selection, 3);
+      if (outcome === "missing") { value.status = "missing"; value.snapshot = null; }
+      else value.diagnostics.push("CUTOFF_AFTER_DATA_THROUGH");
+      return jsonResponse(value);
+    } });
+    await ui.ready; await ui.controller.open(); invalidate = true; await ui.controller.refresh();
+    assert.equal(saved.storage.getItem(uiModule.RESULT_KEY), null, outcome);
+    assert.equal(ui.find("kma-dashboard-metrics").length, 0, outcome);
+    assert.equal(ui.controller.state().showingStored, false, outcome);
+    if (outcome === "401" || outcome === "403") {
+      assert.equal(saved.storage.getItem(SELECTION_KEY), null); assert.equal(ui.controller.state().paused, true);
+    } else {
+      await ui.controller.refresh(); assert.equal(ui.find("kma-dashboard-metrics").length, 0, outcome);
+    }
+    ui.controller.destroy();
+  }
 });
 test("502 and503 version failure after F5 keep saved values and choices unconfirmed without an options retry", async t => {
   for (const status of [502, 503]) {
@@ -2458,7 +2524,10 @@ test("oversize or denied result storage keeps normal metrics and explains that F
   for (const mode of ["oversize", "quota"]) {
     const storage = memorySelectionStorage();
     if (mode === "quota") { const save = storage.setItem.bind(storage); storage.setItem = (key, value) => { if (key === uiModule.RESULT_KEY) throw Error("quota"); save(key, value); }; }
-    const ui = cacheUi(t, { storage, session: liveSession(), companies: mode === "oversize" ? 43 : 3 });
+    const ui = cacheUi(t, { storage, session: liveSession(), companies: mode === "oversize" ? 43 : 3,
+      handle: ({ kind, source, selection }) => {
+        if (mode === "oversize" && kind === "data") { const value = cachePayload(source.revision, selection, 43); value.snapshot.futureSafePadding = Array(80).fill("x".repeat(30000)); return jsonResponse(value); }
+      } });
     await ui.ready; await ui.controller.open(cacheContext());
     await untilUi(() => ui.find("keyword-monthly-analysis")[0].dataset.reloadCacheState === "unavailable");
     assert.equal(ui.find("keyword-monthly-analysis")[0].dataset.reloadCacheReasonCode, mode === "oversize"
