@@ -5484,14 +5484,14 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="사분 데이터랩">
-  <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
+  <meta name="application-name" content="SA datalab">
+  <meta name="apple-mobile-web-app-title" content="SA datalab">
   <meta name="theme-color" content="#f7f6f0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261122-sa-datalab">
   <title>사분 데이터랩 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }

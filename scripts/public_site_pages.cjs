@@ -26,7 +26,7 @@ function createPublicPages(context) {
       ? '<p>처음 이용하시나요?</p><a class="link" href="/signup">회원가입</a>'
       : `<p>${e(signupClosedMessage)}</p><a href="mailto:${e(contactEmail)}">이용 문의</a>`;
     return `<!doctype html><html lang="ko"><head>${head("로그인")}
-      <meta name="application-name" content="STAYDATALAB"><meta name="apple-mobile-web-app-title" content="STAYDATALAB"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+      <meta name="application-name" content="SA datalab"><meta name="apple-mobile-web-app-title" content="SA datalab"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261122-sa-datalab">
     </head><body>${publicHeader()}
       <main id="main" class="login-layout">
         <section class="login-brand-panel" aria-labelledby="login-title">

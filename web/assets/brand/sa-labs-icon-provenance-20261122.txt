@@ -1,0 +1,7 @@
+SA datalab installed application icon
+Source: AI project management / SABUN, web/sa-logo.webp
+Source URL: https://sabun-project-ledger.onrender.com/sa-logo.webp
+Source SHA256: cfaab19edfc75810965f0eb86967037f8057ccddcf242a4839c27a64e3cc4aa9
+Approved artwork copied byte-for-byte. PNGs are deterministic size/format exports.
+Maskable 512 adds 26px white padding for the central 40% radius safe area.
+App identity, start URL, routes, authentication, collection and protection behavior are unchanged.
