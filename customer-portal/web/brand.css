@@ -1,0 +1,8 @@
+.brand--sa-insight{padding-left:0;gap:12px}
+.brand--sa-insight .brand-logo{display:block;flex:none;width:56px;height:56px;object-fit:contain;background:#fff;border:1px solid var(--line,#deded8);border-radius:12px}
+.brand--sa-insight strong{letter-spacing:2px;font-size:25px}
+.brand--sa-insight small{letter-spacing:1.6px;font-size:12px;margin-top:3px}
+.auth-logo{display:block;width:104px;height:104px;object-fit:contain;background:#fff;border:1px solid var(--line,#deded8);border-radius:18px;margin-bottom:24px}
+.admin-brand{display:inline-flex;align-items:center;gap:10px}
+.admin-brand img{display:block;width:42px;height:42px;object-fit:contain;background:#fff;border:1px solid var(--line,#deded8);border-radius:9px}
+@media(max-width:640px){.auth-logo{width:80px;height:80px;border-radius:14px;margin-bottom:18px}.admin-brand img{width:34px;height:34px}}

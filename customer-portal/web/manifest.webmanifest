@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "SA Insight",
+  "short_name": "SA Insight",
+  "description": "내 매장과 경쟁업체, 지역의 흐름을 읽는 숙박 운영 인사이트",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1c382b",
+  "icons": [
+    { "src": "/icons/sa-insight-192-20261125.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/sa-insight-512-20261125.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

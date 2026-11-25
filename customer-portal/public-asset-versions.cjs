@@ -1,6 +1,6 @@
 'use strict';
 const {createHash}=require('node:crypto');
-const publicTypes=new Set(['text/javascript','text/css','font/otf','image/svg+xml']);
+const publicTypes=new Set(['text/javascript','text/css','font/otf','image/svg+xml','image/png','image/x-icon','application/manifest+json']);
 const hash=data=>createHash('sha256').update(data).digest('hex');
 
 async function replaceAsync(text,pattern,replace){

@@ -275,7 +275,7 @@
     $('#admin-view-banner').hidden = !adminView || !state;
     if(adminView&&state)renderAdminBanner();
     $('#navigation').innerHTML = state ? menus.map(([key,label])=>`<a href="#${key}" class="nav-link ${menuRoute()===key?'active':''}">${label}</a>`).join(''):'';
-    $('#customer-name').textContent = state ? state.customer.username : '사분 인사이트';
+    $('#customer-name').textContent = state ? state.customer.username : 'SA Insight';
     document.body.classList.toggle('auth-view', !state);
     if(bootstrapStatus==='loading'&&!state){$('#main').innerHTML=connectionLoading('로그인 상태를 확인하고 저장 자료를 연결하고 있습니다.');return;}
     if(bootstrapStatus==='failed'&&!state){$('#main').innerHTML=connectionFailure(bootstrapError,'retry-connection');return;}
@@ -311,7 +311,7 @@
     if(current[0]==='settings'&&(limits.competitorLimit===null||competitors.length<limits.competitorLimit))content+=search('competitor');
     if(current[0]==='settings')content+=`<section class="card"><h2>관심지역 관리</h2>${c.regions.filter(activeRegion).map(r=>`<div class="connected-row"><strong>${esc(state.regions.find(v=>v.id===r.regionKey)?.label||'연결 지역')}</strong><button class="button small" data-action="archive-region" data-relation="${esc(r.relationId)}">관심지역 해제</button></div>`).join('')||'<p class="muted">등록한 관심지역이 없습니다.</p>'}</section>`+(limits.interestRegionLimit===null||c.regions.filter(activeRegion).length<limits.interestRegionLimit?search('region'):'');
     if(current[0]==='settings'&&customerViewReadOnly())content=`<section class="card"><h2>고객 등록 정보 · 읽기 전용</h2><p class="muted">사업 정보, 등록·해제, 수정 요청은 관리자 관리 화면에서 처리해 주세요.</p><div class="connected-list">${relations.map(relation=>companyCard(relation)).join('')||'<p class="muted">등록한 업체가 없습니다.</p>'}</div></section>`;
-    $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SABUN INSIGHT</span><h1>${current[1]}</h1></div></div>${content}`;
+    $('#main').innerHTML = `<div class="page-heading"><div><span class="eyebrow">SA Insight</span><h1>${current[1]}</h1></div></div>${content}`;
     const contextMount=mode=>window.InsightContextWorkspace?.mount({mode,store:comparisonSelection,state,api,peekBrief:id=>window.InsightAnalysis.peekCurrentBriefing(id),readBrief:id=>window.InsightAnalysis.readCurrentBriefing(id,api),onSelectionChange:selectionChanged,onSessionExpired:sessionExpired,onRebuild:render});
     if(['home','regions'].includes(current[0]))contextMount(current[0]);
     if(current[0]==='competitors'&&comparisonSelection)window.InsightComparisonView?.mount({store:comparisonSelection,state,peek:id=>window.InsightAnalysis.peekCurrentBriefing(id),read:(id,options)=>window.InsightAnalysis.readCurrentBriefing(id,api,options),peekCompany:(id,month)=>window.InsightCollection?.peekSaved?.(id,month),readCompany:(id,options)=>window.InsightCollection.readSaved(id,api,options),onSelectionChange:selectionChanged,onSessionExpired:sessionExpired,onRegionalView:()=>contextMount('comparison')});

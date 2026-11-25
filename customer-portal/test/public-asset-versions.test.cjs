@@ -76,8 +76,32 @@ test('HTML aliases, API/auth paths and errors never become publicly cacheable vi
 for(const resource of [{name:'font',file:path.resolve(__dirname,'../../web/fonts/Pretendard-Regular.otf'),url:'/fonts/Pretendard-Regular.otf'},{name:'script',file:path.resolve(__dirname,'../web/bootstrap-read.js'),url:'/bootstrap-read.js'}])test(`a missing ${resource.name} fails only its resource GET while HTML remains available`,async t=>{
   const originalStat=fs.promises.stat,attempts=[];
   t.mock.method(fs.promises,'stat',async function(file,...args){if(path.resolve(file)===resource.file){attempts.push(file);throw Object.assign(Error('fixture resource missing'),{code:'ENOENT'});}return originalStat.call(this,file,...args);});
-  const f=await serverFixture(t),page=await f.request('/');assert.equal(page.status,200);assert.equal(page.headers['cache-control'],'private, no-store');assert.match(page.body.toString(),/사분 인사이트/);
+  const f=await serverFixture(t),page=await f.request('/');assert.equal(page.status,200);assert.equal(page.headers['cache-control'],'private, no-store');assert.match(page.body.toString(),/SA Insight/);
   if(resource.name==='script')assert.ok(page.body.toString().includes('src="/bootstrap-read.js"'),'the unavailable script keeps its original reference');
   else{const cssPath=page.body.toString().match(/href="(\/styles\.css\?v=[a-f0-9]{64})"/)[1],css=await f.request(cssPath);assert.equal(css.status,200);assert.ok(css.body.toString().includes("url('/fonts/Pretendard-Regular.otf')"));}
   const missing=await f.request(resource.url);assert.equal(missing.status,503);assert.equal(missing.headers['cache-control'],'private, no-store');assert.equal(f.calls.length,0);assert.ok(attempts.length<=3,'unavailable resource fingerprinting must remain bounded');
+});
+
+test('SA Insight public identity and install icons are versioned without customer or collection requests',async t=>{
+  const f=await serverFixture(t);
+  for(const route of ['/login','/signup','/customer-view','/admin']){
+    const page=await f.request(route),html=page.body.toString();assert.equal(page.status,200);
+    assert.match(html,/<title>SA Insight(?: 관리자)?<\/title>/);
+    assert.match(html,/name="application-name" content="SA Insight"/);
+    assert.match(html,/rel="apple-touch-icon"[^>]*href="\/icons\/sa-insight-180-20261125\.png\?v=[a-f0-9]{64}"/);
+    const manifestUrl=html.match(/rel="manifest" href="([^"]+)"/)[1],manifest=await f.request(manifestUrl);
+    assert.equal(manifest.status,200);assert.match(manifest.headers['content-type'],/^application\/manifest\+json/);
+    const data=JSON.parse(manifest.body);assert.equal(data.name,'SA Insight');assert.equal(data.short_name,'SA Insight');
+    assert.equal(data.start_url,'/');assert.equal(data.display,'standalone');
+    for(const icon of data.icons){
+      const image=await f.request(icon.src);assert.equal(image.status,200);assert.match(image.headers['content-type'],/^image\/png/);
+      assert.equal(image.body.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+      assert.equal(image.body.readUInt32BE(16)+'x'+image.body.readUInt32BE(20),icon.sizes);
+    }
+    const iconUrl=html.match(/rel="icon"[^>]*href="([^"]+)"/)[1],icon=await f.request(iconUrl),head=await f.request(iconUrl,{method:'HEAD'});
+    assert.match(icon.headers['cache-control'],/immutable/);assert.equal(head.status,200);assert.equal(head.body.length,0);assert.equal(head.headers.etag,icon.headers.etag);
+    assert.equal((await f.request(iconUrl,{headers:{'If-None-Match':icon.headers.etag}})).status,304);
+  }
+  const ico=await f.request('/favicon.ico');assert.equal(ico.status,200);assert.equal(ico.body.readUInt16LE(2),1);assert.equal(ico.body.readUInt16LE(4),3);
+  assert.equal(f.calls.length,0,'public brand assets must not query the customer DB or dispatch collections');
 });

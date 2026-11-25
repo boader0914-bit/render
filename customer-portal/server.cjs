@@ -9,7 +9,7 @@ const { createPreviewSessions } = require('./lib/preview-sessions.cjs');
 const MAX_BODY = 16 * 1024;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const FONT_NAMES = new Set(['Pretendard-Regular.otf', 'Pretendard-Bold.otf', 'MaruBuri-Regular.otf']);
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.otf': 'font/otf', '.woff2': 'font/woff2', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.otf': 'font/otf', '.woff2': 'font/woff2', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
 
 function previewConfiguration(env = process.env, argv = process.argv.slice(2)) {
   const hosted = env.INSIGHT_HOSTED_PREVIEW === '1';
@@ -76,7 +76,7 @@ function staticFile(urlPath, webDir, fontsDir) {
   // Only frontend asset extensions, with no dot segments or hidden files.
   const relative = urlPath.replace(/^\//, '').replace(/^assets\//, '');
   if (!relative || relative.split('/').some((part) => !part || part.startsWith('.')) || relative.includes('\\') || !/^[A-Za-z0-9_./-]+$/.test(relative)) return null;
-  if (!['.js', '.css', '.svg', '.png', '.ico'].includes(path.extname(relative))) return null;
+  if (!['.js', '.css', '.svg', '.png', '.ico', '.webmanifest'].includes(path.extname(relative))) return null;
   const candidate = path.resolve(webDir, relative);
   return candidate.startsWith(`${path.resolve(webDir)}${path.sep}`) ? candidate : null;
 }
