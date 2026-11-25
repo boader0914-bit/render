@@ -88,6 +88,15 @@ test('SA Insight public identity and install icons are versioned without custome
     const page=await f.request(route),html=page.body.toString();assert.equal(page.status,200);
     assert.match(html,/<title>SA Insight(?: 관리자)?<\/title>/);
     assert.match(html,/name="application-name" content="SA Insight"/);
+    const brand=html.match(/<a[^>]*class="[^"]*(?:brand--sa-insight|admin-brand)[^"]*"[^>]*>([\s\S]*?)<\/a>/)[1];
+    assert.doesNotMatch(brand,/<(?:strong|small|span)\b/,'the header mark must not repeat the SA Insight text');
+    for(const mode of ['light','dark']){
+      assert.ok(brand.includes('/brand/sa-insight-'+mode+'-20261125.svg?v='));
+      const logo=await f.request('/brand/sa-insight-'+mode+'-20261125.svg');assert.equal(logo.status,200);assert.match(logo.headers['content-type'],/^image\/svg\+xml/);
+      const svg=logo.body.toString();assert.doesNotMatch(svg,/<rect\b/);assert.match(svg,/color-interpolation-filters="sRGB"/);
+      const embedded=Buffer.from(svg.match(/data:image\/png;base64,([A-Za-z0-9+/=]+)/)[1],'base64');
+      assert.deepEqual(embedded,fs.readFileSync(path.resolve(__dirname,'../web/icons/sa-insight-512-20261125.png')),'transparent header preserves the packaged original mark');
+    }
     assert.match(html,/rel="apple-touch-icon"[^>]*href="\/icons\/sa-insight-180-20261125\.png\?v=[a-f0-9]{64}"/);
     const manifestUrl=html.match(/rel="manifest" href="([^"]+)"/)[1],manifest=await f.request(manifestUrl);
     assert.equal(manifest.status,200);assert.match(manifest.headers['content-type'],/^application\/manifest\+json/);

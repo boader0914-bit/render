@@ -32,6 +32,7 @@ test('signup visibly marks required inputs and consents while leaving the projec
   assert.doesNotMatch(html,/\schecked(?:\s|>)/);
 });
 test('required signup guidance is absent from login and unavailable signup',()=>{
+  assert.doesNotMatch(screen({signup:false,config:{signupEnabled:true}}),/class="auth-logo"/,'the login body must not repeat the header logo');
   assert.doesNotMatch(screen({signup:false,config:{signupEnabled:true}}),/required-marker|required-legend/);
   assert.doesNotMatch(screen({signup:true,config:{signupEnabled:false}}),/required-marker|required-legend/);
 });

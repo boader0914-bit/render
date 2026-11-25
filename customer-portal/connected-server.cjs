@@ -229,6 +229,10 @@ function createConnectedServer({ origin, origins = [], backend, serviceToken, fe
   const adminCookie = (token, expire = false) => `${adminCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${expire ? 0 : 28800}${secure ? '; Secure' : ''}`;
   const staticMap = { '/company-flow.js':['company-flow.js','text/javascript'], '/region-history.js':['region-history.js','text/javascript'], '/analysis.js':['analysis.js','text/javascript'], '/': ['connected.html', 'text/html'], '/app': ['connected.html', 'text/html'], '/login': ['connected.html', 'text/html'], '/signup': ['connected.html', 'text/html'], '/terms': ['connected.html', 'text/html'], '/privacy': ['connected.html', 'text/html'], '/company-view.js': ['company-view.js', 'text/javascript'], '/collection.js': ['collection.js', 'text/javascript'], '/connected.js': ['connected.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/connected.css': ['connected.css', 'text/css'], '/favicon.svg': ['favicon.svg', 'image/svg+xml'] };
   staticMap['/brand.css']=['brand.css','text/css'];
+  for(const mode of ['light','dark']){
+    const name='brand/sa-insight-'+mode+'-20261125.svg';
+    staticMap['/'+name]=[name,'image/svg+xml'];
+  }
   staticMap['/manifest.webmanifest']=['manifest.webmanifest','application/manifest+json'];
   staticMap['/favicon.ico']=['favicon.ico','image/x-icon'];
   staticMap['/apple-touch-icon.png']=['icons/sa-insight-180-20261125.png','image/png'];
