@@ -5484,15 +5484,15 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="SA datalab">
-  <meta name="apple-mobile-web-app-title" content="SA datalab">
+  <meta name="application-name" content="SA DataLabs">
+  <meta name="apple-mobile-web-app-title" content="SA DataLabs">
   <meta name="theme-color" content="#f7f6f0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261122-sa-datalab">
-  <title>사분 데이터랩 회원가입</title>
+  <link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261125-sa-datalabs">
+  <title>SA DataLabs 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -5580,7 +5580,7 @@ function signupPage(message = "", values = {}) {
 <body class="signup-page">
   ${publicHeader()}
   <main id="main">
-    <p class="brand-kicker">STAYDATALAB · ACCOUNT</p>
+    <p class="brand-kicker">SA DataLabs · ACCOUNT</p>
     <h1>회원가입</h1>
     <p>가입하면 일반 회원 기준으로 시작하며, 검색 이력과 관심숙소는 로그인 아이디 기준으로 관리됩니다.</p>
     <form method="post" action="/signup" data-signup-form>
@@ -5611,7 +5611,7 @@ function signupPage(message = "", values = {}) {
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
         <p class="agreement-note">가입에 필요한 정보와 선택 동의를 각각 확인해 주세요. 선택 항목을 동의하지 않아도 회원가입이 가능합니다.</p>
-        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) STAYDATALAB 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) SA DataLabs 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy#required-consent" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>

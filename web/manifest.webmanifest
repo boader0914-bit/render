@@ -1,6 +1,6 @@
 {
-  "name": "SA datalab",
-  "short_name": "SA datalab",
+  "name": "SA DataLabs",
+  "short_name": "SA DataLabs",
   "description": "지역 내 노출, 예약율, 예상 매출 흐름을 확인하는 숙박업 경쟁 리포트",
   "id": "/b2b",
   "start_url": "/b2b",
@@ -13,19 +13,19 @@
   "lang": "ko-KR",
   "icons": [
     {
-      "src": "/icons/icon-192.png?v=20261122-sa-datalab",
+      "src": "/icons/icon-192.png?v=20261125-sa-datalabs",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-512.png?v=20261122-sa-datalab",
+      "src": "/icons/icon-512.png?v=20261125-sa-datalabs",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/maskable-512.png?v=20261122-sa-datalab",
+      "src": "/icons/maskable-512.png?v=20261125-sa-datalabs",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

@@ -67,7 +67,7 @@ class ReportLayout {
     this.doc.addPage({ size: "A4", margins: { top: PAGE.top, left: PAGE.left, right: PAGE.right, bottom: 45 } });
     this.sections.push(section);
     this.y = PAGE.top;
-    this.text("SABUN DATA LAB", PAGE.left, 31, 230, { size: 10, bold: true, characterSpacing: 1.3 });
+    this.text("SA DataLabs", PAGE.left, 31, 230, { size: 10, bold: true, characterSpacing: 1.3 });
     this.text(section, PAGE.left + 245, 33, WIDTH - 245, { size: 8, color: COLORS.muted, align: "right", lineBreak: false });
     this.rule(59);
   }
@@ -826,7 +826,7 @@ async function renderMonthlyReportPdf(report, options = {}) {
   const PDFDocument = pdfkit.PDFDocument || pdfkit;
   const createdAt = new Date(report.publishedAt || report.createdAt || 0);
   const doc = new PDFDocument({ autoFirstPage: false, bufferPages: true, size: "A4", compress: true, pdfVersion: "1.7", displayTitle: true, info: {
-    Title: clean(report.title) || `${clean(report.month)} 월간 보고서`, Author: "SABUN DATA LAB", Subject: "저장된 관측 근거에 따른 월간 보고서", Creator: "SABUN DATA LAB", CreationDate: Number.isFinite(createdAt.getTime()) ? createdAt : new Date(0)
+    Title: clean(report.title) || `${clean(report.month)} 월간 보고서`, Author: "SA DataLabs", Subject: "저장된 관측 근거에 따른 월간 보고서", Creator: "SA DataLabs", CreationDate: Number.isFinite(createdAt.getTime()) ? createdAt : new Date(0)
   } });
   const fontDirectory = options.fontDirectory || path.resolve(__dirname, "../../web/fonts");
   doc.registerFont("ReportRegular", path.join(fontDirectory, "Pretendard-Regular.otf"));

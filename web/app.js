@@ -1,4 +1,4 @@
-const APP_BRAND_NAME = "사분 데이터랩";
+const APP_BRAND_NAME = "SA DataLabs";
 const THEME_STORAGE_KEY = "lodging-datalab:theme-mode:v1";
 const THEME_MODES = new Set(["system", "light", "dark"]);
 const THEME_COLORS = {
@@ -36822,7 +36822,7 @@ function renderAdministrativeProfile(region = {}, options = {}) {
   const supplyPanel = `
     <div class="location-profile-grid">
       ${renderAdministrativeObservationPanel("숙박업체 관측", "Naver Place", "관측 없음", "해당 행정구역의 실제 숙박 수집 이력이 없습니다")}
-      ${renderAdministrativeObservationPanel("업체 DB 연결", "사분 데이터랩", "연결 대기", "업체 주소와 공식 행정구역 코드가 연결되면 표본을 표시합니다")}
+      ${renderAdministrativeObservationPanel("업체 DB 연결", "SA DataLabs", "연결 대기", "업체 주소와 공식 행정구역 코드가 연결되면 표본을 표시합니다")}
     </div>
   `;
   const historyPanel = `

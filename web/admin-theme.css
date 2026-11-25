@@ -1859,10 +1859,20 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
     border-bottom: 1px solid var(--border-subtle);
   }
 
+  html[data-theme-resolved] body.role-admin .admin-nav-brand .admin-brand-logo {
+    display: block;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 5px;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 4px;
+  }
+
   html[data-theme-resolved] body.role-admin .admin-nav-brand strong {
     color: var(--accent-strong);
     font-size: 13px;
-    letter-spacing: .07em;
+    letter-spacing: .02em;
   }
 
   html[data-theme-resolved] body.role-admin .admin-nav-brand span {

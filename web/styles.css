@@ -47052,3 +47052,20 @@ html[data-theme-resolved] body .booking-blocked-history { display: block; color:
 html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-public { fill: var(--booking-public-fill); stroke: var(--booking-public-fill); }
 html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-blocked { fill: var(--booking-blocked-fill); stroke: var(--booking-blocked-fill); }
 html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-unavailable { fill: var(--text-tertiary); stroke: var(--text-tertiary); }
+
+/* Official product identity; keep the supplied artwork intact. */
+.app-brand-logo {
+  display: block;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+}
+.brand-product-name {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: .02em;
+  text-transform: none;
+}

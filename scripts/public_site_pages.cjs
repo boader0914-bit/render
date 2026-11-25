@@ -5,7 +5,7 @@ const { publicHeader, publicFooter } = require("./public_site_chrome.cjs");
 function createPublicPages(context) {
   const { escapeHtml: e, contactHtml, contactEmail, contactPhone, operatorName, policyVersion, signupEnabled, signupClosedMessage, loginFailureLimit, lockMinutes, sessionHours } = context;
   const footer = () => publicFooter({ contactHtml, contactPhone: e(contactPhone) });
-  const head = (title) => `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#f7f6f0"><title>${e(title)} · STAYDATALAB</title><link rel="stylesheet" href="/public-site.css?v=20260920">`;
+  const head = (title) => `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#f7f6f0"><title>${e(title)} · SA DataLabs</title><meta name="application-name" content="SA DataLabs"><meta name="apple-mobile-web-app-title" content="SA DataLabs"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/favicon.svg?v=20261125-sa-datalabs" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261125-sa-datalabs"><link rel="stylesheet" href="/public-site.css?v=20261125-sa-datalabs">`;
 
   function legalPage(title, eyebrow, sections, options = {}) {
     const rows = sections.map((section, index) => `<section id="section-${index + 1}"><h2>${e(section.title)}</h2>${section.body}</section>`).join("");
@@ -13,7 +13,7 @@ function createPublicPages(context) {
     return `<!doctype html><html lang="ko"><head>${head(title)}</head><body>
       ${publicHeader()}
       <main id="main" class="document-layout">
-        <header class="document-heading"><p class="eyebrow">STAYDATALAB · ${e(eyebrow)}</p><h1>${e(title)}</h1><p class="meta">최종 수정 ${e(policyVersion.replace(/-/g, "."))} · 운영자 ${e(operatorName)}</p></header>
+        <header class="document-heading"><p class="eyebrow">SA DataLabs · ${e(eyebrow)}</p><h1>${e(title)}</h1><p class="meta">최종 수정 ${e(policyVersion.replace(/-/g, "."))} · 운영자 ${e(operatorName)}</p></header>
         <nav class="document-index" aria-label="문서 목차">${index}</nav>
         <div class="document-body">${rows}</div>
         <div class="document-actions"><a href="${e(options.backHref || "/login")}">${e(options.backLabel || "로그인으로 돌아가기")}</a>${options.historyHref ? `<a href="${e(options.historyHref)}">이전 안내 보기 (2026.07.08)</a>` : ""}</div>
@@ -25,9 +25,7 @@ function createPublicPages(context) {
     const signupEntry = signupEnabled
       ? '<p>처음 이용하시나요?</p><a class="link" href="/signup">회원가입</a>'
       : `<p>${e(signupClosedMessage)}</p><a href="mailto:${e(contactEmail)}">이용 문의</a>`;
-    return `<!doctype html><html lang="ko"><head>${head("로그인")}
-      <meta name="application-name" content="SA datalab"><meta name="apple-mobile-web-app-title" content="SA datalab"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icons/icon-192.png?v=20261122-sa-datalab">
-    </head><body>${publicHeader()}
+    return `<!doctype html><html lang="ko"><head>${head("로그인")}</head><body>${publicHeader()}
       <main id="main" class="login-layout">
         <section class="login-brand-panel" aria-labelledby="login-title">
           <p class="brand-kicker">STAY INSIGHT, BETTER DECISIONS</p>

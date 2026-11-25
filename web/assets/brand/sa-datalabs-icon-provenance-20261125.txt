@@ -1,0 +1,10 @@
+SA DataLabs official brand exports
+Source: user-provided SA-DataLabs.png
+Source SHA256: e8355d4a75aab90a7e7647a27d2f3227fc867c2b5bbcd2bf0efa75366d414d0b
+Source bytes: 215813
+Source dimensions: 1024x1024
+Master copy: sa-datalabs-master-20261125.png (byte exact)
+Method: full-source LANCZOS resize to RGB PNG; no cropping, redesign, recoloring, text replacement or sharpening.
+Ordinary icons: 192x192 and 512x512.
+Maskable: full source resized to 400x400, centered in white512 with 56px padding.
+Favicon: full-source64 embedded PNG in SVG.

@@ -11,7 +11,7 @@ const POLICY_LINKS = [
 function publicHeader() {
   return `<a class="skip-link" href="#main">본문으로 건너뛰기</a>
   <header class="public-header">
-    <a class="public-brand" href="/login" aria-label="STAYDATALAB 로그인"><span>STAYDATALAB</span><small>BY SABUN LABS</small></a>
+    <a class="public-brand" href="/login" aria-label="SA DataLabs 로그인"><img src="/icons/icon-192.png?v=20261125-sa-datalabs" alt="SA DataLabs" width="48" height="48"><span>SA DataLabs</span><small>BY SABUN LABS</small></a>
     <nav aria-label="사분 서비스"><a href="https://www.sabun.co.kr/" target="_blank" rel="noopener">사분랩스 <span aria-hidden="true">↗</span></a><a href="https://ops.sabun.co.kr/" target="_blank" rel="noopener">오퍼레이션 <span aria-hidden="true">↗</span></a></nav>
   </header>`;
 }
@@ -21,7 +21,7 @@ function publicFooter({ contactHtml = '<a href="mailto:info@sabun.co.kr">info@sa
   return `<footer class="public-footer">
     <div class="footer-top"><span class="footer-brand">SABUN LABS <small>숙박업의 판단과 운영을 연결합니다.</small></span><span class="footer-contact">${contactHtml}<span>${contactPhone}</span></span></div>
     <nav class="policy-links" aria-label="정책 문서">${POLICY_LINKS.map(([href, label]) => `<a href="${href}">${label}</a>`).join("")}</nav>
-    <p class="footer-copy">© SABUN · STAYDATALAB</p>
+    <p class="footer-copy">© SABUN · SA DataLabs</p>
   </footer>`;
 }
 
