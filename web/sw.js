@@ -1,4 +1,4 @@
-const CACHE_VERSION = "staydatalab-v20260928-capacity-review-v113-pwa20261125";
+const CACHE_VERSION = "staydatalab-v20260928-capacity-review-v113-pwa20261125-alpha1";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
@@ -13,6 +13,7 @@ const APP_SHELL = [
   "/icons/icon-192.png?v=20261125-sa-datalabs",
   "/icons/icon-512.png?v=20261125-sa-datalabs",
   "/icons/maskable-512.png?v=20261125-sa-datalabs",
+  "/icons/logo-transparent-20261125.svg?v=20261125-alpha1",
   "/assets/channels/naver.webp",
   "/assets/channels/nol.png",
   "/assets/channels/yeogi.webp",

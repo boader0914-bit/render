@@ -1,0 +1,6 @@
+SA DataLabs transparent UI logo
+Original source: user SA-DataLabs.png, official source export icon-512.png embedded byte-exact.
+Background extraction: built-in ImageGen; selected output used as alpha mask only.
+SVG preserves original image color pixels; no letter or symbol redrawing.
+Alpha table removes faint background residue.
+UI only; installed PWA/Apple/maskable icons, identity and original source are preserved.

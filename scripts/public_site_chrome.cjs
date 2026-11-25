@@ -11,7 +11,7 @@ const POLICY_LINKS = [
 function publicHeader() {
   return `<a class="skip-link" href="#main">본문으로 건너뛰기</a>
   <header class="public-header">
-    <a class="public-brand" href="/login" aria-label="SA DataLabs 로그인"><img src="/icons/icon-192.png?v=20261125-sa-datalabs" alt="SA DataLabs" width="48" height="48"><span>SA DataLabs</span><small>BY SABUN LABS</small></a>
+    <a class="public-brand" href="/login" aria-label="SA DataLabs 로그인"><img src="/icons/logo-transparent-20261125.svg?v=20261125-alpha1" alt="SA DataLabs" width="48" height="48"><span>SA DataLabs</span><small>BY SABUN LABS</small></a>
     <nav aria-label="사분 서비스"><a href="https://www.sabun.co.kr/" target="_blank" rel="noopener">사분랩스 <span aria-hidden="true">↗</span></a><a href="https://ops.sabun.co.kr/" target="_blank" rel="noopener">오퍼레이션 <span aria-hidden="true">↗</span></a></nav>
   </header>`;
 }

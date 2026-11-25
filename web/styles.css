@@ -47060,8 +47060,10 @@ html[data-theme-resolved] body .admin-company-chart-revenue-bar.booking-unavaila
   width: 42px;
   height: 42px;
   object-fit: contain;
-  background: #fff;
-  border-radius: 4px;
+  background: transparent;
+}
+html[data-theme-resolved="dark"] :is(.app-brand-logo, .admin-brand-logo) {
+  filter: drop-shadow(0 0 1px rgba(221, 238, 231, .9));
 }
 .brand-product-name {
   font-size: 13px;

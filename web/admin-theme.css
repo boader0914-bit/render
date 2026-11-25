@@ -1865,8 +1865,7 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
     height: 56px;
     margin-bottom: 5px;
     object-fit: contain;
-    background: #fff;
-    border-radius: 4px;
+    background: transparent;
   }
 
   html[data-theme-resolved] body.role-admin .admin-nav-brand strong {

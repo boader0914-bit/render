@@ -19369,7 +19369,8 @@ async function route(req, res) {
       "/favicon.svg",
       "/icons/icon-192.png",
       "/icons/icon-512.png",
-      "/icons/maskable-512.png"
+      "/icons/maskable-512.png",
+      "/icons/logo-transparent-20261125.svg"
     ]);
     if ((req.method === "GET" || req.method === "HEAD") && publicStaticPaths.has(reqUrl.pathname)) {
       if (req.method === "HEAD") {

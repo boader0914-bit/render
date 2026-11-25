@@ -12,6 +12,6 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 .public-header{flex-wrap:wrap}
 .public-brand{grid-template-columns:48px minmax(0,1fr);column-gap:10px;align-items:center;letter-spacing:.02em}
-.public-brand>img{grid-column:1;grid-row:1/3;display:block;width:48px;height:48px;object-fit:contain;background:#fff;border-radius:4px}
+.public-brand>img{grid-column:1;grid-row:1/3;display:block;width:48px;height:48px;object-fit:contain;background:transparent}
 .public-brand>span,.public-brand>small{grid-column:2}
 body.signup-page{display:block;padding:0;background:var(--paper);color:var(--ink)}body.signup-page main{width:min(100% - 48px,640px);margin:42px auto 58px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}body.signup-page h1{font-family:MaruBuri,Georgia,serif;color:var(--green);font-size:34px}body.signup-page .agreements{padding:18px;border:1px solid var(--line);border-radius:2px;background:#eef0e8}body.signup-page button,body.signup-page input,body.signup-page select{border-radius:2px}body.signup-page .inline-action{background:var(--paper);color:var(--green)}body.signup-page .icon-action{min-height:40px;padding:0;background:transparent;color:var(--green);border:0}body.signup-page .check{font-weight:400}body.signup-page .check input{min-height:16px}body.signup-page .public-brand{display:grid}body.signup-page .footer-copy{margin:15px 0 0}
