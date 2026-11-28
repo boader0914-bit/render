@@ -32,6 +32,197 @@ async function fixture(overrides = {}) {
     } };
 }
 
+const regularSixWorkers = [{ workerKey: "web", dailyLimit: 3 }, { workerKey: "manual", dailyLimit: 3 }];
+
+test("late activation after all six slots consumes no day or cursor and survives restart", async () => {
+  const f = await fixture();
+  try {
+    f.setTime("2026-10-16T11:15:00.000Z"); // 20:15 KST: no native slot remains.
+    await f.prepare({ workers: regularSixWorkers });
+    editStore(f.scheduler.storePath, "UPDATE rotation_state SET cursor=11 WHERE id=1");
+    const before = readStore(f.scheduler.storePath, "SELECT revision,config_json,cursor FROM rotation_state")[0];
+    const enabled = await f.scheduler.setEnabled(true);
+    assert.equal(enabled.nextRunAt, "2026-10-17T00:00:00.000Z");
+    assert.equal(enabled.upcomingItems[0].keyword, "가평글램핑");
+    assert.equal(enabled.cursor, 11);
+    assert.deepEqual(enabled.todayItems, []);
+    assert.equal(await f.scheduler.tick(), null);
+    assert.equal(readStore(f.scheduler.storePath, "SELECT COUNT(*) count FROM rotation_days")[0].count, 0);
+    assert.equal(readStore(f.scheduler.storePath, "SELECT COUNT(*) count FROM rotation_slots")[0].count, 0);
+    assert.equal((await f.scheduler.preview(undefined, { days: 7 })).items[0].scheduledAt, enabled.nextRunAt);
+    const monitor = f.scheduler.monitorSnapshot({ from: "2026-10-16", to: "2026-10-22" });
+    assert.equal(monitor.available, true);
+    assert.equal(monitor.currentPlan.nextUnallocatedDay, "2026-10-17");
+    assert.ok(monitor.items.every(item => item.scheduledAt >= enabled.resumeCutoffAt));
+    f.restart();
+    f.setTime("2026-10-16T11:16:00.000Z");
+    assert.equal(await f.scheduler.tick(), null);
+    const restarted = await f.scheduler.status();
+    assert.equal(restarted.resumeCutoffAt, enabled.resumeCutoffAt);
+    assert.equal(restarted.nextRunAt, enabled.nextRunAt);
+    assert.equal(restarted.cursor, 11);
+    assert.equal(restarted.revision, before.revision);
+    const currentConfig = { ...restarted.config, enabled: false };
+    assert.deepEqual(currentConfig, JSON.parse(before.config_json));
+    f.setTime("2026-10-17T00:00:00.000Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].payload.keyword, "가평글램핑");
+    assert.equal(f.calls[0].payload.scheduleOccurrenceId, "rotation_2026-10-17_1");
+    assert.equal((await f.scheduler.status()).cursor, 4);
+  } finally { await f.close(); }
+});
+
+test("activation before nine keeps the native first slot and never dispatches early", async () => {
+  const f = await fixture();
+  try {
+    f.setTime("2026-10-15T23:59:00.000Z");
+    await f.prepare({ workers: regularSixWorkers });
+    const enabled = await f.scheduler.setEnabled(true);
+    assert.equal(enabled.nextRunAt, "2026-10-16T00:00:00.000Z");
+    assert.equal(await f.scheduler.tick(), null);
+    assert.equal(f.calls.length, 0);
+    f.setTime("2026-10-16T00:00:00.000Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].slot.index, 0);
+    assert.equal((await f.scheduler.status()).todayItems.length, 6);
+  } finally { await f.close(); }
+});
+
+test("midday activation records unobserved past slots as missed without shifting the next native slot", async () => {
+  const f = await fixture();
+  try {
+    f.setTime("2026-10-16T02:30:00.000Z"); // 11:30 KST.
+    await f.prepare({ workers: regularSixWorkers });
+    const enabled = await f.scheduler.setEnabled(true);
+    assert.equal(enabled.nextRunAt, "2026-10-16T04:00:00.000Z");
+    assert.equal(enabled.upcomingItems[0].keyword, "부산글램핑");
+    assert.equal((await f.scheduler.preview()).items[0].scheduledAt, enabled.nextRunAt);
+    assert.equal(await f.scheduler.tick(), null);
+    const slots = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index");
+    assert.equal(slots.length, 6);
+    assert.ok(slots.slice(0, 2).every(row => row.status === "missed" && row.error_code === "ROTATION_RESUME_SKIPPED"
+      && row.started_at === null && row.receipt_json === null && row.result_json === null));
+    assert.ok(slots.slice(2).every(row => row.status === "queued"));
+    assert.equal((await f.scheduler.status()).todayItems[2].notBeforeAt, "2026-10-16T04:00:00.000Z");
+    assert.equal((await f.scheduler.status()).cursor, 6);
+    f.restart(); await f.scheduler.tick();
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index"), slots);
+    assert.equal(readStore(f.scheduler.storePath, "SELECT COUNT(*) count FROM rotation_events WHERE kind='resume_skipped'")[0].count, 2);
+    f.setTime("2026-10-16T04:00:00.000Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].slot.index, 2);
+    assert.equal(f.calls[0].payload.keyword, "부산글램핑");
+    assert.equal((await f.scheduler.status()).todayItems[3].notBeforeAt, "2026-10-16T06:00:00.000Z");
+  } finally { await f.close(); }
+});
+
+test("activation exactly at the last slot preserves it and skips only strictly earlier slots", async () => {
+  const f = await fixture();
+  try {
+    f.setTime("2026-10-16T10:00:00.000Z");
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0].slot.index, 5);
+    assert.equal((await f.scheduler.status()).todayItems.filter(x => x.status === "missed").length, 5);
+    assert.equal((await f.scheduler.status()).todayItems[5].status, "complete");
+  } finally { await f.close(); }
+});
+
+test("skipped resume slots cannot hide a delayed real crawl's two-hour start anchor", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    await f.scheduler.setEnabled(false);
+    const lateResult = JSON.stringify({ status: "complete", runId: "late_actual_fixture",
+      executionStartedAt: "2026-10-16T05:10:00.000Z", collectionQuality: { status: "complete" } });
+    editStore(f.scheduler.storePath, `UPDATE rotation_slots SET status='complete',started_at=?,finished_at=?,result_json=?,error_code=NULL WHERE slot_index=1`,
+      "2026-10-16T05:00:00.000Z", "2026-10-16T05:20:00.000Z", lateResult);
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='queued',error_code=NULL WHERE slot_index>=2");
+    const actualRow = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index=1")[0];
+    f.setTime("2026-10-16T05:30:00.000Z"); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    assert.equal((await f.scheduler.status()).todayItems[2].errorCode, "ROTATION_RESUME_SKIPPED");
+    assert.equal((await f.scheduler.status()).todayItems[3].notBeforeAt, "2026-10-16T07:10:00.000Z");
+    f.setTime("2026-10-16T06:00:00.000Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    f.setTime("2026-10-16T07:09:59.999Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 1);
+    f.setTime("2026-10-16T07:10:00.000Z"); await f.scheduler.tick();
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.calls[1].slot.index, 3);
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index=1")[0], actualRow);
+  } finally { await f.close(); }
+});
+
+test("resume never rewrites an already allocated blocked or paused day", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    await f.scheduler.setEnabled(false);
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='blocked',error_code='PROVIDER_ACCESS_RESTRICTED' WHERE slot_index=1");
+    const before = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index");
+    f.setTime("2026-10-16T11:15:00.000Z"); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index"), before);
+    assert.equal(f.calls.length, 1);
+    assert.equal((await f.scheduler.status()).cursor, 6);
+    assert.equal((await f.scheduler.status()).nextRunAt, "2026-10-17T00:00:00.000Z");
+  } finally { await f.close(); }
+});
+
+test("existing unstarted pending slots may be skipped while terminal records remain byte-identical", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    await f.scheduler.setEnabled(false);
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='queued',error_code=NULL WHERE slot_index=1");
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='waiting',error_code='ALL_COLLECTORS_BUSY' WHERE slot_index=2");
+    const kept = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index NOT IN (1,2) ORDER BY slot_index");
+    f.setTime("2026-10-16T11:15:00.000Z"); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index NOT IN (1,2) ORDER BY slot_index"), kept);
+    const skipped = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index IN (1,2)");
+    assert.ok(skipped.every(x => x.status === "missed" && x.error_code === "ROTATION_RESUME_SKIPPED" && x.receipt_json === null));
+    assert.equal(f.calls.length, 1);
+    assert.equal((await f.scheduler.status()).cursor, 6);
+  } finally { await f.close(); }
+});
+
+test("past pending execution evidence is preserved and blocks dispatch for explicit review", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    await f.scheduler.setEnabled(false);
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='queued',result_json=NULL,finished_at=NULL WHERE slot_index=0");
+    const before = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index=0")[0];
+    f.setTime("2026-10-16T04:30:00.000Z");
+    const resumed = await f.scheduler.setEnabled(true);
+    assert.equal(resumed.nextRunAt, null);
+    assert.equal(resumed.planState, "review");
+    assert.deepEqual(resumed.resumeReviewSlotIds, [before.id]);
+    await assert.rejects(f.scheduler.tick(), { code: "ROTATION_RESUME_EXECUTION_EVIDENCE_PRESENT" });
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots WHERE slot_index=0")[0], before);
+    const monitor = f.scheduler.monitorSnapshot({ from: "2026-10-16", to: "2026-10-22" });
+    assert.equal(monitor.available, true);
+    assert.equal(monitor.items.find(x => x.id === before.id).status, "uncertain");
+    assert.equal(monitor.items.find(x => x.id === before.id).errorCode, "ROTATION_RESUME_EXECUTION_EVIDENCE_PRESENT");
+    assert.equal(f.calls.length, 1);
+  } finally { await f.close(); }
+});
+
+test("late enable cannot cross unresolved execution protection or create a new resume boundary", async () => {
+  const f = await fixture();
+  try {
+    await f.prepare({ workers: regularSixWorkers }); await f.scheduler.setEnabled(true); await f.scheduler.tick();
+    editStore(f.scheduler.storePath, "UPDATE rotation_slots SET status='running' WHERE slot_index=0");
+    f.restart(); await f.scheduler.status();
+    const before = readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index");
+    const boundaryCount = readStore(f.scheduler.storePath, "SELECT COUNT(*) count FROM rotation_events WHERE kind='enabled'")[0].count;
+    f.setTime("2026-10-16T11:15:00.000Z");
+    await assert.rejects(f.scheduler.setEnabled(true), { code: "ROTATION_UNRESOLVED_EXECUTION" });
+    assert.deepEqual(readStore(f.scheduler.storePath, "SELECT * FROM rotation_slots ORDER BY slot_index"), before);
+    assert.equal(readStore(f.scheduler.storePath, "SELECT COUNT(*) count FROM rotation_events WHERE kind='enabled'")[0].count, boundaryCount);
+    assert.equal(f.calls.length, 1);
+  } finally { await f.close(); }
+});
+
 test("13-keyword continuous allocation wraps on day four and is balanced per worker over 13 days", () => {
   const config = defaultConfig("2026-10-16T00:00:00Z");
   const result = planDays(config, { days: 13 });

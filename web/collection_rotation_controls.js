@@ -394,7 +394,7 @@
     }));
     buttons.start.addEventListener("click", () => action(async () => {
       if (dirty) throw new Error("변경한 조건을 먼저 저장하세요.");
-      const result = await api("/enabled", "POST", { enabled: true }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 시작했습니다. 선택한 수집기의 보호와 실행 상태에 따라 배정 순서대로 진행합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed"));
+      const result = await api("/enabled", "POST", { enabled: true }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 시작했습니다. 지난 예정은 소급 실행하지 않고 다음 예정부터 진행합니다. 기존 호출 한도와 보호 검사를 적용합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed"));
     }));
     buttons.pause.addEventListener("click", () => action(async () => { const result = await api("/enabled", "POST", { enabled: false }); if (result?.config) saved = result; preview = null; await refresh(); notice("순환예약을 일시정지했습니다. 이미 진행 중인 수집은 결과 저장까지 마무리합니다.", "success"); window.dispatchEvent(new CustomEvent("collector:rotation-changed")); }));
     buttons.regularSix.addEventListener("click", () => action(async () => {

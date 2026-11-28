@@ -63,7 +63,14 @@ async function main() {
   const dataDir = path.join(temporary, "data"), outputsDir = path.join(dataDir, "outputs"), configDir = path.join(dataDir, "config");
   await fsp.mkdir(configDir, { recursive: true }); await fsp.mkdir(outputsDir);
   const attempts = path.join(temporary, "forbidden.log"), events = path.join(temporary, "events.jsonl"), preload = path.join(temporary, "preload.cjs");
-  await fsp.writeFile(preload, `(${installFixture.toString()})(${JSON.stringify({ root: ROOT, attempts, events })});\n`);
+  // Keep the local HTTP scheduler on today's exact midnight boundary. The
+  // unclaimed-dispatch test below must not depend on catching up a past slot;
+  // no production clock hook or provider call is introduced.
+  const rotationFixtureNow = Date.parse(`${day(0)}T00:00:00+09:00`);
+  await fsp.writeFile(preload, `(${installFixture.toString()})(${JSON.stringify({ root: ROOT, attempts, events })});\n`
+    + `const rotationFixture = require(${JSON.stringify(path.join(ROOT, "scripts/collection_rotation_scheduler.cjs"))});\n`
+    + `const makeRotationFixture = rotationFixture.createCollectionRotationScheduler;\n`
+    + `rotationFixture.createCollectionRotationScheduler = options => makeRotationFixture({...options,now:()=>${rotationFixtureNow}});\n`);
   let server, fixtureWorker;
   const logs = [];
   try {

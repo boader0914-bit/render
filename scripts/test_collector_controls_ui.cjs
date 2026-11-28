@@ -95,7 +95,7 @@ function historyFixture(queryString, records) {
   if (q.groupKey) { const rows = filtered.filter(row => grouping(row.date).key === q.groupKey); Object.assign(result, { groupKey: q.groupKey, rows: rows.slice(q.offset, q.offset + q.limit), totalRows: rows.length, offset: q.offset, limit: q.limit, hasMore: q.offset + q.limit < rows.length, nextOffset: q.offset + q.limit < rows.length ? q.offset + q.limit : null }); }
   return result;
 }
-async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, failHistory = false, historyFetch, historyRecords, historyPreferences, expandHistory = true, uncertainSubmit = false, outsideCollection = false, explicitInitialRead = false, hiddenPanel = false, hiddenDocument = false, role = "role-admin", statusFetch, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
+async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}, drafts = {}, failedSchedules = [], failRequests = false, failStatus = false, failHistory = false, historyFetch, historyRecords, historyPreferences, expandHistory = true, uncertainSubmit = false, outsideCollection = false, explicitInitialRead = false, hiddenPanel = false, hiddenDocument = false, role = "role-admin", statusFetch, resetFetch, diagnostics = {}, diagnosticStatus = 200, diagnosticRunId } = {}) {
   const nodes = new Map();
   for (const match of html.matchAll(/<([\w-]+)\b[^>]*\bid="([^"]+)"[^>]*>/g)) { const el = new Element(match[1], nodes); el.id = match[2]; }
   const body = new Element("body", nodes); body.className = role;
@@ -114,6 +114,7 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
     const payload = options.body ? JSON.parse(options.body) : undefined; calls.push({ url, method: options.method, payload }); let result;
     if (url === "/api/collector-status") { if (typeof failStatus === "function" ? failStatus() : failStatus) throw Error("status_unavailable"); result = statusFetch ? await statusFetch() : { workers: workers || keys.map(workerKey => ({ workerKey, configured: true, connected: true, ready: true, workerLastSeenAt: new Date().toISOString(), queued: 0 })) }; }
     else if (url === "/api/crawl-requests") { if (failRequests) throw Error("requests_unavailable"); result = { requests }; }
+    else if (url === "/api/collector-reset-halt") { assert.equal(options.method, "POST"); assert.equal(payload.confirm, "resume-after-review"); assert.ok(keys.includes(payload.workerKey)); return resetFetch ? resetFetch(payload) : { ok: true, status: 200, json: async () => ({ halted: false }) }; }
     else if (url.startsWith("/api/collection-history?")) { assert.equal(options.method, "GET"); if (typeof failHistory === "function" ? failHistory(url) : failHistory) throw Error("history_unavailable"); result = historyFetch ? await historyFetch(url, records) : historyFixture(url.split("?")[1], records); }
     else if (/^\/api\/runs\/[^/]+\/diagnostics$/.test(url)) {
       const runId = decodeURIComponent(url.split("/")[3]);
@@ -148,6 +149,63 @@ async function mockUi({ configs = {}, workers, requests = [], schedulePatch = {}
   const searchHistory = async () => { await nodes.get("collectorHistoryForm").event("submit"); await until(() => nodes.get("collectorHistoryQueryNotice").hidden || nodes.get("collectorHistoryQueryNotice").dataset.tone === "warning"); await until(() => !descendants(nodes.get("collectorUnifiedHistory")).some(el => el.className.includes("collector-history-more") && el.disabled)); };
   return { nodes, calls, submissions, saved, events, window, storage, card, form, input, button, set, navigation, initial, records, searchHistory, observers, body, section, document, documentListeners, intervals };
 }
+
+test("reviewed worker recovery preserves drafts and history without starting or enabling collection", async () => {
+  const workers = readyWorkers(); workers.find(w => w.workerKey === "manual").halted = true;
+  const ui = await mockUi({ workers, resetFetch: async payload => { workers.find(w => w.workerKey === payload.workerKey).halted = false; return {ok:true,status:200,json:async()=>({halted:false})}; } });
+  await ui.set("manual", "keywords", "보존 초안");
+  ui.nodes.get("collectorHistoryKeyword").value = "조회 조건";
+  const before = clone(ui.saved), storage = ui.storage.get("staydatalab:collector-drafts:v2");
+  const recovery = ui.button("manual", "검토 후 이 워커 보호 해제"); assert.equal(recovery.disabled, false);
+  await recovery.event("click");
+  assert.deepEqual(ui.calls.filter(call => call.method !== "GET"), [{url:"/api/collector-reset-halt",method:"POST",payload:{confirm:"resume-after-review",workerKey:"manual"}}]);
+  assert.equal(ui.submissions.length, 0); assert.deepEqual(ui.saved, before);
+  assert.equal(ui.input("manual", "keywords").value, "보존 초안"); assert.equal(ui.nodes.get("collectorHistoryKeyword").value, "조회 조건");
+  assert.equal(ui.storage.get("staydatalab:collector-drafts:v2"), storage);
+  assert.ok(text(ui.card("manual")).includes("네이버 회복 여부는 다음 실제 수집"));
+  assert.equal(ui.button("web", "검토 후 이 워커 보호 해제").parent.hidden, true);
+});
+
+test("recovery rechecks fresh status and refuses changed active or held workers and server rejection", async () => {
+  for (const patch of [{activeJobId:"running"},{queued:1},{holdActive:true},{workerLastSeenAt:"2000-01-01T00:00:00Z"}]) {
+    const workers = readyWorkers(); const manual = workers.find(w => w.workerKey === "manual"); manual.halted = true;
+    const ui = await mockUi({workers}); Object.assign(manual, patch);
+    await ui.button("manual", "검토 후 이 워커 보호 해제").event("click");
+    assert.equal(ui.calls.filter(c => c.method === "POST").length, 0); assert.equal(ui.submissions.length, 0);
+  }
+  const workers = readyWorkers(); workers.find(w=>w.workerKey==="manual").halted = true;
+  const ui = await mockUi({workers,resetFetch:async()=>({ok:false,status:409,json:async()=>({code:"COLLECTOR_PENDING_JOBS"})})});
+  await ui.button("manual", "검토 후 이 워커 보호 해제").event("click");
+  assert.equal(workers.find(w=>w.workerKey==="manual").halted,true);
+  assert.equal(ui.calls.filter(c=>c.method==="POST").length,1); assert.equal(ui.submissions.length,0);
+});
+
+test("recovery is unavailable without fresh readable status or while a review hold is active", async () => {
+  const base={workerKey:"manual",configured:true,halted:true,workerLastSeenAt:new Date().toISOString()};
+  for (const patch of [{holdActive:true},{errorCode:"COLLECTOR_REVIEW_HOLD"},{retired:true},{configured:false},{activeJobId:"owned"},{crawl:{cancelling:true}},{queued:2},{workerLastSeenAt:"2000-01-01T00:00:00Z"}]) assert.equal(helpers.recoveryAvailability({workers:[{...base,...patch}]},"manual").ready,false);
+  assert.equal(helpers.recoveryAvailability(null,"manual").ready,false);
+  assert.equal(helpers.recoveryAvailability({workers:[base,base]},"manual").ready,false);
+  for (const mode of ["status","requests"]) {
+    const workers=readyWorkers(); workers.find(w=>w.workerKey==="manual").halted=true;
+    const ui=await mockUi({workers,failStatus:mode==="status",failRequests:mode==="requests"});
+    assert.equal(ui.button("manual","검토 후 이 워커 보호 해제").disabled,true);
+    assert.ok(ui.calls.every(c=>c.method==="GET"));
+  }
+});
+
+test("a pending recovery never resets protection after logout or logout-relogin", async () => {
+  for (const mode of ["logout", "reauth", "batched-reauth"]) {
+    const workers=readyWorkers(); workers.find(w=>w.workerKey==="manual").halted=true;
+    const gate=defer(); let delayed=false;
+    const ui=await mockUi({statusFetch:()=>delayed?gate.promise:{workers}}); delayed=true;
+    const click=ui.button("manual","검토 후 이 워커 보호 해제").event("click");
+    if (mode==="batched-reauth") for(const observer of ui.observers) observer([{target:ui.body,attributeName:"class",oldValue:"role-admin"},{target:ui.body,attributeName:"class",oldValue:""}]);
+    else {ui.body.className=""; for(const observer of ui.observers) observer(); if(mode==="reauth"){ui.body.className="role-admin"; for(const observer of ui.observers) observer();}}
+    gate.resolve({workers}); await click;
+    assert.ok(ui.calls.every(c=>c.method==="GET"),mode); assert.equal(ui.submissions.length,0,mode);
+    assert.equal(workers.find(w=>w.workerKey==="manual").halted,true,mode);
+  }
+});
 
 test("hidden monthly/dashboard F5 performs no automatic collector or history GETs", async () => {
   const ui = await mockUi({ outsideCollection: true, expandHistory: true, requests: [{ workerKey: "manual", keyword: "저장 이력", status: "complete", result: { runId: "saved_only" } }] });

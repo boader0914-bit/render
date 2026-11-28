@@ -17,6 +17,8 @@ const WORKER_NAMES = { web: "2Gweb_worker", manual: "BG worker" };
 const ONE_DAY_TRIAL_WORKERS = [{ workerKey: "web", dailyLimit: 3 }, { workerKey: "manual", dailyLimit: 3 }];
 const DEFAULT_KEYWORDS = ["경남글램핑", "대구글램핑", "부산글램핑", "경북글램핑", "충남글램핑", "전남글램핑", "전북글램핑", "대전글램핑", "서울근교글램핑", "경주글램핑", "여수글램핑", "가평글램핑", "포천글램핑"];
 const PENDING = ["queued", "waiting"];
+const RESUME_SKIPPED = "ROTATION_RESUME_SKIPPED";
+const RESUME_EVIDENCE_PRESENT = "ROTATION_RESUME_EXECUTION_EVIDENCE_PRESENT";
 const TERMINAL = new Set(["complete", "reused", "partial", "failed", "blocked", "missed", "paused", "uncertain"]);
 const clone = value => JSON.parse(JSON.stringify(value));
 const object = value => value && typeof value === "object" && !Array.isArray(value);
@@ -197,6 +199,38 @@ function createCollectionRotationScheduler(options = {}) {
   function event(kind, code = null, itemId = null) {
     db.prepare("INSERT INTO rotation_events(at,kind,code,item_id) VALUES(?,?,?,?)").run(instant().toISOString(), kind, code, itemId);
   }
+  function resumeCutoff() {
+    // Activation already has an atomic durable event. Reuse that boundary;
+    // plan identity and configuration/revision fields remain unchanged.
+    const row = db.prepare("SELECT at FROM rotation_events WHERE kind='enabled' ORDER BY id DESC LIMIT 1").get();
+    if (!row) return null;
+    if (typeof row.at !== "string" || !Number.isFinite(Date.parse(row.at))
+      || new Date(row.at).toISOString() !== row.at) throw fault("ROTATION_RESUME_TIME_INVALID", 503);
+    return row.at;
+  }
+  function dayHasResumeSlot(config, day, cutoff = resumeCutoff()) {
+    if (!cutoff) return true;
+    const count = workerOrder(config).length;
+    const last = Date.parse(scheduledAt(day, config.time)) + (count - 1) * config.keywordIntervalMinutes * 60000;
+    return last >= Date.parse(cutoff);
+  }
+  function resumeEvidenceRows(day, cutoff = resumeCutoff()) {
+    if (!cutoff) return [];
+    return db.prepare(`SELECT id FROM rotation_slots WHERE day=? AND status IN ('queued','waiting') AND scheduled_at<?
+      AND (started_at IS NOT NULL OR receipt_json IS NOT NULL OR result_json IS NOT NULL) ORDER BY slot_index`).all(day, cutoff);
+  }
+  function skipBeforeResume(day, cutoff) {
+    if (!cutoff) return;
+    transaction(() => {
+      const rows = db.prepare(`SELECT id FROM rotation_slots WHERE day=? AND status IN ('queued','waiting') AND scheduled_at<?
+        AND started_at IS NULL AND receipt_json IS NULL AND result_json IS NULL ORDER BY slot_index`).all(day, cutoff);
+      const update = db.prepare(`UPDATE rotation_slots SET status='missed',finished_at=?,error_code=? WHERE id=?
+        AND status IN ('queued','waiting') AND started_at IS NULL AND receipt_json IS NULL AND result_json IS NULL`);
+      for (const row of rows) {
+        if (update.run(cutoff, RESUME_SKIPPED, row.id).changes === 1) event("resume_skipped", RESUME_SKIPPED, row.id);
+      }
+    });
+  }
   function initialize() {
     if (db) return;
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -251,7 +285,11 @@ function createCollectionRotationScheduler(options = {}) {
         checkOut: addDays(row.day, config.collection.bookingDays === 1 ? 1 : config.collection.bookingDays - 1), bookingRangeDays: config.collection.bookingDays, searchMode: "keyword" } };
   }
   function notBefore(row) {
-    const prior = db.prepare("SELECT started_at,finished_at,result_json FROM rotation_slots WHERE day=? AND slot_index<? ORDER BY slot_index DESC LIMIT 1").get(row.day, row.slot_index);
+    // A skipped observation is not an execution anchor. Walk past all such
+    // slots so a delayed real crawl still enforces the unchanged 120-min gap.
+    const prior = db.prepare(`SELECT started_at,finished_at,result_json FROM rotation_slots WHERE day=? AND slot_index<?
+      AND (status<>'missed' OR error_code IS NULL OR error_code<>?) ORDER BY slot_index DESC LIMIT 1`)
+      .get(row.day, row.slot_index, RESUME_SKIPPED);
     const dayConfig = JSON.parse(db.prepare("SELECT config_json FROM rotation_days WHERE day=?").get(row.day).config_json);
     const priorResult = prior?.result_json ? JSON.parse(prior.result_json) : null;
     // Without verified crawler timing, using receipt acceptance could start the
@@ -333,14 +371,17 @@ function createCollectionRotationScheduler(options = {}) {
   function planWithTrials(config, planOptions = {}) {
     // Keep the exported pure planner unchanged. The persisted scheduler owns the
     // date overrides and carries each day's cursor into the next day's plan.
-    const base = planDays(config, planOptions), record = state();
+    const base = planDays(config, planOptions), record = state(), cutoff = resumeCutoff();
     const first = planOptions.startDate || config.firstDate;
     let cursor = base.cursor;
     const items = [];
     for (let offset = 0; offset < base.days; offset += 1) {
       const day = addDays(first, offset), trial = trialForDay(day);
-      const planned = planDays(configForDay(config, day, record), { startDate: day, days: 1, cursor });
-      items.push(...planned.items.map(item => trial ? { ...item, trialId: trial.trial_id } : item));
+      const effective = configForDay(config, day, record);
+      if (!dayHasResumeSlot(effective, day, cutoff)) continue;
+      const planned = planDays(effective, { startDate: day, days: 1, cursor });
+      items.push(...planned.items.filter(item => !cutoff || item.scheduledAt >= cutoff)
+        .map(item => trial ? { ...item, trialId: trial.trial_id } : item));
       cursor = planned.nextCursor;
     }
     return { ...base, nextCursor: cursor, items };
@@ -423,8 +464,8 @@ function createCollectionRotationScheduler(options = {}) {
       if (index >= 0 && previewOptions.cursor === undefined && previewOptions.startKeyword === undefined) cursor = index;
     }
     const today = dateKey(instant());
-    const requestedStart = previewOptions.startDate || (input.firstDate > today ? input.firstDate : today);
-    return planWithTrials(input, { ...previewOptions, startDate: requestedStart, cursor });
+    const requestedStart = previewOptions.startDate || nextUnallocatedDay(input, today);
+    return { ...planWithTrials(input, { ...previewOptions, startDate: requestedStart, cursor }), resumeCutoffAt: resumeCutoff() };
   }
   async function updateConfig(input, updateOptions = {}) {
     initialize();
@@ -470,7 +511,14 @@ function createCollectionRotationScheduler(options = {}) {
   function nextUnallocatedDay(config, today = dateKey(instant())) {
     const latest = db.prepare("SELECT MAX(day) AS day FROM rotation_days").get().day;
     const first = config.firstDate > today ? config.firstDate : today;
-    return latest && latest >= first ? addDays(latest, 1) : first;
+    const next = latest && latest >= first ? addDays(latest, 1) : first;
+    try { return dayHasResumeSlot(configForDay(config, next), next) ? next : addDays(next, 1); }
+    catch (error) {
+      // Let the existing planner report a stale trial without turning a status
+      // read into a write or hiding its needs-verification state.
+      if (error?.code !== "ROTATION_TRIAL_PLAN_CHANGED") throw error;
+      return next;
+    }
   }
   async function updateDailyLimits(input) {
     initialize();
@@ -556,12 +604,23 @@ function createCollectionRotationScheduler(options = {}) {
     // catch-up burst masquerading as data observed on a previous date.
     db.prepare("UPDATE rotation_slots SET status='missed',error_code='ROTATION_DATE_EXPIRED',finished_at=? WHERE day<? AND status IN ('queued','waiting')").run(instant().toISOString(), day);
     if (day < config.firstDate || instant().getTime() < Date.parse(scheduledAt(day, config.time))) return null;
-    try { allocateDay(day); }
+    const cutoff = resumeCutoff();
+    // An activation after the entire unallocated day has passed consumes no
+    // keyword positions. The next natural day starts at the retained cursor.
+    try {
+      if (!db.prepare("SELECT day FROM rotation_days WHERE day=?").get(day)
+        && !dayHasResumeSlot(configForDay(config, day), day, cutoff)) return null;
+      allocateDay(day);
+    }
     catch (error) {
       if (error?.code !== "ROTATION_TRIAL_PLAN_CHANGED") throw error;
       pause(error.code, "review");
       return null;
     }
+    skipBeforeResume(day, cutoff);
+    // A pending row with an existing execution/receipt is not ours to relabel
+    // or replay. Keep its bytes, and fail closed for review instead of dispatch.
+    if (resumeEvidenceRows(day, cutoff).length) throw fault(RESUME_EVIDENCE_PRESENT, 409);
     const row = db.prepare("SELECT * FROM rotation_slots WHERE day=? AND status IN ('queued','waiting') ORDER BY slot_index LIMIT 1").get(day);
     if (!row) return null;
     const notBeforeAt = notBefore(row);
@@ -813,6 +872,7 @@ function createCollectionRotationScheduler(options = {}) {
     try {
       db.exec("BEGIN;"); reading = true;
       const record = state(), config = configOf(record), snapshots = new Map();
+      const cutoff = resumeCutoff(), resumeReviewIds = new Set(resumeEvidenceRows(range.today, cutoff).map(row => row.id));
       for (const row of db.prepare("SELECT day,revision,config_json FROM rotation_days WHERE day>=? AND day<=? ORDER BY day").all(range.from, range.to)) {
         if (typeof row.config_json !== "string" || Buffer.byteLength(row.config_json) > 65536) throw fault("COLLECTION_MONITOR_STATE_INVALID");
         snapshots.set(row.day, { revision: row.revision, config: validateConfig(JSON.parse(row.config_json)) });
@@ -841,10 +901,11 @@ function createCollectionRotationScheduler(options = {}) {
         if (!object(result)) throw fault("COLLECTION_MONITOR_STATE_INVALID");
         const conditions = payloadFor(snapshot.config, { ...row, day: row.day, workerKey: row.worker_key, keyword: row.keyword });
         const conflict = result.status !== undefined && result.status !== row.status;
+        const resumeReview = resumeReviewIds.has(row.id);
         return monitorItem({ id: row.id, day: row.day, index: row.slot_index, revision: snapshot.revision,
           workerKey: row.worker_key, keyword: row.keyword, scheduledAt: row.scheduled_at, notBeforeAt: notBefore(row),
-          status: conflict ? "uncertain" : row.status, acceptedAt: row.started_at, startedAt: result.executionStartedAt,
-          finishedAt: row.finished_at, errorCode: conflict ? "COLLECTION_MONITOR_RESULT_STATUS_MISMATCH" : row.error_code,
+          status: conflict || resumeReview ? "uncertain" : row.status, acceptedAt: row.started_at, startedAt: result.executionStartedAt,
+          finishedAt: row.finished_at, errorCode: conflict ? "COLLECTION_MONITOR_RESULT_STATUS_MISMATCH" : resumeReview ? RESUME_EVIDENCE_PRESENT : row.error_code,
           runId: result.runId, collectionQuality: result.collectionQuality, continuation: result.continuation, conditions,
           trialId: trialDays.get(row.day), planKind: trialDays.has(row.day) ? "one_day_trial" : "regular" });
       });
@@ -879,7 +940,9 @@ function createCollectionRotationScheduler(options = {}) {
           planKind: saved ? trialDays.has(day) ? "one_day_trial" : "regular" : projected?.planKind ?? null });
       }
       const result = { version: VERSION, ...range, available: true, errorCode: null, enabled: config.enabled, stopped,
-        planState: activeId ? "running" : record.plan_state, reason: record.reason ? safeCode(record.reason) : null,
+        planState: activeId ? "running" : resumeReviewIds.size ? "review" : record.plan_state,
+        reason: record.reason ? safeCode(record.reason) : resumeReviewIds.size ? RESUME_EVIDENCE_PRESENT : null,
+        resumeCutoffAt: cutoff, resumeReviewSlotIds: [...resumeReviewIds],
         revision: record.revision, updatedAt: typeof record.updated_at === "string" && Number.isFinite(Date.parse(record.updated_at)) ? new Date(record.updated_at).toISOString() : null, activeSlotId: activeId,
         keywords: [...new Set([...config.keywords, ...items.map(item => item.keyword)])],
         currentPlan: { source: "saved_config", revision: record.revision, dailySlots: workerOrder(config).length, workers: clone(config.workers),
@@ -901,8 +964,8 @@ function createCollectionRotationScheduler(options = {}) {
     const config = configOf(record);
     const day = dateKey(instant());
     const todayItems = itemsForDay(day);
-    let nextDay = config.firstDate > day ? config.firstDate : day;
-    if (db.prepare("SELECT day FROM rotation_days WHERE day=?").get(nextDay)) nextDay = addDays(nextDay, 1);
+    const nextDay = nextUnallocatedDay(config, day), cutoff = resumeCutoff();
+    const resumeReviewSlotIds = resumeEvidenceRows(day, cutoff).map(row => row.id);
     let planned;
     try { planned = planWithTrials(config, { days: 7, startDate: nextDay, cursor: record.cursor }); }
     catch (error) {
@@ -911,15 +974,18 @@ function createCollectionRotationScheduler(options = {}) {
       // six-slot forecast or mutate the enabled/protection state.
       planned = { items: [] };
     }
-    const pending = todayItems.filter(item => [...PENDING, "running"].includes(item.status));
+    const pending = todayItems.filter(item => item.status === "running"
+      || PENDING.includes(item.status) && (!cutoff || item.scheduledAt >= cutoff));
     const upcomingItems = [...pending, ...planned.items];
-    const nextRunAt = config.enabled && !stopped ? upcomingItems[0]?.notBeforeAt || null : null;
+    const nextRunAt = config.enabled && !stopped && !resumeReviewSlotIds.length ? upcomingItems[0]?.notBeforeAt || null : null;
     const counts = {};
     for (const item of todayItems) counts[item.status] = (counts[item.status] || 0) + 1;
     const oneDayTrials = db.prepare("SELECT * FROM rotation_one_day_trials ORDER BY day DESC LIMIT 31").all().map(row => trialSummary(row, record, config));
     const oneDayTrial = oneDayTrials.filter(trial => ["armed", "allocated", "needs_verification"].includes(trial.status)).sort((a, b) => a.day.localeCompare(b.day))[0] || oneDayTrials[0] || null;
     return { version: VERSION, config, revision: record.revision, basePlanHash: basePlanHash(config), oneDayTrials, oneDayTrial, cursor: record.cursor, nextKeyword: config.keywords[record.cursor], enabled: config.enabled,
-      active: Boolean(activeId), activeSlotId: activeId, planState: activeId ? "running" : record.plan_state, reason: record.reason, updatedAt: record.updated_at,
+      active: Boolean(activeId), activeSlotId: activeId, planState: activeId ? "running" : resumeReviewSlotIds.length ? "review" : record.plan_state,
+      reason: record.reason || (resumeReviewSlotIds.length ? RESUME_EVIDENCE_PRESENT : null), updatedAt: record.updated_at,
+      resumeCutoffAt: cutoff, resumeReviewSlotIds,
       day, todayItems, todayCounts: counts, upcomingItems, nextRunAt, previewNextRunAt: upcomingItems[0]?.notBeforeAt || null, latest: history({ limit: 40 }).items,
       lastError, stopped, note: "Allocation is durable; active means dispatch/result pending, not proof of remote execution." };
   }

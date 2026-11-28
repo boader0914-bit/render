@@ -183,7 +183,10 @@ test("repeated and concurrent ticks never allocate or dispatch extra trial slots
 
 test("the live-equivalent revision two, 36-slot cursor ten fixture previews the exact six and following four keywords", async t => {
   const f = await fixture(); t.after(() => f.close());
-  await f.scheduler.updateConfig({ firstDate: "2026-10-19" }); await f.enable();
+  await f.scheduler.updateConfig({ firstDate: "2026-10-19" });
+  // The historical fixture must activate before those observations, rather
+  // than rely on dispatching days before its durable activation boundary.
+  f.setTime("2026-10-19T00:00:00Z"); await f.enable();
   for (let day = 19; day <= 27; day += 1) await f.runDay(`2026-10-${day}`, 4);
   const before = f.scheduler.status();
   assert.equal(before.revision, 2); assert.equal(before.cursor, 10); assert.equal(f.scheduler.history().total, 36);

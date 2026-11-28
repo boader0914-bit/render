@@ -99,6 +99,15 @@
     if (worker.ready === false) return { ready: false, reason: errorMessage(worker.errorCode) || "수집기가 실행 준비 중입니다. 잠시 후 상태를 새로고침하세요." };
     return { ready: true, reason: worker.activeJobId || worker.crawl?.active || workerQueueCount(worker) ? "실행하면 현재 작업 뒤에 대기합니다." : "지금 수집할 수 있습니다." };
   }
+  function recoveryAvailability(data, key, now = Date.now()) {
+    const matches = Array.isArray(data?.workers) ? data.workers.filter(item => item.workerKey === key) : [];
+    const worker = matches.length === 1 ? matches[0] : null;
+    if (!worker || worker.configured !== true || worker.retired || worker.halted !== true) return { ready: false, reason: "보호 상태와 연결 설정을 먼저 확인하세요." };
+    if (worker.holdActive || [worker.errorCode, worker.brokerErrorCode].includes("COLLECTOR_REVIEW_HOLD")) return { ready: false, reason: errorMessage("COLLECTOR_REVIEW_HOLD") };
+    if (!workerFresh(worker, now)) return { ready: false, reason: "최근 수집기 연결을 확인한 뒤 검토할 수 있습니다." };
+    if (worker.activeJobId || worker.crawl?.active || worker.crawl?.cancelling || workerQueueCount(worker)) return { ready: false, reason: "실행·중단 처리·대기 작업을 먼저 확인하세요." };
+    return { ready: true, reason: "서버에서 실행·대기·검토 보류 여부를 다시 검사합니다." };
+  }
   function durationLabel(entry, now = Date.now()) {
     let duration = Number(entry.durationMs);
     if (entry.durationMs == null || !Number.isFinite(duration)) {
@@ -259,7 +268,7 @@
     if (dates.length > 2 && dates.every((date, index) => index === 0 || Date.parse(date) - Date.parse(dates[index - 1]) === 86400000)) return `${dates[0]} ~ ${dates.at(-1)} (${dates.length}일)`;
     return dates.join(", ");
   }
-  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, keywordSchedule, formatTime, workerState, workerQueueCount, workerAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, defaultHistoryQuery, historyQuery, historyQueryKey, historyUrl, historyOutcomeLabel, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
+  if (typeof module !== "undefined" && module.exports) module.exports = { workerKey, workerLabel, keywordLines, duplicateKeywordCount, scheduleConfig, keywordSchedule, formatTime, workerState, workerQueueCount, workerAvailability, recoveryAvailability, durationLabel, errorMessage, STATUS_LABELS, normalizeDayUse, collectionDates, defaultDraft, reservationSummary, historyEntries, filterHistory, defaultHistoryQuery, historyQuery, historyQueryKey, historyUrl, historyOutcomeLabel, etaRange, progressModel, qualityReason, diagnosticMetrics, diagnosticDates };
   if (typeof document === "undefined") return;
   // Reuse the same stored-only diagnosis in history and the archive. Opening it never starts collection.
   const diagnosticCache = new Map(), diagnosticOpen = new Map();
@@ -488,6 +497,10 @@
     const footer = node("footer", "", "collector-card-footer"), actions = node("div", "", "collector-card-actions"); card.submit = node("button", "지금 수집", "primary-button"); card.submit.type = "submit"; card.save = button("예약 조건 저장", "secondary-button", () => action(card, () => saveSchedule(card))); card.pause = button("예약 일시정지", "ghost-button", () => action(card, () => pauseSchedule(card))); actions.append(card.submit, card.save, card.pause); footer.append(actions);
     card.actions = actions;
     card.lastResult = node("div", "", "collector-last-result"); footer.append(card.lastResult); card.form.append(footer); card.root.append(card.form);
+    card.recovery = node("div", "", "collector-worker-recovery"); card.recovery.hidden = true;
+    card.recovery.append(node("p", "기록된 보호 사유와 실행 상태를 검토한 경우에만 해제하세요. 이 동작은 수집을 시작하거나 네이버 접근 회복을 확인하지 않습니다. 이후 제한 감지 보호는 계속 적용됩니다.", "collector-field-hint"));
+    card.recover = button("검토 후 이 워커 보호 해제", "secondary-button", () => action(card, () => recoverWorker(card)));
+    card.recovery.append(card.recover); card.form.append(card.recovery);
     card.form.addEventListener("input", () => { card.editRevision++; card.dirty = true; syncCard(card); saveDraft(card); });
     card.form.addEventListener("change", event => { card.editRevision++; if (event.target === card.inputs.execution && event.target.value === "schedule") card.reservation.open = true; card.dirty = true; syncCard(card); saveDraft(card); });
     card.form.addEventListener("invalid", event => { if ([card.inputs.firstDate, card.inputs.time, card.inputs.repeat, card.inputs.keywordIntervalMinutes].includes(event.target)) card.reservation.open = true; if (event.target === card.inputs.repeatReason) card.repeat.open = true; }, true);
@@ -507,6 +520,11 @@
     card.root.hidden = retired.retired || !known;
     card.inputs.keywords.placeholder = v.searchMode === "company" ? "예: 제주바블\n업체명은 한 줄에 하나씩" : "예: 조천숙소\n여러 키워드는 한 줄에 하나씩";
     const availability = workerAvailability(workerData, card.key), schedule = schedules[card.key];
+    const recovery = recoveryAvailability(workerData, card.key);
+    const currentWorker = (workerData || lastWorkerData)?.workers?.find(item => item.workerKey === card.key);
+    card.recovery.hidden = retired.retired || !currentWorker?.halted;
+    card.recover.disabled = card.busy || !recovery.ready || requestsReadError;
+    card.recover.title = requestsReadError ? "실행 기록을 읽지 못했습니다. 상태를 새로고침하세요." : recovery.reason;
     card.fields.checkIn.hidden = card.fields.checkOut.hidden = !custom;
     card.inputs.keywords.required = card.inputs.ranks.required = !retired.retired;
     card.customDates.hidden = !custom;
@@ -658,6 +676,17 @@
     await api(scheduleUrl(card.key, "/enabled"), "POST", { enabled: true }); card.dirty = false; saveDraft(card); await refresh(); notice(card, `${formatTime(schedules[card.key]?.nextRunAt)} 예약을 등록했습니다.`, "success");
   }
   async function pauseSchedule(card) { await api(scheduleUrl(card.key, "/enabled"), "POST", { enabled: false }); await refresh(); notice(card, "예약을 일시정지했습니다. 실행 중인 작업은 마무리하며 후속 예약을 멈춥니다.", "success"); }
+  async function recoverWorker(card) {
+    const epoch = authEpoch;
+    await refresh();
+    if (!admin() || epoch !== authEpoch) throw new Error("로그인 상태가 변경되었습니다. 현재 계정에서 다시 검토하세요.");
+    const recovery = recoveryAvailability(workerData, card.key);
+    if (!recovery.ready || requestsReadError) throw new Error(requestsReadError ? "실행 기록을 읽지 못했습니다. 보호를 유지합니다." : recovery.reason);
+    await api("/api/collector-reset-halt", "POST", { confirm: "resume-after-review", workerKey: card.key });
+    await refresh();
+    notice(card, "이 워커의 기록된 보호를 해제했습니다. 직접 수집 실행·예약 설정 변경은 하지 않았습니다. 기존 활성 일정은 배정 조건을 따르며, 네이버 회복 여부는 다음 실제 수집에서 확인합니다.", "success");
+    window.dispatchEvent(new CustomEvent("collector:rotation-changed"));
+  }
   async function runNow(card) {
     if (retirement(card).retired) throw new Error(retirement(card).reason);
     const v = values(card), keywords = keywordLines(v.keywords), dates = collectionDates(v);
