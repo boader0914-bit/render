@@ -3,6 +3,7 @@
 // The observation parser is dependency-free. Reuse its standalone challenge
 // recognition so OTA and the process-wide guard agree without an import cycle.
 const { parseNaverPlaceHtmlObservation } = require("./naver_place_ota_observation.cjs");
+const { describeNaverRequest, parseRetryAfterSeconds, sanitizeRestrictionDetails } = require("./lib/naver_restriction_diagnostics.cjs");
 
 const DEFAULT_MIN_INTERVAL_MS = 500;
 // These bounds affect observation storage only, never request admission or pacing.
@@ -145,8 +146,8 @@ function createNaverRequestGate(options = {}) {
   }
 
   function observeRestriction(reason, metadata) {
-    // Accept enums and numeric HTTP status only. In particular, error messages,
-    // URLs, provider bodies, headers and request contents never enter telemetry.
+    // Accept enums, numeric status and a small optional safe descriptor only.
+    // URLs, provider bodies, raw headers and request contents never enter telemetry.
     try {
       const code = metadata?.code || reason?.code;
       const httpStatus = metadata?.httpStatus ?? reason?.statusCode;
@@ -161,7 +162,7 @@ function createNaverRequestGate(options = {}) {
         incompleteReasons.add("RESTRICTION_EVENT_LIMIT");
         return;
       }
-      restrictionEvents.push({ detectedAt, code, httpStatus });
+      restrictionEvents.push({ detectedAt, code, httpStatus, ...sanitizeRestrictionDetails(metadata) });
     } catch {
       incompleteReasons.add("RESTRICTION_METADATA_UNAVAILABLE");
     }
@@ -203,6 +204,7 @@ function createNaverRequestGate(options = {}) {
 
   async function execute(job) {
     try {
+      const requestMetadata = Object.freeze(describeNaverRequest(job.input, job.init));
       if (onRequestStart) onRequestStart(job.input, job.init);
       const response = await fetchImpl(job.input, job.init);
       let bufferedBody;
@@ -210,7 +212,19 @@ function createNaverRequestGate(options = {}) {
       // Status-based stops take effect as soon as headers arrive, before a slow
       // body could permit more queued requests to start.
       if (onResponse) await onResponse(response, {
-        stop,
+        stop: (reason, metadata) => {
+          let observed = metadata;
+          try {
+            const retryAfterSeconds = response.status === 429
+              ? parseRetryAfterSeconds(response.headers?.get?.("retry-after"), wallNow) : null;
+            observed = { ...requestMetadata,
+              ...(retryAfterSeconds === null ? {} : { retryAfterSeconds }),
+              code: metadata?.code || reason?.code,
+              httpStatus: metadata?.httpStatus ?? reason?.statusCode };
+          } catch { /* Enrichment is best-effort; the original stop still runs. */ }
+          stop(reason, observed);
+        },
+        requestMetadata,
         readJson: async () => JSON.parse(new TextDecoder().decode(await readBody())),
         readText: async () => new TextDecoder().decode(await readBody()),
       });
